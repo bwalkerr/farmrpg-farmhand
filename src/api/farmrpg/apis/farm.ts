@@ -1,3 +1,8 @@
+import {
+  activatePerkSet,
+  getActivityPerksSet,
+  PerkActivity,
+} from "~/api/farmrpg/apis/perks";
 import { CachedState, StorageKey } from "../../../utils/state";
 import { getDocument } from "../../../utils/requests";
 import { getHTML, getJSON } from "../utils/requests";
@@ -193,19 +198,21 @@ export const farmStatusState = new CachedState<FarmStatus>(
                       console.error("No farm id found");
                       return;
                     }
-                    if (page === Page.FARM) {
-                      document
-                        .querySelector<HTMLAnchorElement>(".plantallbtn")
-                        ?.click();
-                    } else {
-                      await getHTML(
-                        Page.WORKER,
-                        new URLSearchParams({
-                          go: WorkerGo.PLANT_ALL,
-                          id: String(farmId),
-                        })
-                      );
-                    }
+                    await withFarmingPerks(async () => {
+                      if (page === Page.FARM) {
+                        document
+                          .querySelector<HTMLAnchorElement>(".plantallbtn")
+                          ?.click();
+                      } else {
+                        await getHTML(
+                          Page.WORKER,
+                          new URLSearchParams({
+                            go: WorkerGo.PLANT_ALL,
+                            id: String(farmId),
+                          })
+                        );
+                      }
+                    });
                   },
                 },
               ],
@@ -287,10 +294,54 @@ export const farmIdState = new CachedState<number>(
   }
 );
 
-export const harvestAll = async (): Promise<void> => {
-  const farmId = await farmIdState.get();
-  await getJSON(
-    Page.WORKER,
-    new URLSearchParams({ go: WorkerGo.HARVEST_ALL, id: String(farmId) })
-  );
+// Makes sure the right perks are equipped for a harvest/replant roll, then
+// rolls it. The farm perks are whichever set is named "Farming", or Default
+// when there's no such set (where most players, Reed included, keep them).
+//
+// This is a GATED ACTION — the harvest is fired the instant the switch resolves
+// and its yield depends on the perks — so it uses the same contract as the item
+// page quick actions: `force` (the optimistic active-set cache drifts, and when
+// it wrongly reads "already on" the switch is skipped and the harvest rolls
+// under whatever is really equipped) and `settle` (the game acks
+// activateperkset BEFORE it finishes equipping, so an action fired immediately
+// after runs under the OLD perks). That is exactly what went wrong harvesting
+// from the crops-ready banner on an item page: the quick-sell/craft set is left
+// equipped there on purpose, so the harvest was a real cross-set switch and,
+// unsettled, rolled under the selling/crafting perks.
+//
+// It stays snappy where it always was: activatePerkSet short-circuits on
+// `confirmedEquippedSetId` BEFORE it looks at `force`, so harvesting from Home
+// or the farm — where the reconciler has already confirmed Default equipped —
+// costs zero requests. Only a genuine cross-set harvest pays the settle.
+export const withFarmingPerks = async (
+  action: () => Promise<void>
+): Promise<void> => {
+  const settings = await getSettingValues();
+  if (!settings[SettingId.PERK_MANAGER]) {
+    await action();
+    return;
+  }
+  const farmingPerks = await getActivityPerksSet(PerkActivity.FARMING);
+  const defaultPerks = await getActivityPerksSet(PerkActivity.DEFAULT);
+  const harvestPerks = farmingPerks ?? defaultPerks;
+  if (harvestPerks) {
+    await activatePerkSet(harvestPerks, { force: true, settle: true });
+  }
+  await action();
+  // Only a dedicated Farming set needs putting away; without one we harvested
+  // under Default and are already where the reconciler wants us. No settle and
+  // no reset here — nothing reads the perks after this, so the clean-slate
+  // round-trip would only add the lag that made harvest feel slow before.
+  if (farmingPerks && defaultPerks) {
+    await activatePerkSet(defaultPerks, { reset: false });
+  }
 };
+
+export const harvestAll = (): Promise<void> =>
+  withFarmingPerks(async () => {
+    const farmId = await farmIdState.get();
+    await getJSON(
+      Page.WORKER,
+      new URLSearchParams({ go: WorkerGo.HARVEST_ALL, id: String(farmId) })
+    );
+  });
