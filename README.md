@@ -4,6 +4,47 @@ Farmhand is an add-on that helps you all around Redbrook in [Farm RPG](https://f
 
 All features are configurable and optional.
 
+## About this fork
+
+This is a fork of [anstosa/farmrpg-farmhand](https://github.com/anstosa/farmrpg-farmhand) maintained at [bwalkerr/farmrpg-farmhand](https://github.com/bwalkerr/farmrpg-farmhand) with additional fixes and features, listed below. Everything else in this README is the upstream project's documentation and applies unchanged.
+
+Install this fork's build directly: <https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js> (it carries no auto-update URL, so Greasy Fork releases will not overwrite it).
+
+Fork releases are numbered from **1.1.0** onwards; upstream's own releases are the 1.0.x line, so a version starting 1.1 is always this fork.
+
+### Fork features
+
+#### Never lose a drop to the storage cap
+
+* **Inventory: Cap warnings** — on the inventory page, items at your storage cap get a red **MAX** badge and items at 90%+ get an orange **NEAR** badge, with a summary line ("⚠ 2 items at the 200 cap · 1 near cap") above the list.
+* **Inventory: Cap tracker** — the same information where you need it while playing: a row of item icons in the bottom stats bar, right of your currency counts. Red ring = at cap, orange = near, hover for the exact count, click to open the item; up to 20 icons, then a "+N" link to your inventory.
+  * Counts come from the inventory page while you're on it, and otherwise from a background check at most every 10 minutes — you don't have to visit your inventory for the row to be right.
+  * While you're actually fishing, exploring, mining, harvesting or selling, the game's own requests refresh it (at most once every 15 seconds), so it keeps up as you play.
+  * On a fishing spot, explore area or mine, the row narrows to items that actually drop *there*. Those drop lists are learned from your own play — explore and fishing results, and the dig board for mines — and remembered, so each location only needs to be seen once. A location it hasn't learned yet shows everything rather than nothing.
+  * A **−** control collapses the row to two numbers (at cap / near cap) and remembers that choice.
+
+#### Perk sets that are actually equipped when it counts
+
+* **Perk set indicator** — a pill in the bottom stats bar showing which set you're playing under: gray for Default, orange for an activity set, faded while a switch is in flight. It reports what the game has confirmed equipped, not merely what was requested. It replaces upstream's "…perks activated" banners, which pushed the page (and whatever button was under your finger) down each time they appeared.
+* **Perks stay on while you browse** — an activity set is activated when you reach an activity page and put away when you go home or to your farm. Opening an item, your inventory or a wiki page mid-run leaves your perks alone instead of swapping them out and back.
+* **Farming and Mining perk sets** — upstream supports Crafting/Fishing/Exploring/Selling/Friendship/Temple/Locksmith/Wheel; this fork adds sets named "Farming" and "Mining", the latter covering both the mine list and the dig board.
+* **A shared "Town" set** — if you have a set named "Town" it covers the temple, wheel, locksmith, vault, farmers market and the town hub, so walking between town buildings doesn't re-switch perks at every door. Without one, each building still falls back to its own set.
+* **Harvest and Replant use your farm perks** — the Harvest action on the crops-ready notification and Replant in the harvest popup equip the "Farming" set first, or Default when you don't have one (where most players keep their farm perks), and wait for the game to finish equipping before harvesting. Harvesting from home or your farm costs no extra requests.
+* **Quick Sell, Quick Craft and Quick Give share one set** — all three use the set named "Crafting", so clicking between them never swaps perks, and each waits for its perks to be equipped before firing. If you keep your selling, crafting and friendship perks together in that one set, they simply stay on for the whole run.
+
+### Fork fixes
+
+* Quick sales could go out under the wrong perks — the script would report the selling set was active while the game still had Default equipped, and the sale paid the base rate.
+* The farmers market, workshop and other activity pages could end up on Default, because the game's page-load event fires several times per navigation and two of those runs disagreed about which set to use.
+* False "Crops are ready!" notification while crops were still growing (the timer now re-checks the farm instead of assuming).
+* One notification excluded from a page silently hid every notification after it — on the farm page that meant no oven, meal, pets or update banners at all.
+* "Ovens are empty!" notification spam for players who haven't unlocked the kitchen yet.
+* Gold and Ancient Coins were hidden from the bottom toolbar by the compressed navigation styles.
+* Temple perk sets never activated — the game moved the temple to `temple.php`, the script still looked for the old page identity.
+* Perk set names now match case-insensitively and ignore stray whitespace.
+* Explore areas, fishing spots and mines are all served by the same kind of URL and could be given each other's perks; the activity in the URL is now what decides.
+* Inventory cap could be parsed from the wagon upgrade pitch (next tier's number) instead of your actual cap.
+
 ## Usage
 
 Note that Farmhand is designed to make navigating Redbrook and your FarmRPG life easier *in ways that do not violate the [Code of Conduct](https://farmrpg.com/index.php#!/coc.php)*.
@@ -19,6 +60,8 @@ Note that Farmhand is designed to make navigating Redbrook and your FarmRPG life
 Farmhand purposefully avoids any features that would violate the letter or spirit of these rules (such as auto-fish, auto-explore, auto-farm, etc). Usage of Farmhand should not result in a ban and has been unofficially okayed by admins *but is not explicitly endorsed by Magic & Wires LLC*. [@anstosa](https://farmrpg.com/#!/profile.php?user_name=anstosa) makes no warranties with regard to its use.
 
 ## Install
+
+**Installing this fork:** use its build — <https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js> — in place of the Greasy Fork link in the steps below, and don't leave the Greasy Fork copy enabled alongside it. The Greasy Fork release auto-updates to upstream, which would replace the fork and everything in it.
 
 ### Desktop
 
@@ -104,6 +147,8 @@ Supports Quick Craft for "Crafting", Quick Sell for "Selling", and Quick Give fo
 
 This frees up points from many activity specific perks to be re-invested in perks that need to be on all the time.
 
+*In this fork this works differently — "Farming", "Mining" and "Town" sets are supported as well, sets are put away when you go home or to your farm rather than on every page, the three Quick actions share one set, and a pill in the bottom stats bar shows which set is on. See [Fork features](#fork-features) above.*
+
 ### Fishing
 
 * Fish always appear in middle of pond
@@ -180,6 +225,52 @@ Future features under consideration or development
 Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profile.php?user_name=anstosa)
 
 ## Changelog
+
+*Versions 1.0.32+ are fork releases ([bwalkerr/farmrpg-farmhand](https://github.com/bwalkerr/farmrpg-farmhand)); 1.0.31 and below are upstream.*
+
+### 1.0.40
+
+* Changed: Harvest/Replant perk handling ensures Default when no Farming set exists (zero requests when already on Default), instead of requiring a dedicated Farming set
+
+### 1.0.39
+
+* Changed: Farming perks no longer swap on farm page visits — only around the notification Harvest and popup Replant actions, keeping farm visits request-free
+* Fixed: Mining pages were mapped backwards (mining.php?id=N is the dig board, mine.php is the mine list); per-mine tracking now keys off the board URL directly and needs no remembered state
+* Changed: Mine drops are learned from the "You Found Something!" announcements instead of scraping the board DOM
+
+### 1.0.38
+
+* Added: Farming perk sets — auto-activated on the farm page and wrapped around the notification Harvest and popup Replant actions
+
+### 1.0.37
+
+* Added: Mining perk sets — auto-activated on mining pages and the dig board (mine.php)
+* Added: Cap tracker mining support — drops learned from the revealed mine board, per-mine filtering, live refresh while digging
+
+### 1.0.36
+
+* Added: Collapse control on the inventory cap tracker — shrinks the row to a red at-cap count and yellow near-cap count; state is remembered
+
+### 1.0.35
+
+* Fixed: Temple perk sets never activated; the temple is now detected by its temple.php / templeitem.php URL as well as the legacy page name
+
+### 1.0.34
+
+* Fixed: Perk set names match case-insensitively and ignore surrounding whitespace, so "fishing " still activates as Fishing
+
+### 1.0.33
+
+* Fixed: The cap tracker's location filter now learns each location's drops from actual explore/fishing results (the location pages themselves don't list drops, which previously left the row empty); locations you haven't played yet show the full row
+
+### 1.0.32
+
+* Added: Inventory cap warnings — MAX/NEAR badges and an at-cap summary on the inventory page
+* Added: Inventory cap tracker — at/near-cap item icons in the bottom stats bar with background + activity-triggered refresh and per-location filtering
+* Fixed: False "Crops are ready!" notification while crops were still growing
+* Fixed: "Ovens are empty!" notification spam when the kitchen isn't unlocked yet
+* Fixed: Gold and Ancient Coins hidden in the bottom toolbar
+* Fixed: Inventory cap parsed from the wagon upgrade text instead of the current cap
 
 ### 1.0.31
 
