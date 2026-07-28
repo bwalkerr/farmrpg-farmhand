@@ -14,7 +14,8 @@ export enum OvenStatus {
 
 export interface KitchenStatus {
   status: OvenStatus;
-  count: number;
+  // oven count; only the kitchen page can provide it
+  count?: number;
   allReady: boolean;
   checkAt: number;
 }
@@ -22,15 +23,13 @@ export interface KitchenStatus {
 const processKitchenStatus = (root: HTMLElement | undefined): KitchenStatus => {
   const statusText = root?.textContent;
   if (!statusText) {
+    // leave count untouched; only the kitchen page knows how many ovens exist
     return {
       status: OvenStatus.EMPTY,
-      count: 0,
       allReady: false,
       checkAt: Number.POSITIVE_INFINITY,
     };
   }
-  // 36 READY!
-  const count = Number(statusText.split(" ")[0]);
   let status = OvenStatus.EMPTY;
   let checkAt = Number.POSITIVE_INFINITY;
   let allReady = false;
@@ -47,7 +46,7 @@ const processKitchenStatus = (root: HTMLElement | undefined): KitchenStatus => {
     checkAt = Number.POSITIVE_INFINITY;
     allReady = true;
   }
-  return { status, count, checkAt, allReady };
+  return { status, checkAt, allReady };
 };
 
 const processKitchenPage = (root: HTMLElement): KitchenStatus | undefined => {

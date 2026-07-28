@@ -59,6 +59,9 @@ const SETTING_EMPTY_NOTIFICATIONS: FeatureSetting = {
 
 registerNotificationHandler(Handler.COLLECT_MEALS, collectAll);
 
+// timestamp of the last kitchen page check for oven ownership
+let lastOvenCountCheckAt = 0;
+
 const renderOvens = async (
   settings: SettingValues,
   state: KitchenStatus | undefined
@@ -70,6 +73,18 @@ const renderOvens = async (
     state.status === OvenStatus.EMPTY &&
     settings[SettingId.KITCHEN_EMPTY_NOTIFICATIONS]
   ) {
+    // zero ovens means the kitchen isn't unlocked yet, so there is nothing to
+    // cook; confirm against the kitchen page (throttled) before notifying
+    let hasOvens = (state.count ?? 0) > 0;
+    if (!hasOvens && Date.now() - lastOvenCountCheckAt > 5 * 60 * 1000) {
+      lastOvenCountCheckAt = Date.now();
+      const kitchenState = await kitchenStatusState.get();
+      hasOvens = Boolean(kitchenState && (kitchenState.count ?? 0) > 0);
+    }
+    if (!hasOvens) {
+      removeNotification(NotificationId.OVEN);
+      return;
+    }
     sendNotification({
       class: "btnorange",
       id: NotificationId.OVEN,
