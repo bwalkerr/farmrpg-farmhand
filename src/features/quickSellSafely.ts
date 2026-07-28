@@ -11,7 +11,14 @@ const SETTING_QUICKSELL_SAFELY: FeatureSetting = {
   defaultValue: true,
 };
 
-export type QuicksellCallback = (event: MouseEvent) => Promise<boolean>;
+// action tells a callback whether this was the SELL or the GIVE button — they
+// share the same callback list but need different perks (selling needs the
+// Negotiator set; giving is covered by the Default set too)
+export type QuickAction = "sell" | "give";
+export type QuicksellCallback = (
+  event: MouseEvent,
+  action: QuickAction
+) => Promise<boolean>;
 
 const state: { onQuicksellClick: QuicksellCallback[] } = {
   onQuicksellClick: [],
@@ -61,7 +68,7 @@ export const quicksellSafely: Feature = {
           return;
         }
         for (const callback of state.onQuicksellClick) {
-          if (!(await callback(event))) {
+          if (!(await callback(event, "sell"))) {
             return;
           }
         }
@@ -93,7 +100,7 @@ export const quicksellSafely: Feature = {
           return;
         }
         for (const callback of state.onQuicksellClick) {
-          if (!(await callback(event))) {
+          if (!(await callback(event, "give"))) {
             return;
           }
         }
