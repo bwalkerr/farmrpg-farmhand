@@ -9,6 +9,7 @@ import { Feature, FeatureSetting } from "../utils/feature";
 import { getCurrentPage, getPage, Page } from "~/utils/page";
 import { getSetting, SettingId } from "~/utils/settings";
 import { onQuicksellClick, QuickAction } from "./quickSellSafely";
+import { renderPerkIndicator } from "./perkIndicator";
 
 const SETTING_PERK_MANAGER: FeatureSetting = {
   id: SettingId.PERK_MANAGER,
@@ -93,6 +94,9 @@ const getQuickActionPerks = (): Promise<PerkSet | undefined> =>
 
 // Force the consolidated set active and settle, so its perks are actually
 // equipped (not just labelled active) before the caller fires the native action.
+// The stats-bar indicator (perkIndicator.ts) shows which set is on throughout —
+// it replaced the old "…perks activated" banner, which pushed the page (and the
+// button under your finger) down every time it appeared.
 //
 // GIVE is the exception: the friendship/give perks live in BOTH the Default set
 // and the consolidated set, so if either is already equipped there's nothing to
@@ -305,6 +309,14 @@ export const perkManagment: Feature = {
     // SPA's duplicate onPageLoad calls converge instead of racing)
     await reconcilePerksForCurrentPage();
 
+    // Mount/refresh the equipped-set indicator AFTER the reconcile, never
+    // before: the game rebuilds the bottom bar as you navigate, and the perk
+    // state isn't read yet on the very first load, so there'd be nothing to
+    // show anyway. When the reconcile switched, the status listener has already
+    // drawn it; this covers the no-op case. (renderPerkIndicator waits out the
+    // game's own boot on its own — see isGameBooted there.)
+    await renderPerkIndicator();
+
     // the quick-craft proxy lives on item pages; skip the workshop, where the
     // reconciler already scopes perks. (quick-sell and quick-give are handled
     // by quickSellSafely.ts — see installQuickActionProxy's note.)
@@ -312,5 +324,11 @@ export const perkManagment: Feature = {
     if (page !== Page.WORKSHOP) {
       installQuickActionProxy(".quickcraftbtn", "CRAFT");
     }
+  },
+  onQuestLoad: async (settings) => {
+    if (!settings[SettingId.PERK_MANAGER]) {
+      return;
+    }
+    await renderPerkIndicator();
   },
 };
