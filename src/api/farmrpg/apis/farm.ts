@@ -228,8 +228,9 @@ const updateStatus = async (): Promise<void> => {
   if (!state) {
     return;
   }
-  if (state.readyAt < Date.now()) {
-    await farmStatusState.set({ ...state, status: CropStatus.READY });
+  if (state.status !== CropStatus.READY && state.readyAt < Date.now()) {
+    // time's up — verify against the real farm page instead of assuming ready
+    await farmStatusState.get({ ignoreCache: true });
   }
 };
 
