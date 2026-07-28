@@ -8,6 +8,7 @@ export enum Page {
   FRIENDSHIP = "npclevels",
   HOME_PAGE = "index-1", // not a typo
   HOME_PATH = "index",
+  INVENTORY = "inventory",
   ITEM = "item",
   KITCHEN = "kitchen",
   LOCKSMITH = "locksmith",

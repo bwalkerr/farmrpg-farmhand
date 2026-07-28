@@ -22,6 +22,7 @@ import { getCurrentPage, getPage } from "~/utils/page";
 import { getSettingValues, registerSettings } from "./utils/settings";
 import { highlightSelfInChat } from "./features/highlightSelfInChat";
 import { improvedInputs } from "./features/improvedInputs";
+import { inventoryCapWarnings } from "./features/inventoryCapWarnings";
 import { kitchenNotifications } from "./features/kitchenNotifications";
 import { linkifyQuickCraft } from "./features/linkifyQuickCraft";
 import { mailboxNotifications } from "./features/mailboxNotifications";
@@ -81,6 +82,9 @@ const FEATURES = [
   quicksellSafely,
   linkifyQuickCraft,
   exploreFirst,
+
+  // inventory
+  inventoryCapWarnings,
 
   // quests
   quests,

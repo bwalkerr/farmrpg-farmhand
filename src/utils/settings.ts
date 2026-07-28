@@ -27,6 +27,8 @@ export enum SettingId {
   HOME_HIDE_THEME = "homeHideTheme",
   IMPORT = "import",
   IMPROVED_INPUTS = "improvedInputs",
+  INVENTORY_CAP_TRACKER = "inventoryCapTracker",
+  INVENTORY_CAP_WARNINGS = "inventoryCapWarnings",
   KITCHEN_COMPLETE_NOTIFICATIONS = "readyNotifications",
   KITCHEN_EMPTY_NOTIFICATIONS = "kitchenEmptyNotifications",
   MAX_ANIMALS = "maxAnimals",
