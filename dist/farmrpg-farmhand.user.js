@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
-// @description Your helper around the RPG Farm
-// @version 1.0.31
+// @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
+// @version 1.1.0
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
@@ -278,7 +278,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.harvestAll = exports.farmIdState = exports.farmStatusState = exports.CropStatus = void 0;
+exports.harvestAll = exports.withFarmingPerks = exports.farmIdState = exports.farmStatusState = exports.CropStatus = void 0;
+const perks_1 = __webpack_require__(5543);
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
@@ -426,22 +427,24 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
                                 name: "Replant",
                                 buttonClass: "btnblue",
                                 callback: () => __awaiter(void 0, void 0, void 0, function* () {
-                                    var _a;
                                     const farmId = yield exports.farmIdState.get();
                                     if (!farmId) {
                                         console.error("No farm id found");
                                         return;
                                     }
-                                    if (page === page_1.Page.FARM) {
-                                        (_a = document
-                                            .querySelector(".plantallbtn")) === null || _a === void 0 ? void 0 : _a.click();
-                                    }
-                                    else {
-                                        yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
-                                            go: page_1.WorkerGo.PLANT_ALL,
-                                            id: String(farmId),
-                                        }));
-                                    }
+                                    yield (0, exports.withFarmingPerks)(() => __awaiter(void 0, void 0, void 0, function* () {
+                                        var _a;
+                                        if (page === page_1.Page.FARM) {
+                                            (_a = document
+                                                .querySelector(".plantallbtn")) === null || _a === void 0 ? void 0 : _a.click();
+                                        }
+                                        else {
+                                            yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
+                                                go: page_1.WorkerGo.PLANT_ALL,
+                                                id: String(farmId),
+                                            }));
+                                        }
+                                    }));
                                 }),
                             },
                         ],
@@ -462,8 +465,9 @@ const updateStatus = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!state) {
         return;
     }
-    if (state.readyAt < Date.now()) {
-        yield exports.farmStatusState.set(Object.assign(Object.assign({}, state), { status: CropStatus.READY }));
+    if (state.status !== CropStatus.READY && state.readyAt < Date.now()) {
+        // time's up — verify against the real farm page instead of assuming ready
+        yield exports.farmStatusState.get({ ignoreCache: true });
     }
 });
 // automatically update crops when finished
@@ -508,10 +512,51 @@ exports.farmIdState = new state_1.CachedState(state_1.StorageKey.FARM_ID, () => 
         },
     ],
 });
-const harvestAll = () => __awaiter(void 0, void 0, void 0, function* () {
+// Makes sure the right perks are equipped for a harvest/replant roll, then
+// rolls it. The farm perks are whichever set is named "Farming", or Default
+// when there's no such set (where most players, Reed included, keep them).
+//
+// This is a GATED ACTION — the harvest is fired the instant the switch resolves
+// and its yield depends on the perks — so it uses the same contract as the item
+// page quick actions: `force` (the optimistic active-set cache drifts, and when
+// it wrongly reads "already on" the switch is skipped and the harvest rolls
+// under whatever is really equipped) and `settle` (the game acks
+// activateperkset BEFORE it finishes equipping, so an action fired immediately
+// after runs under the OLD perks). That is exactly what went wrong harvesting
+// from the crops-ready banner on an item page: the quick-sell/craft set is left
+// equipped there on purpose, so the harvest was a real cross-set switch and,
+// unsettled, rolled under the selling/crafting perks.
+//
+// It stays snappy where it always was: activatePerkSet short-circuits on
+// `confirmedEquippedSetId` BEFORE it looks at `force`, so harvesting from Home
+// or the farm — where the reconciler has already confirmed Default equipped —
+// costs zero requests. Only a genuine cross-set harvest pays the settle.
+const withFarmingPerks = (action) => __awaiter(void 0, void 0, void 0, function* () {
+    const settings = yield (0, settings_1.getSettingValues)();
+    if (!settings[settings_1.SettingId.PERK_MANAGER]) {
+        yield action();
+        return;
+    }
+    const farmingPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.FARMING);
+    const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
+    const harvestPerks = farmingPerks !== null && farmingPerks !== void 0 ? farmingPerks : defaultPerks;
+    if (harvestPerks) {
+        yield (0, perks_1.activatePerkSet)(harvestPerks, { force: true, settle: true });
+    }
+    yield action();
+    // Only a dedicated Farming set needs putting away; without one we harvested
+    // under Default and are already where the reconciler wants us. No settle and
+    // no reset here — nothing reads the perks after this, so the clean-slate
+    // round-trip would only add the lag that made harvest feel slow before.
+    if (farmingPerks && defaultPerks) {
+        yield (0, perks_1.activatePerkSet)(defaultPerks, { reset: false });
+    }
+});
+exports.withFarmingPerks = withFarmingPerks;
+const harvestAll = () => (0, exports.withFarmingPerks)(() => __awaiter(void 0, void 0, void 0, function* () {
     const farmId = yield exports.farmIdState.get();
     yield (0, requests_2.getJSON)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.HARVEST_ALL, id: String(farmId) }));
-});
+}));
 exports.harvestAll = harvestAll;
 
 
@@ -596,15 +641,13 @@ var OvenStatus;
 const processKitchenStatus = (root) => {
     const statusText = root === null || root === void 0 ? void 0 : root.textContent;
     if (!statusText) {
+        // leave count untouched; only the kitchen page knows how many ovens exist
         return {
             status: OvenStatus.EMPTY,
-            count: 0,
             allReady: false,
             checkAt: Number.POSITIVE_INFINITY,
         };
     }
-    // 36 READY!
-    const count = Number(statusText.split(" ")[0]);
     let status = OvenStatus.EMPTY;
     let checkAt = Number.POSITIVE_INFINITY;
     let allReady = false;
@@ -623,7 +666,7 @@ const processKitchenStatus = (root) => {
         checkAt = Number.POSITIVE_INFINITY;
         allReady = true;
     }
-    return { status, count, checkAt, allReady };
+    return { status, checkAt, allReady };
 };
 const processKitchenPage = (root) => {
     const ovens = root.querySelectorAll("a[href^='oven.php']");
@@ -1101,7 +1144,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.activatePerkSet = exports.resetPerks = exports.isActivePerkSet = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.PerkActivity = void 0;
+exports.activatePerkSet = exports.isActivePerkSet = exports.getPerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.PerkActivity = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
@@ -1112,22 +1155,28 @@ var PerkActivity;
     PerkActivity["CRAFTING"] = "Crafting";
     PerkActivity["FISHING"] = "Fishing";
     PerkActivity["EXPLORING"] = "Exploring";
+    PerkActivity["FARMING"] = "Farming";
     PerkActivity["SELLING"] = "Selling";
     PerkActivity["FRIENDSHIP"] = "Friendship";
     PerkActivity["TEMPLE"] = "Temple";
     PerkActivity["LOCKSMITH"] = "Locksmith";
+    PerkActivity["MINING"] = "Mining";
     PerkActivity["WHEEL"] = "Wheel";
+    PerkActivity["VAULT"] = "Vault";
+    // optional shared set for the town-cluster activities (temple / wheel /
+    // locksmith / vault); when present it is used in place of their own sets
+    PerkActivity["TOWN"] = "Town";
     PerkActivity["UNKNOWN"] = "Unknown";
 })(PerkActivity || (exports.PerkActivity = PerkActivity = {}));
 const processPerks = (root) => {
-    var _a, _b;
+    var _a, _b, _c;
     const perkSets = [];
     const setList = (0, page_1.getListByTitle)("My Perk Sets", root.body);
     const setWrappers = (_a = setList === null || setList === void 0 ? void 0 : setList.querySelectorAll(".item-title")) !== null && _a !== void 0 ? _a : [];
     let currentPerkSetId;
     for (const setWrapper of setWrappers) {
         const link = setWrapper.querySelector("a");
-        const name = (_b = link === null || link === void 0 ? void 0 : link.textContent) !== null && _b !== void 0 ? _b : "";
+        const name = (_c = (_b = link === null || link === void 0 ? void 0 : link.textContent) === null || _b === void 0 ? void 0 : _b.trim()) !== null && _c !== void 0 ? _c : "";
         const id = Number(link === null || link === void 0 ? void 0 : link.dataset.id);
         const isActive = setWrapper.querySelector(".fa-check");
         if (isActive) {
@@ -1136,6 +1185,37 @@ const processPerks = (root) => {
         perkSets.push({ name, id });
     }
     return { perkSets, currentPerkSetId };
+};
+// The id of the set we last drove the game to via a completed activateperkset
+// switch, cleared whenever resetPerks() wipes the slate or the perks page is
+// (re)loaded. Unlike the optimistic currentPerkSetId cache (set from the request
+// URL the instant a switch is SENT, so it drifts from what's really equipped),
+// this is written only AFTER a switch finishes — including its settle wait — so
+// it's a trustworthy "these perks are genuinely equipped right now" signal. It
+// lets a repeated switch to the already-equipped set skip the whole
+// reset+activate+settle round-trip: the common case of quick-selling a stack of
+// items one after another, where the reconciler leaves the perks alone between
+// item pages, so the set the first sell equipped is still on for the rest. The
+// first sell pays the ~1s; the rest are instant, until you navigate to a normal
+// page and the reconciler reverts.
+let confirmedEquippedSet;
+// The set a switch is currently in flight to, if any — drives the indicator's
+// "switching…" state so a switch is visible while it happens (including the
+// settle wait) rather than only after it lands.
+let pendingPerkSet;
+const perkStatusListeners = [];
+const onPerkStatusChange = (listener) => {
+    perkStatusListeners.push(listener);
+};
+exports.onPerkStatusChange = onPerkStatusChange;
+const notifyPerkStatus = () => {
+    for (const listener of perkStatusListeners) {
+        listener();
+    }
+};
+const setConfirmedEquipped = (set) => {
+    confirmedEquippedSet = set;
+    notifyPerkStatus();
 };
 exports.perksState = new state_1.CachedState(state_1.StorageKey.PERKS_SETS, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_2.getHTML)(page_1.Page.PERKS);
@@ -1150,6 +1230,10 @@ exports.perksState = new state_1.CachedState(state_1.StorageKey.PERKS_SETS, () =
         {
             match: [page_1.Page.PERKS, new URLSearchParams()],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
+                // the perks page is where a set can be manually re-equipped/edited,
+                // which our fast-path flag can't see — drop it so the next switch
+                // re-verifies instead of trusting a possibly-stale assumption
+                setConfirmedEquipped(undefined);
                 yield state.set(processPerks(yield (0, requests_1.getDocument)(response)));
             }),
         },
@@ -1167,7 +1251,7 @@ exports.perksState = new state_1.CachedState(state_1.StorageKey.PERKS_SETS, () =
 });
 const getActivityPerksSet = (activity, options) => __awaiter(void 0, void 0, void 0, function* () {
     const state = yield exports.perksState.get(options);
-    return state === null || state === void 0 ? void 0 : state.perkSets.find(({ name }) => name === activity);
+    return state === null || state === void 0 ? void 0 : state.perkSets.find(({ name }) => name.toLowerCase() === activity.toLowerCase());
 });
 exports.getActivityPerksSet = getActivityPerksSet;
 const getCurrentPerkSet = (options) => __awaiter(void 0, void 0, void 0, function* () {
@@ -1175,32 +1259,124 @@ const getCurrentPerkSet = (options) => __awaiter(void 0, void 0, void 0, functio
     return state === null || state === void 0 ? void 0 : state.perkSets.find(({ id }) => id === (state === null || state === void 0 ? void 0 : state.currentPerkSetId));
 });
 exports.getCurrentPerkSet = getCurrentPerkSet;
+// The set we last confirmed genuinely equipped (see confirmedEquippedSet), or
+// undefined when unknown. Trustworthy where the currentPerkSetId cache isn't,
+// because it's only written after a switch fully completes.
+const getConfirmedEquippedSetId = () => confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id;
+exports.getConfirmedEquippedSetId = getConfirmedEquippedSetId;
+// What to display as the currently equipped set. Prefers the set we confirmed
+// ourselves; falls back to the game's own selected-set cache (unconfirmed —
+// it's the optimistic one) so the indicator still says something useful before
+// this session has driven a switch.
+const getPerkStatus = () => {
+    if (pendingPerkSet) {
+        return { name: pendingPerkSet.name, isPending: true, isConfirmed: false };
+    }
+    if (confirmedEquippedSet) {
+        return {
+            name: confirmedEquippedSet.name,
+            isPending: false,
+            isConfirmed: true,
+        };
+    }
+    const state = exports.perksState.read();
+    const current = state === null || state === void 0 ? void 0 : state.perkSets.find(({ id }) => id === (state === null || state === void 0 ? void 0 : state.currentPerkSetId));
+    return { name: current === null || current === void 0 ? void 0 : current.name, isPending: false, isConfirmed: false };
+};
+exports.getPerkStatus = getPerkStatus;
 const isActivePerkSet = (set, options) => __awaiter(void 0, void 0, void 0, function* () {
     const current = yield (0, exports.getCurrentPerkSet)(options);
     return Boolean(current && current.id === set.id);
 });
 exports.isActivePerkSet = isActivePerkSet;
+// Perk switches are serialized through this chain. Activating a set is an
+// async server round-trip, and two switches overlapping — e.g. a quick-sell
+// and a quick-craft fired on the same page within a few hundred ms — would
+// race and leave a set selected but only partially applied. Chaining runs them
+// one at a time, in call order, so each finishes before the next begins.
+let perkSwitchChain = Promise.resolve();
+// The game acknowledges activateperkset (responds "success") BEFORE it has
+// finished equipping the set's perks, so an action fired immediately after —
+// the quick-sell/craft/give click — can run under the OLD perks: a 50-silver
+// item sold for 55 (+10% gold perk only) right after activating the selling
+// set, vs the full 80 (+60%) once it settled. On the FORCED paths (the caller
+// is about to act on these perks) we wait this long after the switch for the
+// game to apply them. Unforced switches (the reconciler's revert to Default,
+// withFarmingPerks) don't act on the perks immediately and stay fast.
+const PERK_SETTLE_MS = 1000;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Clear every equipped perk before loading a set (upstream behaviour). Loading
+// from an EMPTY slate is what makes the game equip a set fully; switching
+// set-to-set without it leaves the game diffing off the previous full set and
+// dropping/lagging perks. Default ON — see the `reset` option for the one
+// exception.
 const resetPerks = () => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     const state = yield exports.perksState.get();
     yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.RESET_PERKS }));
-    exports.perksState.set({
+    // perks are now cleared, so nothing is confirmed-equipped anymore
+    setConfirmedEquipped(undefined);
+    yield exports.perksState.set({
         perkSets: (_a = state === null || state === void 0 ? void 0 : state.perkSets) !== null && _a !== void 0 ? _a : [],
         currentPerkSetId: undefined,
     });
 });
-exports.resetPerks = resetPerks;
-const activatePerkSet = (set, options) => __awaiter(void 0, void 0, void 0, function* () {
-    if (yield (0, exports.isActivePerkSet)(set, options)) {
-        return;
-    }
-    console.debug(`Activating ${set.name} Perks`);
-    yield (0, exports.resetPerks)();
-    yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
-        go: page_1.WorkerGo.ACTIVATE_PERK_SET,
-        id: set.id.toString(),
+// Resolves to whether an actual switch was performed — false when it no-op'd
+// because the set was already equipped (fast path or guard). Callers use this
+// to only show a "…perks activated" banner when perks really changed, instead
+// of on every revisit to e.g. a town building that's already on the Town set.
+const activatePerkSet = (set, { force = false, settle = false, reset = true } = {}) => {
+    const task = perkSwitchChain.then(() => __awaiter(void 0, void 0, void 0, function* () {
+        // We already drove the game to this exact set and nothing has reset the
+        // slate since, so it's genuinely equipped — skip the whole round-trip
+        // (reset + activate + settle). This is the trustworthy fast path: unlike
+        // the optimistic isActivePerkSet cache below, confirmedEquippedSet is
+        // only set after a switch fully completes, so even forced callers (the
+        // quick actions, which distrust that cache) can safely short-circuit here.
+        // It's what makes back-to-back quick-sells after the first one instant.
+        // Returning before the pending flag is raised also keeps the indicator
+        // still: a no-op switch shouldn't flicker "switching…".
+        if ((confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id) {
+            return false;
+        }
+        if (!force && (yield (0, exports.isActivePerkSet)(set))) {
+            return false;
+        }
+        console.debug(`Activating ${set.name} Perks`);
+        // eslint-disable-next-line require-atomic-updates
+        pendingPerkSet = set;
+        notifyPerkStatus();
+        try {
+            if (reset) {
+                yield resetPerks();
+            }
+            yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
+                go: page_1.WorkerGo.ACTIVATE_PERK_SET,
+                id: set.id.toString(),
+            }));
+            if (settle) {
+                yield delay(PERK_SETTLE_MS);
+            }
+        }
+        finally {
+            // cleared (and announced) even if the switch throws, so a failed switch
+            // can't leave the indicator stuck on "switching…"
+            // eslint-disable-next-line require-atomic-updates
+            pendingPerkSet = undefined;
+            notifyPerkStatus();
+        }
+        // record that this set is now genuinely equipped so the next switch to it
+        // can take the fast path above. Safe despite the awaits: every write runs
+        // inside perkSwitchChain, which serializes switches, so there's no
+        // concurrent reassignment to race with.
+        setConfirmedEquipped(set);
+        return true;
     }));
-});
+    perkSwitchChain = task.catch(() => {
+        // swallow: a failed switch must not break the chain for the next one
+    });
+    return task;
+};
 exports.activatePerkSet = activatePerkSet;
 
 
@@ -2667,17 +2843,13 @@ exports.navigationStyle = {
             padding: 0 !important;
           }
 
-          .toolbar-inner .link {
-            display: none !important;
-          }
-
           @media (min-width: 768px) {
             .fh-menu {
               display: none !important;
             }
           }
 
-          .toolbar-inner a {
+          .toolbar-inner > a {
             height: 100%;
             border: 0;
             background: transparent;
@@ -4059,6 +4231,617 @@ exports.improvedInputs = {
 
 /***/ }),
 
+/***/ 6660:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.inventoryCapWarnings = void 0;
+const theme_1 = __webpack_require__(1178);
+const page_1 = __webpack_require__(7952);
+const requests_1 = __webpack_require__(3300);
+const settings_1 = __webpack_require__(126);
+const SETTING_INVENTORY_CAP_WARNINGS = {
+    id: settings_1.SettingId.INVENTORY_CAP_WARNINGS,
+    title: "Inventory: Cap warnings",
+    description: "Highlight items at or near your inventory cap so drops don't go to waste",
+    type: "boolean",
+    defaultValue: true,
+};
+const SETTING_INVENTORY_CAP_TRACKER = {
+    id: settings_1.SettingId.INVENTORY_CAP_TRACKER,
+    title: "Inventory: Cap tracker box",
+    description: `
+    Show items at or near your inventory cap in a small box above the bottom
+    bar; click an item to open its page
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+// e.g. "you cannot store more than 200 of any one item"
+const INVENTORY_CAP_PATTERN = /more than ([\d,]+) of any/g;
+const NEAR_CAP_RATIO = 0.9;
+const MAX_TRACKER_ITEMS = 20;
+const PASSIVE_REFRESH_MS = 10 * 60 * 1000;
+const ACTIVE_DEBOUNCE_MS = 1500;
+const ACTIVE_MIN_INTERVAL_MS = 15 * 1000;
+const capTrackerState = {
+    cap: 0,
+    isFetching: false,
+    items: [],
+    updatedAt: 0,
+};
+const isInventoryPage = () => (window.location.hash || window.location.pathname).includes("inventory.php");
+// count text of an inventory row, excluding any badge we appended
+const getRowCount = (after) => {
+    const countText = [...after.childNodes]
+        .filter((node) => !(node instanceof HTMLElement && node.classList.contains("fh-cap-badge")))
+        .map((node) => { var _a; return (_a = node.textContent) !== null && _a !== void 0 ? _a : ""; })
+        .join("");
+    return Number(countText.replaceAll(",", "").trim());
+};
+// parse cap and at/near-cap items out of an inventory page DOM
+const collectCapItems = (root) => {
+    var _a, _b, _c, _d, _e, _f;
+    // the page can mention several caps (e.g. the wagon upgrade pitch quotes
+    // the next tier's number), so use the smallest match: that is always the
+    // player's current cap
+    const caps = [...((_a = root.textContent) !== null && _a !== void 0 ? _a : "").matchAll(INVENTORY_CAP_PATTERN)]
+        .map((match) => Number(match[1].replaceAll(",", "")))
+        .filter((value) => value > 0);
+    if (caps.length === 0) {
+        return undefined;
+    }
+    const cap = Math.min(...caps);
+    const items = [];
+    for (const row of root.querySelectorAll(".list-group li")) {
+        if (row.classList.contains("item-divider")) {
+            continue;
+        }
+        const after = row.querySelector(".item-after");
+        const link = (_b = row.querySelector("a.item-link")) !== null && _b !== void 0 ? _b : row.querySelector("a");
+        if (!after || !link) {
+            continue;
+        }
+        const count = getRowCount(after);
+        if (Number.isNaN(count) || count === 0 || count < cap * NEAR_CAP_RATIO) {
+            continue;
+        }
+        const image = row.querySelector(".item-media img");
+        const title = row.querySelector(".item-title");
+        items.push({
+            count,
+            href: (_c = link.getAttribute("href")) !== null && _c !== void 0 ? _c : "inventory.php",
+            image: (_d = image === null || image === void 0 ? void 0 : image.getAttribute("src")) !== null && _d !== void 0 ? _d : undefined,
+            isAtCap: count >= cap,
+            name: (_f = (_e = title === null || title === void 0 ? void 0 : title.textContent) === null || _e === void 0 ? void 0 : _e.trim()) !== null && _f !== void 0 ? _f : "Item",
+        });
+    }
+    return { cap, items };
+};
+const renderTrackerItem = (item) => {
+    const anchor = document.createElement("a");
+    anchor.href = item.href;
+    const count = item.count.toLocaleString();
+    const cap = capTrackerState.cap.toLocaleString();
+    anchor.title = `${item.name}: ${count} / ${cap}`;
+    anchor.style.display = "block";
+    anchor.style.lineHeight = "0";
+    anchor.style.borderRadius = "5px";
+    anchor.style.border = `2px solid ${item.isAtCap ? theme_1.TEXT_ERROR : theme_1.TEXT_WARNING}`;
+    if (item.image) {
+        const icon = document.createElement("img");
+        icon.src = item.image;
+        icon.style.width = "22px";
+        icon.style.height = "22px";
+        icon.style.borderRadius = "3px";
+        icon.style.display = "block";
+        anchor.append(icon);
+    }
+    else {
+        anchor.style.lineHeight = "22px";
+        anchor.style.padding = "0 4px";
+        anchor.style.fontSize = "12px";
+        anchor.style.color = theme_1.TEXT_WHITE;
+        anchor.textContent = item.name;
+    }
+    return anchor;
+};
+const imageBasename = (source) => { var _a; return ((_a = source.split("/").pop()) !== null && _a !== void 0 ? _a : "").split("?")[0]; };
+// per-location drop lists, learned from the game's own explore/fishing
+// responses (the location pages themselves don't list what drops there).
+// persisted so each location only needs to be learned once.
+const LOCATION_DROPS_KEY = "fhCapTrackerLocationDrops";
+let locationDrops = {};
+let locationDropsLoaded = false;
+const COLLAPSED_KEY = "fhCapTrackerCollapsed";
+let isCollapsed = false;
+const setCollapsed = (value) => {
+    isCollapsed = value;
+    GM.setValue(COLLAPSED_KEY, value);
+    scheduleRender();
+};
+const loadLocationDrops = () => {
+    if (locationDropsLoaded) {
+        return;
+    }
+    locationDropsLoaded = true;
+    GM.getValue(COLLAPSED_KEY, false)
+        .then((value) => {
+        isCollapsed = Boolean(value);
+        scheduleRender();
+    })
+        .catch(() => {
+        // ignore load failures; default to expanded
+    });
+    GM.getValue(LOCATION_DROPS_KEY, {})
+        .then((value) => {
+        locationDrops = value !== null && value !== void 0 ? value : {};
+        scheduleRender();
+    })
+        .catch(() => {
+        // ignore failures; stale data is fine here
+    });
+};
+// which worker actions teach us drops, and the location type they belong to
+const LEARN_ACTION_TYPES = {
+    explore: "explore",
+    fishcaught: "fishing",
+    castnet: "fishing",
+};
+const learnLocationDrops = (actionGo, response) => {
+    const type = LEARN_ACTION_TYPES[actionGo];
+    if (!type) {
+        return;
+    }
+    const [, query] = (0, requests_1.parseUrl)(response.url);
+    const id = query.get("id");
+    if (!id) {
+        return;
+    }
+    response
+        .text()
+        .then((html) => {
+        var _a;
+        const key = `${type}:${id}`;
+        const existing = new Set((_a = locationDrops[key]) !== null && _a !== void 0 ? _a : []);
+        let changed = false;
+        for (const match of html.matchAll(/img\/items\/([^"'?]+)/g)) {
+            if (!existing.has(match[1])) {
+                existing.add(match[1]);
+                changed = true;
+            }
+        }
+        if (changed) {
+            locationDrops[key] = [...existing];
+            GM.setValue(LOCATION_DROPS_KEY, locationDrops);
+            scheduleRender();
+        }
+    })
+        .catch(() => {
+        // ignore failures; stale data is fine here
+    });
+};
+// current location key when on a fishing or explore page
+const getLocationKey = () => {
+    const url = window.location.hash || window.location.pathname;
+    let match = url.match(/fishing\.php\?[^#]*\bid=(\d+)/);
+    if (match) {
+        return `fishing:${match[1]}`;
+    }
+    match = url.match(/area\.php\?[^#]*\bid=(\d+)/);
+    if (match) {
+        return `explore:${match[1]}`;
+    }
+    // mining.php?id=N is the dig board itself (mine.php is the mine list),
+    // so the key works for any number of mines
+    match = url.match(/mining\.php\?[^#]*\bid=(\d+)/);
+    if (match) {
+        return `mining:${match[1]}`;
+    }
+    return undefined;
+};
+// digging reveals a found item as an image tile on the dig board: a
+// discovered cell (.checkCell) holds an <img> of the item, which is the same
+// signal the auto-miner reads to spot discoveries. learn a mine's drops
+// straight off the board, restricted to img/items/ paths so only real item
+// icons are learned (misses/hits/traps render font icons, not item images),
+// and so the learned basenames match the inventory rows we filter against.
+const learnFromMiningPage = (key) => {
+    var _a, _b, _c;
+    const existing = new Set((_a = locationDrops[key]) !== null && _a !== void 0 ? _a : []);
+    let changed = false;
+    const root = (_b = (0, page_1.getCurrentPage)()) !== null && _b !== void 0 ? _b : document;
+    for (const image of root.querySelectorAll(".checkCell img[src*='img/items/']")) {
+        const name = imageBasename((_c = image.getAttribute("src")) !== null && _c !== void 0 ? _c : "");
+        if (name && !existing.has(name)) {
+            existing.add(name);
+            changed = true;
+        }
+    }
+    if (changed) {
+        locationDrops[key] = [...existing];
+        GM.setValue(LOCATION_DROPS_KEY, locationDrops);
+        scheduleRender();
+    }
+};
+// explore/fishing drops arrive via intercepted responses, but a mine's drops
+// are only visible as tiles on the board, so scrape them whenever a mine page
+// is (re)shown. kept separate from rendering so the render stays a pure paint.
+const learnCurrentLocation = () => {
+    const key = getLocationKey();
+    if (key === null || key === void 0 ? void 0 : key.startsWith("mining:")) {
+        learnFromMiningPage(key);
+    }
+};
+const renderCapTracker = () => {
+    let box = document.querySelector("#fh-cap-tracker");
+    const key = getLocationKey();
+    const learned = key ? locationDrops[key] : undefined;
+    // filter to this location's known drops; before a location has been
+    // learned (first visit), show everything rather than nothing
+    const visible = learned && learned.length > 0
+        ? capTrackerState.items.filter((item) => item.image && learned.includes(imageBasename(item.image)))
+        : capTrackerState.items;
+    if (visible.length === 0) {
+        box === null || box === void 0 ? void 0 : box.remove();
+        return;
+    }
+    if (!box) {
+        box = document.createElement("div");
+        box.id = "fh-cap-tracker";
+        box.classList.add("fh-cap-tracker");
+        box.style.gap = "4px";
+        box.style.pointerEvents = "auto";
+        const statsZone = document.querySelector("#statszone_main");
+        if (statsZone) {
+            // single line in the bottom bar, right of the currency counts
+            box.style.display = "inline-flex";
+            box.style.flexWrap = "nowrap";
+            box.style.verticalAlign = "middle";
+            box.style.marginLeft = "14px";
+            statsZone.append(box);
+        }
+        else {
+            box.style.display = "flex";
+            box.style.flexWrap = "wrap";
+            box.style.justifyContent = "flex-end";
+            box.style.maxWidth = "180px";
+            box.style.padding = "5px 6px";
+            box.style.borderRadius = "6px";
+            box.style.border = `1px solid ${theme_1.BORDER_GRAY}`;
+            box.style.backgroundColor = "rgba(20, 20, 20, 0.92)";
+            box.style.position = "fixed";
+            box.style.right = "8px";
+            box.style.bottom = "62px";
+            box.style.zIndex = "5000";
+            document.body.append(box);
+        }
+    }
+    const shown = visible.slice(0, MAX_TRACKER_ITEMS);
+    const signature = JSON.stringify([
+        capTrackerState.cap,
+        visible.length,
+        isCollapsed,
+        shown,
+    ]);
+    if (box.dataset.fhSignature === signature) {
+        return;
+    }
+    box.dataset.fhSignature = signature;
+    box.innerHTML = "";
+    if (isCollapsed) {
+        const atCapCount = visible.filter((item) => item.isAtCap).length;
+        const nearCapCount = visible.length - atCapCount;
+        const summary = document.createElement("span");
+        summary.style.cursor = "pointer";
+        summary.style.display = "inline-flex";
+        summary.style.gap = "6px";
+        summary.style.alignItems = "center";
+        summary.style.fontWeight = "bold";
+        summary.title = `${atCapCount} at cap · ${nearCapCount} near cap — click to expand`;
+        const atCapNumber = document.createElement("span");
+        atCapNumber.style.color = theme_1.TEXT_ERROR;
+        atCapNumber.textContent = String(atCapCount);
+        const nearCapNumber = document.createElement("span");
+        nearCapNumber.style.color = theme_1.TEXT_WARNING;
+        nearCapNumber.textContent = String(nearCapCount);
+        summary.append(atCapNumber, nearCapNumber);
+        summary.addEventListener("click", () => setCollapsed(false));
+        box.append(summary);
+        return;
+    }
+    for (const item of shown) {
+        box.append(renderTrackerItem(item));
+    }
+    if (visible.length > shown.length) {
+        const more = document.createElement("a");
+        more.href = "inventory.php";
+        more.textContent = `+${visible.length - shown.length}`;
+        more.title = "More items at/near cap — open inventory";
+        more.style.color = theme_1.TEXT_WARNING;
+        more.style.fontWeight = "bold";
+        more.style.fontSize = "12px";
+        more.style.alignSelf = "center";
+        more.style.padding = "0 3px";
+        box.append(more);
+    }
+    const collapseButton = document.createElement("span");
+    collapseButton.textContent = "\u2212";
+    collapseButton.title = "Collapse";
+    collapseButton.style.cursor = "pointer";
+    collapseButton.style.color = theme_1.TEXT_GRAY;
+    collapseButton.style.fontWeight = "bold";
+    collapseButton.style.fontSize = "14px";
+    collapseButton.style.alignSelf = "center";
+    collapseButton.style.padding = "0 3px";
+    collapseButton.addEventListener("click", () => setCollapsed(true));
+    box.append(collapseButton);
+};
+// every state change funnels through here: mutate, then ask for a repaint.
+// renders coalesce into a single microtask, so a burst of mutations repaints
+// once and no mutation site has to remember to call the renderer.
+let isRenderScheduled = false;
+const scheduleRender = () => {
+    if (isRenderScheduled) {
+        return;
+    }
+    isRenderScheduled = true;
+    queueMicrotask(() => {
+        isRenderScheduled = false;
+        renderCapTracker();
+    });
+};
+const updateFromRoot = (root) => {
+    const result = collectCapItems(root);
+    if (!result) {
+        return;
+    }
+    capTrackerState.cap = result.cap;
+    capTrackerState.items = result.items;
+    capTrackerState.updatedAt = Date.now();
+    scheduleRender();
+};
+const fetchCapTrackerNow = () => __awaiter(void 0, void 0, void 0, function* () {
+    if (capTrackerState.isFetching) {
+        return;
+    }
+    capTrackerState.isFetching = true;
+    try {
+        const response = yield (0, requests_1.getHTML)(page_1.Page.INVENTORY, new URLSearchParams());
+        // mark updated even if parsing fails so we don't hammer the server
+        // eslint-disable-next-line require-atomic-updates
+        capTrackerState.updatedAt = Date.now();
+        const result = collectCapItems(response.body);
+        if (result) {
+            // eslint-disable-next-line require-atomic-updates
+            capTrackerState.cap = result.cap;
+            // eslint-disable-next-line require-atomic-updates
+            capTrackerState.items = result.items;
+            scheduleRender();
+        }
+    }
+    catch (_a) {
+        // ignore fetch failures; the next refresh will retry
+    }
+    finally {
+        // eslint-disable-next-line require-atomic-updates
+        capTrackerState.isFetching = false;
+    }
+});
+// passive background refresh, at most every 10 minutes
+const refreshCapTracker = () => {
+    if (Date.now() - capTrackerState.updatedAt < PASSIVE_REFRESH_MS) {
+        return;
+    }
+    fetchCapTrackerNow();
+};
+// active refresh: while the player is fishing/exploring/harvesting/selling,
+// the game's own worker.php calls trigger a debounced, throttled refresh —
+// a short delay batches bursts of actions, and refreshes run at most every 15s
+let isTrackerEnabled = false;
+let activeTimer;
+let lastActiveFetchAt = 0;
+const markCapTrackerActive = () => {
+    if (!isTrackerEnabled || activeTimer) {
+        return;
+    }
+    const wait = Math.max(ACTIVE_DEBOUNCE_MS, lastActiveFetchAt + ACTIVE_MIN_INTERVAL_MS - Date.now());
+    activeTimer = setTimeout(() => {
+        activeTimer = undefined;
+        lastActiveFetchAt = Date.now();
+        fetchCapTrackerNow();
+    }, wait);
+};
+// game actions that change inventory counts
+const ACTION_GOS = [
+    "fishcaught",
+    "castnet",
+    "sellalluserfish",
+    "explore",
+    "harvestall",
+    "sellitem",
+    "useitem",
+    "openitem",
+];
+// interceptors only observe responses; no state is attached to them
+const noopState = {
+    get: () => Promise.resolve(undefined),
+};
+for (const actionGo of ACTION_GOS) {
+    (0, requests_1.registerQueryInterceptor)([
+        noopState,
+        {
+            match: [page_1.Page.WORKER, new URLSearchParams({ go: actionGo })],
+            callback: (_state, _previous, response) => {
+                markCapTrackerActive();
+                learnLocationDrops(actionGo, response);
+                return Promise.resolve();
+            },
+        },
+    ]);
+}
+// digging has no documented worker action, so while the player is in a mine
+// treat any non-polling worker response as activity for the live refresh
+const POLLING_GOS = new Set([
+    "getchat",
+    "getstats",
+    "farmstatus",
+    "readycount",
+    "notes",
+]);
+(0, requests_1.registerQueryInterceptor)([
+    noopState,
+    {
+        match: [page_1.Page.WORKER, new URLSearchParams()],
+        callback: (_state, _previous, response) => {
+            var _a;
+            const key = getLocationKey();
+            if (key === null || key === void 0 ? void 0 : key.startsWith("mining:")) {
+                const [, query] = (0, requests_1.parseUrl)(response.url);
+                if (!POLLING_GOS.has((_a = query.get("go")) !== null && _a !== void 0 ? _a : "")) {
+                    markCapTrackerActive();
+                    // the board repaints the discovered cell just after the response
+                    setTimeout(() => {
+                        learnFromMiningPage(key);
+                        scheduleRender();
+                    }, 400);
+                }
+            }
+            return Promise.resolve();
+        },
+    },
+]);
+// quick sell / give / craft change inventory through the item page's own
+// buttons rather than the worker actions above, so those clicks would otherwise
+// leave the tracker stale. one delegated listener schedules the same throttled
+// refresh for all three: it catches a direct click on the native button, and
+// the quickSellSafely / perkManagement proxies each click through to that same
+// native button, so their proxied clicks bubble here too.
+const QUICK_ACTION_SELECTOR = ".quicksellbtn, .quicksellbtnnc, .quickgivebtn, .quickcraftbtn";
+document.addEventListener("click", (event) => {
+    var _a;
+    const target = event.target;
+    if ((_a = target === null || target === void 0 ? void 0 : target.closest) === null || _a === void 0 ? void 0 : _a.call(target, QUICK_ACTION_SELECTOR)) {
+        markCapTrackerActive();
+    }
+}, true);
+const renderInventoryCapWarnings = () => {
+    const root = (0, page_1.getCurrentPage)();
+    if (!root) {
+        return;
+    }
+    const result = collectCapItems(root);
+    if (!result) {
+        return;
+    }
+    const { cap } = result;
+    let atCap = 0;
+    let nearCap = 0;
+    for (const row of root.querySelectorAll(".list-group li")) {
+        if (row.classList.contains("item-divider")) {
+            continue;
+        }
+        const after = row.querySelector(".item-after");
+        if (!after) {
+            continue;
+        }
+        const count = getRowCount(after);
+        if (Number.isNaN(count) || count === 0) {
+            continue;
+        }
+        const isAtCap = count >= cap;
+        const isNearCap = !isAtCap && count >= cap * NEAR_CAP_RATIO;
+        if (isAtCap) {
+            atCap += 1;
+        }
+        else if (isNearCap) {
+            nearCap += 1;
+        }
+        else {
+            continue;
+        }
+        if (after.querySelector(".fh-cap-badge")) {
+            continue;
+        }
+        const badge = document.createElement("span");
+        badge.classList.add("fh-cap-badge");
+        badge.style.fontWeight = "bold";
+        badge.style.marginLeft = "5px";
+        badge.style.color = isAtCap ? theme_1.TEXT_ERROR : theme_1.TEXT_WARNING;
+        badge.textContent = isAtCap ? "MAX" : "NEAR";
+        after.append(badge);
+    }
+    const parts = [];
+    if (atCap > 0) {
+        const plural = atCap === 1 ? "" : "s";
+        parts.push(`${atCap} item${plural} at the ${cap.toLocaleString()} cap`);
+    }
+    if (nearCap > 0) {
+        parts.push(`${nearCap} near cap`);
+    }
+    let summary = root.querySelector(".fh-cap-summary");
+    const list = root.querySelector(".list-group");
+    if (!summary && (list === null || list === void 0 ? void 0 : list.parentElement) && parts.length > 0) {
+        summary = document.createElement("div");
+        summary.classList.add("fh-cap-summary");
+        summary.style.padding = "8px 15px";
+        summary.style.fontWeight = "bold";
+        summary.style.color = theme_1.TEXT_WARNING;
+        list.parentElement.insertBefore(summary, list);
+    }
+    if (summary) {
+        const text = parts.length > 0 ? `⚠ ${parts.join(" · ")}` : "";
+        if (summary.textContent !== text) {
+            summary.textContent = text;
+        }
+    }
+};
+exports.inventoryCapWarnings = {
+    settings: [SETTING_INVENTORY_CAP_WARNINGS, SETTING_INVENTORY_CAP_TRACKER],
+    onPageLoad: (settings) => {
+        const isInventory = isInventoryPage();
+        if (settings[settings_1.SettingId.INVENTORY_CAP_WARNINGS] && isInventory) {
+            renderInventoryCapWarnings();
+        }
+        isTrackerEnabled = Boolean(settings[settings_1.SettingId.INVENTORY_CAP_TRACKER]);
+        if (!isTrackerEnabled) {
+            return;
+        }
+        loadLocationDrops();
+        if (isInventory) {
+            // refresh tracker data from the live inventory page for free
+            const root = (0, page_1.getCurrentPage)();
+            if (root) {
+                updateFromRoot(root);
+            }
+        }
+        learnCurrentLocation();
+        scheduleRender();
+        refreshCapTracker();
+    },
+    // the stats bar lives in the toolbar; re-mount if the game rewrites it
+    onQuestLoad: (settings) => {
+        if (!settings[settings_1.SettingId.INVENTORY_CAP_TRACKER]) {
+            return;
+        }
+        learnCurrentLocation();
+        scheduleRender();
+    },
+};
+
+
+/***/ }),
+
 /***/ 9737:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -4117,12 +4900,27 @@ const SETTING_EMPTY_NOTIFICATIONS = {
     defaultValue: true,
 };
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.COLLECT_MEALS, kitchen_1.collectAll);
+// timestamp of the last kitchen page check for oven ownership
+let lastOvenCountCheckAt = 0;
 const renderOvens = (settings, state) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
     if (!state) {
         return;
     }
     if (state.status === kitchen_1.OvenStatus.EMPTY &&
         settings[settings_1.SettingId.KITCHEN_EMPTY_NOTIFICATIONS]) {
+        // zero ovens means the kitchen isn't unlocked yet, so there is nothing to
+        // cook; confirm against the kitchen page (throttled) before notifying
+        let hasOvens = ((_a = state.count) !== null && _a !== void 0 ? _a : 0) > 0;
+        if (!hasOvens && Date.now() - lastOvenCountCheckAt > 5 * 60 * 1000) {
+            lastOvenCountCheckAt = Date.now();
+            const kitchenState = yield kitchen_1.kitchenStatusState.get();
+            hasOvens = Boolean(kitchenState && ((_b = kitchenState.count) !== null && _b !== void 0 ? _b : 0) > 0);
+        }
+        if (!hasOvens) {
+            (0, notifications_1.removeNotification)(notifications_1.NotificationId.OVEN);
+            return;
+        }
         (0, notifications_1.sendNotification)({
             class: "btnorange",
             id: notifications_1.NotificationId.OVEN,
@@ -5090,6 +5888,200 @@ exports.moveUpdateToTop = {
 
 /***/ }),
 
+/***/ 3008:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.renderPerkIndicator = void 0;
+const perks_1 = __webpack_require__(5543);
+const settings_1 = __webpack_require__(126);
+// A small "● Crafting" pill in the bottom stats bar, right of the currency
+// counts and the cap tracker, showing which perk set is equipped right now.
+//
+// It replaces the old "…perks activated" notification banner, which was
+// inserted into the page's own content — so it shoved everything below it down,
+// including the button under your finger on a quick-sell — and which announced
+// an *intent* to switch rather than a switch that happened (it was sent
+// unconditionally, so during the cache-drift bug it claimed "Selling perks
+// activated" while the sale rolled under Default). This reads the live switch
+// state instead, so it can only say Crafting once the game has really been
+// driven there.
+//
+// The bottom bar is the one placement in this game that has survived testing:
+// mid-screen right and top collide with the chat panel, bottom-left is the
+// game's own help tracker, and the left nav never rendered.
+const INDICATOR_ID = "fh-perk-indicator";
+// gray for the resting/default set, orange for an activity set that's on
+const COLOR_RESTING = "#9e9e9e";
+const COLOR_ACTIVE = "#f0932b";
+const isRestingSet = (name) => name.trim().toLowerCase() === "default";
+// The game boots with <body class="f7-booting"> and only clears it in
+// index-app.js, on the line right after `new Framework7()` and its addView()
+// calls — the same line that sets window.farmAppReady. Adding our own elements
+// to the page inside that window is what took the whole game down in 1.0.68:
+// the game's init threw, farmAppReady stayed false, and its boot handler then
+// swallowed every click on the page.
+//
+// So we wait. This is also why the cap tracker has never caused trouble in this
+// same bar — its data arrives from a fetch, so it always mounts well after boot.
+// Nothing here is on a critical path; being a moment late costs nothing.
+const isGameBooted = () => !document.body.classList.contains("f7-booting");
+const BOOT_POLL_MS = 250;
+const BOOT_POLL_LIMIT = 40; // ~10s, then give up until the next page load
+let bootPollsLeft = BOOT_POLL_LIMIT;
+let bootPoll;
+// The pill shares the stats bar with the cap tracker, and both simply append
+// themselves — so which one ends up on the left came down to who mounted first.
+// The tracker waits on an inventory fetch, so on a cold load we win the race and
+// sit left of it; on a reload with cached data it wins and we sit right. Rather
+// than depend on that timing, we keep "last child" as a maintained property: fix
+// the position on every render, and watch the bar so a later arrival (the
+// tracker mounting, or the game rewriting the toolbar) is corrected at once.
+const keepRightmost = (statsZone, pill) => {
+    if (statsZone.lastElementChild !== pill) {
+        statsZone.append(pill);
+    }
+};
+let observedStatsZone;
+let orderObserver;
+const watchOrder = (statsZone) => {
+    // the game rebuilds the toolbar as you navigate, so re-observe when the bar
+    // we're watching is no longer the one on screen
+    if (observedStatsZone === statsZone) {
+        return;
+    }
+    orderObserver === null || orderObserver === void 0 ? void 0 : orderObserver.disconnect();
+    orderObserver = new MutationObserver(() => {
+        const pill = document.querySelector(`#${INDICATOR_ID}`);
+        // only ever move ourselves, and only while we're actually in this bar —
+        // if the game dropped the pill, the next render remounts it
+        if ((pill === null || pill === void 0 ? void 0 : pill.parentElement) === statsZone) {
+            keepRightmost(statsZone, pill);
+        }
+    });
+    // childList only: this fires when something is added to or removed from the
+    // bar, and our own move settles on the next callback (we're last, so no-op)
+    orderObserver.observe(statsZone, { childList: true });
+    observedStatsZone = statsZone;
+};
+const buildIndicator = () => {
+    const pill = document.createElement("span");
+    pill.id = INDICATOR_ID;
+    pill.style.display = "inline-flex";
+    pill.style.alignItems = "center";
+    pill.style.gap = "4px";
+    pill.style.marginLeft = "10px";
+    pill.style.verticalAlign = "middle";
+    pill.style.fontSize = "11px";
+    pill.style.whiteSpace = "nowrap";
+    const dot = document.createElement("span");
+    dot.dataset.fhRole = "dot";
+    dot.style.width = "8px";
+    dot.style.height = "8px";
+    dot.style.borderRadius = "50%";
+    dot.style.flexShrink = "0";
+    pill.append(dot);
+    const label = document.createElement("span");
+    label.dataset.fhRole = "label";
+    pill.append(label);
+    return pill;
+};
+const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* () {
+    // never touch the DOM while the game is still initializing (see isGameBooted)
+    if (!isGameBooted()) {
+        if (!bootPoll && bootPollsLeft > 0) {
+            bootPollsLeft -= 1;
+            bootPoll = setTimeout(() => {
+                bootPoll = undefined;
+                (0, exports.renderPerkIndicator)().catch((error) => {
+                    console.error("Failed to render perk indicator", error);
+                });
+            }, BOOT_POLL_MS);
+        }
+        return;
+    }
+    bootPollsLeft = BOOT_POLL_LIMIT;
+    // Read everything asynchronous FIRST. Past this point the function is
+    // synchronous, which is what keeps it single-mount: renders are triggered
+    // from several places at once (page load, quest load, every switch), and when
+    // an await sat between "is there a pill?" and "append one" two of them could
+    // interleave, both see none, and both mount one — two pills side by side.
+    const settings = yield (0, settings_1.getSettingValues)();
+    const status = (0, perks_1.getPerkStatus)();
+    const statsZone = document.querySelector("#statszone_main");
+    if (!statsZone) {
+        return;
+    }
+    // sweep any strays from that race before deciding what to draw
+    const [pillElement, ...duplicates] = document.querySelectorAll(`#${INDICATOR_ID}`);
+    for (const duplicate of duplicates) {
+        duplicate.remove();
+    }
+    let pill = pillElement;
+    if (!settings[settings_1.SettingId.PERK_MANAGER] || !status.name) {
+        pill === null || pill === void 0 ? void 0 : pill.remove();
+        return;
+    }
+    // mount once and reuse, exactly like the cap tracker in this same bar. The
+    // game rebuilds the toolbar as you navigate, so re-attach an orphaned pill
+    // rather than building a second one
+    if (!pill) {
+        pill = buildIndicator();
+        statsZone.append(pill);
+    }
+    // stay to the right of the currency counts and the cap tracker, whichever
+    // order we happened to mount in (also re-attaches an orphaned pill)
+    keepRightmost(statsZone, pill);
+    watchOrder(statsZone);
+    const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
+    if (pill.dataset.fhSignature === signature) {
+        return;
+    }
+    pill.dataset.fhSignature = signature;
+    const color = isRestingSet(status.name) ? COLOR_RESTING : COLOR_ACTIVE;
+    const dot = pill.querySelector("[data-fh-role='dot']");
+    const label = pill.querySelector("[data-fh-role='label']");
+    if (!dot || !label) {
+        return;
+    }
+    // in flight: hollow dot + faded label, so a real switch is visible while it
+    // happens (the settle wait makes it ~1s — long enough to see it land)
+    dot.style.backgroundColor = status.isPending ? "transparent" : color;
+    dot.style.border = status.isPending ? `1px solid ${color}` : "none";
+    label.textContent = status.isPending ? `${status.name}…` : status.name;
+    label.style.color = color;
+    pill.style.opacity = status.isPending ? "0.6" : "1";
+    if (status.isPending) {
+        pill.title = `Switching to the ${status.name} perk set…`;
+    }
+    else if (status.isConfirmed) {
+        pill.title = `${status.name} perks equipped`;
+    }
+    else {
+        pill.title = `${status.name} perk set selected (not verified this session)`;
+    }
+});
+exports.renderPerkIndicator = renderPerkIndicator;
+// re-render whenever a switch starts or finishes
+(0, perks_1.onPerkStatusChange)(() => {
+    (0, exports.renderPerkIndicator)().catch((error) => {
+        console.error("Failed to render perk indicator", error);
+    });
+});
+
+
+/***/ }),
+
 /***/ 682:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -5107,143 +6099,287 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.perkManagment = void 0;
 const perks_1 = __webpack_require__(5543);
 const page_1 = __webpack_require__(7952);
-const notifications_1 = __webpack_require__(6783);
-const quickSellSafely_1 = __webpack_require__(8760);
 const settings_1 = __webpack_require__(126);
+const quickSellSafely_1 = __webpack_require__(8760);
+const perkIndicator_1 = __webpack_require__(3008);
 const SETTING_PERK_MANAGER = {
     id: settings_1.SettingId.PERK_MANAGER,
     title: "Perks: Auto manage",
     description: `
     1. Save your default perks set as "Default"<br>
-    2. Save perks for "Crafting", "Fishing", "Exploring", "Selling", "Friendship", "Temple", "Locksmish", or "Wheel" activities<br>
+    2. Save perks for "Crafting", "Farming", "Fishing", "Exploring", "Mining", "Selling", "Friendship", "Temple", "Locksmith", or "Wheel" activities<br>
     3. Activity perk sets will automatically be enabled for those activities and reverted to "Default" after
   `,
     type: "boolean",
     defaultValue: true,
 };
-const getNotification = (activity) => ({
-    class: "btnorange",
-    id: notifications_1.NotificationId.PERKS,
-    text: `${activity} perks activated`,
+// the temple was identified by data-page "mailitems" when this feature was
+// written; newer game versions serve it as temple.php, so accept either
+const isTemplePage = (page) => page === page_1.Page.TEMPLE ||
+    /\btemple[_a-z]*\.php/.test(window.location.hash || window.location.pathname);
+// mining spans the location page (data-page "mining") and the dig board
+// (mine.php), which may not share the same page identity
+const isMiningPage = (page) => page === page_1.Page.MINING ||
+    /\bmin(?:e|ing)\.php/.test(window.location.hash || window.location.pathname);
+// Every activity location (explore areas, fishing spots, mines) is served by
+// location.php?type=<activity>&id=<n>, and they can share a page identity — so
+// matching on the page id alone risks putting Exploring perks on a fishing spot.
+// The URL's own type is the authoritative signal, so prefer it where present.
+const getLocationType = () => {
+    const location = window.location.hash || window.location.pathname;
+    if (!/\blocation\.php/.test(location)) {
+        return undefined;
+    }
+    const type = new URLSearchParams(location.split("?")[1]).get("type");
+    return type === null || type === void 0 ? void 0 : type.toLowerCase();
+};
+const isLocationOfType = (...prefixes) => {
+    const type = getLocationType();
+    return Boolean(type && prefixes.some((prefix) => type.startsWith(prefix)));
+};
+// the town hub (town.php) — an unknown page to getPage(), so match on the URL.
+// including it in the cluster keeps Town perks active while you bounce between
+// town buildings via the hub, instead of reverting to Default at the hub and
+// re-switching to Town at every building.
+const isTownHubPage = () => /\btown\.php/.test(window.location.hash || window.location.pathname);
+// town-cluster activities and how to recognize their pages. these are all done
+// together in the town area, so they share one "Town" perk set
+// (PerkActivity.TOWN) to avoid thrashing between sets; each still falls back to
+// its own set when no Town set exists. The Town set now also holds the selling
+// perks, so the farmers market belongs here too — the whole town area stays on
+// Town, and (via activatePerkSet's guard) only switches once on entry.
+const TOWN_CLUSTER = [
+    { activity: perks_1.PerkActivity.TOWN, matches: () => isTownHubPage() },
+    { activity: perks_1.PerkActivity.TEMPLE, matches: isTemplePage },
+    { activity: perks_1.PerkActivity.WHEEL, matches: (page) => page === page_1.Page.WHEEL },
+    {
+        activity: perks_1.PerkActivity.LOCKSMITH,
+        matches: (page) => page === page_1.Page.LOCKSMITH,
+    },
+    { activity: perks_1.PerkActivity.VAULT, matches: (page) => page === page_1.Page.VAULT },
+    // market's own-set fallback is Selling (for anyone without a Town set)
+    {
+        activity: perks_1.PerkActivity.SELLING,
+        matches: (page) => page === page_1.Page.FARMERS_MARKET,
+    },
+];
+// Quick-sell, quick-craft and quick-give all share ONE consolidated perk set,
+// so clicking between them never swaps perks — swapping between sets is what
+// caused every switch-timing bug in this feature. That set is the one named
+// "Crafting"; it holds the selling, crafting and friendship perks together.
+const getQuickActionPerks = () => (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.CRAFTING);
+// Force the consolidated set active and settle, so its perks are actually
+// equipped (not just labelled active) before the caller fires the native action.
+// The stats-bar indicator (perkIndicator.ts) shows which set is on throughout —
+// it replaced the old "…perks activated" banner, which pushed the page (and the
+// button under your finger) down every time it appeared.
+//
+// GIVE is the exception: the friendship/give perks live in BOTH the Default set
+// and the consolidated set, so if either is already equipped there's nothing to
+// switch — skip the ~1s activation entirely and let the give fire immediately.
+// (Selling and crafting perks are NOT in Default, so those always switch.)
+// Sell and craft need no such check: activatePerkSet no-ops instantly via its
+// confirmedEquippedSetId fast path when the set is already on.
+const activateQuickActionPerks = (...args_1) => __awaiter(void 0, [...args_1], void 0, function* (action = "sell") {
+    const perks = yield getQuickActionPerks();
+    if (!perks) {
+        return;
+    }
+    if (action === "give") {
+        const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
+        const activeId = (0, perks_1.getConfirmedEquippedSetId)();
+        const giveAlreadyCovered = activeId !== undefined &&
+            (activeId === perks.id || activeId === (defaultPerks === null || defaultPerks === void 0 ? void 0 : defaultPerks.id));
+        if (giveAlreadyCovered) {
+            return;
+        }
+    }
+    yield (0, perks_1.activatePerkSet)(perks, { force: true, settle: true });
+});
+// Replace the native quick-craft button with a proxy that activates the
+// consolidated set first, then fires the native action and stops — the
+// reconciler reverts to Default when you navigate away. No-op if the native
+// button is absent or already proxied.
+//
+// Quick-sell and quick-give are NOT installed here: quickSellSafely.ts already
+// proxies both (.quicksellbtn / .quickgivebtn) with lock-safety and runs the
+// shared onQuicksellClick callback below, which activates the same consolidated
+// set. Installing a second give proxy here was dead code (quickSellSafely runs
+// first and wins) and made give's lock-safety silently depend on feature order.
+const installQuickActionProxy = (nativeSelector, label) => {
+    var _a, _b;
+    const nativeButton = (_a = (0, page_1.getCurrentPage)()) === null || _a === void 0 ? void 0 : _a.querySelector(nativeSelector);
+    if (!nativeButton || nativeButton.style.display) {
+        return;
+    }
+    nativeButton.style.display = "none";
+    const proxyButton = document.createElement("button");
+    proxyButton.classList.add("button", "btngreen");
+    proxyButton.style.height = "28px;";
+    proxyButton.textContent = label;
+    proxyButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
+        yield activateQuickActionPerks();
+        nativeButton.click();
+    }));
+    (_b = nativeButton.parentElement) === null || _b === void 0 ? void 0 : _b.insertBefore(proxyButton, nativeButton);
+};
+// Quick-sell, registered once at module scope (registering per page-load would
+// stack duplicate callbacks). Returning true never blocks the sale; the
+// reconciler restores Default when you navigate away.
+(0, quickSellSafely_1.onQuicksellClick)((_event, action) => __awaiter(void 0, void 0, void 0, function* () {
+    const { value: isEnabled } = yield (0, settings_1.getSetting)(SETTING_PERK_MANAGER);
+    if (isEnabled) {
+        yield activateQuickActionPerks(action);
+    }
+    return true;
+}));
+// Resolves the one activity set the given (live) page calls for, or undefined
+// when the page isn't an activity page (→ revert to Default). A page matches at
+// most one activity, so the first hit wins; a matched page whose set isn't
+// configured falls through to Default, exactly like the old branch table.
+const getPageActivation = (page) => __awaiter(void 0, void 0, void 0, function* () {
+    const directMatches = [
+        { activity: perks_1.PerkActivity.CRAFTING, matches: page === page_1.Page.WORKSHOP },
+        // location.php's own type wins over the page id, and is checked first, so a
+        // fishing spot can't be mistaken for an explore area (see getLocationType)
+        {
+            activity: perks_1.PerkActivity.FISHING,
+            matches: isLocationOfType("fish") || page === page_1.Page.FISHING,
+        },
+        {
+            activity: perks_1.PerkActivity.MINING,
+            matches: isLocationOfType("mine", "mining") || isMiningPage(page),
+        },
+        {
+            activity: perks_1.PerkActivity.EXPLORING,
+            matches: isLocationOfType("explore") || page === page_1.Page.AREA,
+        },
+        // The farm is listed so it's explicit rather than accidental: with a
+        // "Farming" set it's used here; without one (farm perks living in Default,
+        // the usual setup) this resolves to nothing and the farm falls through to
+        // the Default revert below, which is what it needs — the farm page's own
+        // Harvest All button is the game's, not ours, so it isn't gated the way the
+        // crops-ready notification is and must not run under a stale activity set.
+        { activity: perks_1.PerkActivity.FARMING, matches: page === page_1.Page.FARM },
+        // the farmers market is handled in TOWN_CLUSTER below: the Town set now
+        // holds the selling perks, so the market stays on Town like the rest of
+        // the town area (falling back to a Selling set only if no Town set exists)
+        {
+            activity: perks_1.PerkActivity.FRIENDSHIP,
+            matches: page === page_1.Page.FRIENDSHIP || page === page_1.Page.MAILBOX,
+        },
+    ];
+    for (const { activity, matches } of directMatches) {
+        if (!matches) {
+            continue;
+        }
+        const set = yield (0, perks_1.getActivityPerksSet)(activity);
+        return set ? { activity, set } : undefined;
+    }
+    // town-cluster page: prefer the shared "Town" set, else the activity's own
+    const townSet = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.TOWN);
+    for (const { activity, matches } of TOWN_CLUSTER) {
+        if (!matches(page)) {
+            continue;
+        }
+        const set = townSet !== null && townSet !== void 0 ? townSet : (yield (0, perks_1.getActivityPerksSet)(activity));
+        if (!set) {
+            continue;
+        }
+        return { activity: townSet ? perks_1.PerkActivity.TOWN : activity, set };
+    }
+    return undefined;
+});
+// Pages that put perks back to Default. Everywhere else that isn't an activity
+// page simply LEAVES THE CURRENT SET ALONE — browsing to an item, your
+// inventory, a quest or a profile in the middle of an activity is not a signal
+// that you're done with it, and reverting there cost a full switch out and
+// another one back when you returned. So an activity set now stays on until you
+// actually go somewhere that means "done": home, or the farm.
+//
+// This is safe because everything that actually spends perks is gated on its
+// own set rather than trusting whatever happens to be equipped: harvest and
+// replant force the farm perks (withFarmingPerks), quick-sell/craft/give force
+// the consolidated set, and the workshop, market, town and activity locations
+// are activity pages in their own right. The one exception is the farm page's
+// native Harvest All button, which is the game's and not gated by us — which is
+// exactly why the farm stays a revert point.
+const isRestingPage = (page) => page === page_1.Page.HOME_PAGE || page === page_1.Page.HOME_PATH || page === page_1.Page.FARM;
+// The single source of truth for page-scoped perk switching. Resolves the set
+// the *live* page calls for (via getPage(), NOT the argument handed to
+// onPageLoad) and switches to it, going back to Default on a resting page.
+// Idempotent: the SPA fires onPageLoad several times per navigation,
+// sometimes with a stale page — the old branch table let one run activate the
+// activity set while another fell through and reverted to Default, and whoever
+// landed last won, nondeterministically leaving e.g. the market under Default
+// (partial sell perks). Keying every run off the same live page makes the
+// duplicate runs agree on the same set, so the redundant ones no-op via the
+// activatePerkSet guard instead of fighting each other.
+const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, function* () {
+    const { value: isEnabled } = yield (0, settings_1.getSetting)(SETTING_PERK_MANAGER);
+    if (!isEnabled) {
+        return;
+    }
+    const [page] = (0, page_1.getPage)();
+    // don't touch perks on the perks page so you can edit sets freely
+    if (page === page_1.Page.PERKS) {
+        return;
+    }
+    const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
+    if (!defaultPerks) {
+        console.warn("Default perk set not found");
+        return;
+    }
+    const activation = yield getPageActivation(page);
+    if (activation) {
+        yield (0, perks_1.activatePerkSet)(activation.set, { settle: true });
+        return;
+    }
+    // Not an activity page, and not a resting one either — you're browsing
+    // mid-activity (an item, your inventory, a quest), so leave the perks where
+    // they are. This also covers the two cases that used to need their own
+    // guards: item pages, where the quick actions manage perks themselves and a
+    // revert would fire on top of a just-activated set; and an unidentifiable
+    // page (getCurrentPage() momentarily returns null mid-render), which is not a
+    // reliable "you've left the activity" signal and once caused the workshop to
+    // reset and re-activate Crafting on every single craft.
+    if (!isRestingPage(page)) {
+        return;
+    }
+    // back to Default (settle: the game acks the switch before it equips, so
+    // without waiting the label flips to Default while the previous set's perks
+    // stay on)
+    yield (0, perks_1.activatePerkSet)(defaultPerks, { settle: true });
 });
 exports.perkManagment = {
     settings: [SETTING_PERK_MANAGER],
-    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d;
-        // make sure the setting is enabled
+    onPageLoad: (settings) => __awaiter(void 0, void 0, void 0, function* () {
         if (!settings[settings_1.SettingId.PERK_MANAGER]) {
             return;
         }
-        // don't change anything on perks page so you can edit
-        if (page === page_1.Page.PERKS) {
+        // page-scoped perk switching, driven by the live page (idempotent, so the
+        // SPA's duplicate onPageLoad calls converge instead of racing)
+        yield reconcilePerksForCurrentPage();
+        // Mount/refresh the equipped-set indicator AFTER the reconcile, never
+        // before: the game rebuilds the bottom bar as you navigate, and the perk
+        // state isn't read yet on the very first load, so there'd be nothing to
+        // show anyway. When the reconcile switched, the status listener has already
+        // drawn it; this covers the no-op case. (renderPerkIndicator waits out the
+        // game's own boot on its own — see isGameBooted there.)
+        yield (0, perkIndicator_1.renderPerkIndicator)();
+        // the quick-craft proxy lives on item pages; skip the workshop, where the
+        // reconciler already scopes perks. (quick-sell and quick-give are handled
+        // by quickSellSafely.ts — see installQuickActionProxy's note.)
+        const [page] = (0, page_1.getPage)();
+        if (page !== page_1.Page.WORKSHOP) {
+            installQuickActionProxy(".quickcraftbtn", "CRAFT");
+        }
+    }),
+    onQuestLoad: (settings) => __awaiter(void 0, void 0, void 0, function* () {
+        if (!settings[settings_1.SettingId.PERK_MANAGER]) {
             return;
         }
-        const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
-        // make sure we have a default perk set
-        if (!defaultPerks) {
-            console.warn("Default perk set not found");
-            return;
-        }
-        const craftingPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.CRAFTING);
-        if (craftingPerks && page === page_1.Page.WORKSHOP) {
-            yield (0, perks_1.activatePerkSet)(craftingPerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.CRAFTING));
-            return;
-        }
-        if (craftingPerks) {
-            const quickcraftButton = (_a = (0, page_1.getCurrentPage)()) === null || _a === void 0 ? void 0 : _a.querySelector(".quickcraftbtn");
-            if (quickcraftButton && !quickcraftButton.style.display) {
-                quickcraftButton.style.display = "none";
-                const proxyButton = document.createElement("button");
-                proxyButton.classList.add("button");
-                proxyButton.classList.add("btngreen");
-                proxyButton.style.height = "28px;";
-                proxyButton.textContent = "CRAFT";
-                proxyButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
-                    yield (0, perks_1.activatePerkSet)(craftingPerks);
-                    (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.CRAFTING));
-                    quickcraftButton.click();
-                    yield (0, perks_1.activatePerkSet)(defaultPerks);
-                    (0, notifications_1.removeNotification)(notifications_1.NotificationId.PERKS);
-                }));
-                (_b = quickcraftButton.parentElement) === null || _b === void 0 ? void 0 : _b.insertBefore(proxyButton, quickcraftButton);
-            }
-        }
-        const fishingPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.FISHING);
-        if (fishingPerks && page === page_1.Page.FISHING) {
-            yield (0, perks_1.activatePerkSet)(fishingPerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.FISHING));
-            return;
-        }
-        const exploringPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.EXPLORING);
-        if (exploringPerks && page === page_1.Page.AREA) {
-            yield (0, perks_1.activatePerkSet)(exploringPerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.EXPLORING));
-            return;
-        }
-        const sellingPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.SELLING);
-        if (sellingPerks && page === page_1.Page.FARMERS_MARKET) {
-            yield (0, perks_1.activatePerkSet)(sellingPerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.SELLING));
-            return;
-        }
-        if (sellingPerks) {
-            (0, quickSellSafely_1.onQuicksellClick)(() => __awaiter(void 0, void 0, void 0, function* () {
-                yield (0, perks_1.activatePerkSet)(sellingPerks);
-                (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.SELLING));
-                setTimeout(() => __awaiter(void 0, void 0, void 0, function* () {
-                    yield (0, perks_1.activatePerkSet)(defaultPerks);
-                    (0, notifications_1.removeNotification)(notifications_1.NotificationId.PERKS);
-                }), 1000);
-                return true;
-            }));
-        }
-        const friendshipPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.FRIENDSHIP);
-        if (friendshipPerks &&
-            (page === page_1.Page.FRIENDSHIP || page === page_1.Page.MAILBOX)) {
-            yield (0, perks_1.activatePerkSet)(friendshipPerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.FRIENDSHIP));
-            return;
-        }
-        if (friendshipPerks) {
-            const quickgiveButton = (_c = (0, page_1.getCurrentPage)()) === null || _c === void 0 ? void 0 : _c.querySelector(".quickgivebtn");
-            if (quickgiveButton && !quickgiveButton.style.display) {
-                quickgiveButton.style.display = "none";
-                const proxyButton = document.createElement("button");
-                proxyButton.classList.add("button");
-                proxyButton.classList.add("btngreen");
-                proxyButton.style.height = "28px;";
-                proxyButton.textContent = "GIVE";
-                proxyButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
-                    yield (0, perks_1.activatePerkSet)(friendshipPerks);
-                    (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.FRIENDSHIP));
-                    quickgiveButton.click();
-                    yield (0, perks_1.activatePerkSet)(defaultPerks);
-                    (0, notifications_1.removeNotification)(notifications_1.NotificationId.PERKS);
-                }));
-                (_d = quickgiveButton.parentElement) === null || _d === void 0 ? void 0 : _d.insertBefore(proxyButton, quickgiveButton);
-            }
-        }
-        const templePerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.TEMPLE);
-        if (templePerks && page === page_1.Page.TEMPLE) {
-            yield (0, perks_1.activatePerkSet)(templePerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.TEMPLE));
-            return;
-        }
-        const locksmithPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.LOCKSMITH);
-        if (locksmithPerks && page === page_1.Page.LOCKSMITH) {
-            yield (0, perks_1.activatePerkSet)(locksmithPerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.LOCKSMITH));
-            return;
-        }
-        const wheelPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.WHEEL);
-        if (wheelPerks && page === page_1.Page.WHEEL) {
-            yield (0, perks_1.activatePerkSet)(wheelPerks);
-            (0, notifications_1.sendNotification)(getNotification(perks_1.PerkActivity.WHEEL));
-            return;
-        }
-        (0, perks_1.activatePerkSet)(defaultPerks);
-        (0, notifications_1.removeNotification)(notifications_1.NotificationId.PERKS);
+        yield (0, perkIndicator_1.renderPerkIndicator)();
     }),
 };
 
@@ -5655,7 +6791,7 @@ exports.quicksellSafely = {
                     return;
                 }
                 for (const callback of state.onQuicksellClick) {
-                    if (!(yield callback(event))) {
+                    if (!(yield callback(event, "sell"))) {
                         return;
                     }
                 }
@@ -5686,7 +6822,7 @@ exports.quicksellSafely = {
                     return;
                 }
                 for (const callback of state.onQuicksellClick) {
-                    if (!(yield callback(event))) {
+                    if (!(yield callback(event, "give"))) {
                         return;
                     }
                 }
@@ -5905,7 +7041,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.0.31" !== void 0 ? "1.0.31" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.0" !== void 0 ? "1.1.0" : "1.0.0");
 const README_URL = "https://github.com/anstosa/farmrpg-farmhand/blob/main/README.md";
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
@@ -6004,6 +7140,7 @@ const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const highlightSelfInChat_1 = __webpack_require__(5454);
 const improvedInputs_1 = __webpack_require__(1108);
+const inventoryCapWarnings_1 = __webpack_require__(6660);
 const kitchenNotifications_1 = __webpack_require__(9737);
 const linkifyQuickCraft_1 = __webpack_require__(7092);
 const mailboxNotifications_1 = __webpack_require__(6297);
@@ -6052,6 +7189,8 @@ const FEATURES = [
     quickSellSafely_1.quicksellSafely,
     linkifyQuickCraft_1.linkifyQuickCraft,
     exploreFirst_1.exploreFirst,
+    // inventory
+    inventoryCapWarnings_1.inventoryCapWarnings,
     // quests
     quests_1.quests,
     questCollapse_1.questCollapse,
@@ -6672,34 +7811,42 @@ const removeNotification = (notification) => {
 };
 exports.removeNotification = removeNotification;
 const renderNotifications = (force = false) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     const pageContent = (_a = (0, page_1.getCurrentPage)()) === null || _a === void 0 ? void 0 : _a.querySelector(".page-content");
     if (!pageContent) {
         console.error("Page content not found");
         return;
     }
+    // What belongs on THIS page. Excluded notifications used to be skipped from
+    // inside the render loop with a `return`, which — since notifications render
+    // in id order — also dropped every notification sorted after the excluded
+    // one: on the farm page, where "field" is excluded, that silently killed the
+    // oven, meal, pets and update banners too. Filtering up front fixes that, and
+    // gives the no-op check below the right number to compare against (against
+    // the unfiltered total it could never match on a page with an exclusion, so
+    // every render wiped and rebuilt every banner).
+    const currentPage = (0, page_1.getCurrentPage)();
+    const currentPageId = (_b = currentPage === null || currentPage === void 0 ? void 0 : currentPage.dataset.page) !== null && _b !== void 0 ? _b : "";
+    const visibleNotifications = state.notifications
+        .filter(({ excludePages }) => !(excludePages === null || excludePages === void 0 ? void 0 : excludePages.includes(currentPageId)))
+        .toSorted((a, b) => a.id.localeCompare(b.id) || 0);
     // remove existing notifications
     const notifications = pageContent.querySelectorAll(".fh-notification");
-    if (!force && notifications.length === state.notifications.length) {
+    if (!force && notifications.length === visibleNotifications.length) {
         return;
     }
     for (const notification of notifications) {
         notification.remove();
     }
     // add new notifications
-    for (const notification of state.notifications.toSorted((a, b) => a.id.localeCompare(b.id) || 0)) {
-        const currentPage = (0, page_1.getCurrentPage)();
-        // skip notifications that are excluded from the current page
-        if ((_b = notification.excludePages) === null || _b === void 0 ? void 0 : _b.includes((_c = currentPage === null || currentPage === void 0 ? void 0 : currentPage.dataset.page) !== null && _c !== void 0 ? _c : "")) {
-            return;
-        }
+    for (const notification of visibleNotifications) {
         // replace native notification if relevant
         if (notification.replacesHref) {
             const link = currentPage === null || currentPage === void 0 ? void 0 : currentPage.querySelector(`a[href="${notification.replacesHref}"]`);
-            if ((_d = link === null || link === void 0 ? void 0 : link.classList) === null || _d === void 0 ? void 0 : _d.contains("button")) {
+            if ((_c = link === null || link === void 0 ? void 0 : link.classList) === null || _c === void 0 ? void 0 : _c.contains("button")) {
                 link.remove();
             }
-            if ((_f = (_e = link === null || link === void 0 ? void 0 : link.parentElement) === null || _e === void 0 ? void 0 : _e.classList) === null || _f === void 0 ? void 0 : _f.contains("button")) {
+            if ((_e = (_d = link === null || link === void 0 ? void 0 : link.parentElement) === null || _d === void 0 ? void 0 : _d.classList) === null || _e === void 0 ? void 0 : _e.contains("button")) {
                 link.parentElement.remove();
             }
         }
@@ -6731,8 +7878,8 @@ const renderNotifications = (force = false) => {
         else if (isLinkNotification(notification)) {
             notificationElement.setAttribute("href", notification.href);
         }
-        for (const action of (_g = notification.actions) !== null && _g !== void 0 ? _g : []) {
-            notificationElement.append(document.createTextNode(((_h = notification.actions) === null || _h === void 0 ? void 0 : _h.indexOf(action)) === 0 ? " " : " / "));
+        for (const action of (_f = notification.actions) !== null && _f !== void 0 ? _f : []) {
+            notificationElement.append(document.createTextNode(((_g = notification.actions) === null || _g === void 0 ? void 0 : _g.indexOf(action)) === 0 ? " " : " / "));
             const actionElement = document.createElement("a");
             actionElement.classList.add("fh-notification-action");
             actionElement.style.cursor = "pointer";
@@ -6757,7 +7904,7 @@ const renderNotifications = (force = false) => {
             }
             notificationElement.append(actionElement);
         }
-        if ((_j = pageContent.firstElementChild) === null || _j === void 0 ? void 0 : _j.classList.contains("pull-to-refresh-layer")) {
+        if ((_h = pageContent.firstElementChild) === null || _h === void 0 ? void 0 : _h.classList.contains("pull-to-refresh-layer")) {
             pageContent.insertBefore(notificationElement, pageContent.children[1]);
         }
         else {
@@ -6803,6 +7950,7 @@ var Page;
     Page["FRIENDSHIP"] = "npclevels";
     Page["HOME_PAGE"] = "index-1";
     Page["HOME_PATH"] = "index";
+    Page["INVENTORY"] = "inventory";
     Page["ITEM"] = "item";
     Page["KITCHEN"] = "kitchen";
     Page["LOCKSMITH"] = "locksmith";
@@ -7117,6 +8265,8 @@ var SettingId;
     SettingId["HOME_HIDE_THEME"] = "homeHideTheme";
     SettingId["IMPORT"] = "import";
     SettingId["IMPROVED_INPUTS"] = "improvedInputs";
+    SettingId["INVENTORY_CAP_TRACKER"] = "inventoryCapTracker";
+    SettingId["INVENTORY_CAP_WARNINGS"] = "inventoryCapWarnings";
     SettingId["KITCHEN_COMPLETE_NOTIFICATIONS"] = "readyNotifications";
     SettingId["KITCHEN_EMPTY_NOTIFICATIONS"] = "kitchenEmptyNotifications";
     SettingId["MAX_ANIMALS"] = "maxAnimals";
