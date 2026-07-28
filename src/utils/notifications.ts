@@ -119,9 +119,23 @@ const renderNotifications = (force: boolean = false): void => {
     return;
   }
 
+  // What belongs on THIS page. Excluded notifications used to be skipped from
+  // inside the render loop with a `return`, which — since notifications render
+  // in id order — also dropped every notification sorted after the excluded
+  // one: on the farm page, where "field" is excluded, that silently killed the
+  // oven, meal, pets and update banners too. Filtering up front fixes that, and
+  // gives the no-op check below the right number to compare against (against
+  // the unfiltered total it could never match on a page with an exclusion, so
+  // every render wiped and rebuilt every banner).
+  const currentPage = getCurrentPage();
+  const currentPageId = currentPage?.dataset.page ?? "";
+  const visibleNotifications = state.notifications
+    .filter(({ excludePages }) => !excludePages?.includes(currentPageId))
+    .toSorted((a, b) => a.id.localeCompare(b.id) || 0);
+
   // remove existing notifications
   const notifications = pageContent.querySelectorAll(".fh-notification");
-  if (!force && notifications.length === state.notifications.length) {
+  if (!force && notifications.length === visibleNotifications.length) {
     return;
   }
   for (const notification of notifications) {
@@ -129,16 +143,7 @@ const renderNotifications = (force: boolean = false): void => {
   }
 
   // add new notifications
-  for (const notification of state.notifications.toSorted(
-    (a, b) => a.id.localeCompare(b.id) || 0
-  )) {
-    const currentPage = getCurrentPage();
-
-    // skip notifications that are excluded from the current page
-    if (notification.excludePages?.includes(currentPage?.dataset.page ?? "")) {
-      return;
-    }
-
+  for (const notification of visibleNotifications) {
     // replace native notification if relevant
     if (notification.replacesHref) {
       const link = currentPage?.querySelector<HTMLAnchorElement>(
