@@ -65,17 +65,13 @@ export const navigationStyle: Feature = {
             padding: 0 !important;
           }
 
-          .toolbar-inner .link {
-            display: none !important;
-          }
-
           @media (min-width: 768px) {
             .fh-menu {
               display: none !important;
             }
           }
 
-          .toolbar-inner a {
+          .toolbar-inner > a {
             height: 100%;
             border: 0;
             background: transparent;
