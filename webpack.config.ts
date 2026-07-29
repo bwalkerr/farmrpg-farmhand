@@ -133,6 +133,15 @@ const config: Configuration = {
           icon: "https://www.google.com/s2/favicons?sz=64&domain=farmrpg.com",
           license: "MIT",
           match: ["https://farmrpg.com/*", "https://alpha.farmrpg.com/*"],
+          // Point updates at THIS fork's build. The header deliberately carried
+          // no update URL for a long time, because the Greasy Fork release
+          // auto-updates to upstream and would have replaced the fork wholesale.
+          // Pointing at the fork's own raw dist gets the automatic updates
+          // without that risk — nothing here can pull upstream's build.
+          updateURL:
+            "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.meta.js",
+          downloadURL:
+            "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js",
           name: "Farm RPG Farmhand",
           namespace: "https://github.com/anstosa/farmrpg-farmhand",
           connect: ["github.com", "raw.githubusercontent.com"],

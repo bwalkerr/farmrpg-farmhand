@@ -8,7 +8,9 @@ All features are configurable and optional.
 
 This is a fork of [anstosa/farmrpg-farmhand](https://github.com/anstosa/farmrpg-farmhand) maintained at [bwalkerr/farmrpg-farmhand](https://github.com/bwalkerr/farmrpg-farmhand) with additional fixes and features, listed below. Everything else in this README is the upstream project's documentation and applies unchanged.
 
-Install this fork's build directly: <https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js> (it carries no auto-update URL, so Greasy Fork releases will not overwrite it).
+Install this fork's build directly: <https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js>
+
+Updates come from this repository: the script's update URLs point at the build above, so your script manager offers fork releases on its own. It never consults the Greasy Fork release, which is upstream's and would replace this fork entirely.
 
 Fork releases are numbered from **1.1.0** onwards; upstream's own releases are the 1.0.x line, so a version starting 1.1 is always this fork.
 
@@ -242,6 +244,10 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.1.6
+
+* Added: the script now carries update URLs pointing at this fork's own build, so a script manager offers new fork releases by itself. They point only at this repository — the Greasy Fork release, which would replace the fork with upstream, is never consulted
 
 ### 1.1.5
 
