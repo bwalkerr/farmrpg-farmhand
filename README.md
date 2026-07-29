@@ -58,6 +58,9 @@ The fork's history is built as one commit per change on top of upstream `main`, 
 | `b498b1a` | Keep gold and ancient coins visible in the bottom bar | The compressed navigation styles hide them for everyone using that feature |
 | `7a3ddf7` | Don't let a page-excluded banner hide the banners after it | Any page with an excluded notification loses the rest |
 | `dda223d` | Compare release numbers part by part, in order | Version comparison misfires whenever a later part of the candidate exceeds the current release's |
+| `42928ff` | Give each page watcher its own copy of the response | Two watchers on one URL (the farm page has exactly that) meant the second threw "Body has already been consumed" and lost its update |
+| `f68d29c` | Run on www.farmrpg.com, and address the host the page came from | www serves the whole game and doesn't redirect, so the script never ran there; and requests were addressed to a fixed host, which broke alpha.farmrpg.com support the same way |
+| `895efea` | Don't keep live crop, oven and meal status between sessions | A five-second status written to storage lets the previous session's data draw a banner at startup |
 | `d91d299` | Make perk set switching actually land | Same three causes upstream has (drifting active-set cache, the game confirming a switch before applying it, clearing perks racing the next action) — but it exports state the perk indicator consumes, so it pairs with `6f8fd9b` or needs a note |
 
 The rest — sticky activity perks, the Town cluster, the consolidated quick-action set, the cap tracker and the perk indicator — are fork behaviour rather than bug fixes, and are not proposed upstream.
