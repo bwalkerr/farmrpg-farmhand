@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.1
+// @version 1.1.2
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
@@ -1504,28 +1504,28 @@ const page_1 = __webpack_require__(7952);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
 const users_1 = __webpack_require__(5254);
-const processMailbox = (root) => {
-    var _a, _b, _c;
+// `user` is who the page was requested for, when that's known. The id and name
+// are read from the page first, but falling back to the requested player means a
+// change to the mailbox page's own markup costs us the capacity line at worst,
+// rather than the whole mailbox.
+const processMailbox = (root, user) => {
+    var _a, _b, _c, _d, _e, _f;
     const idField = root.querySelector("#mb_to_id");
-    const id = idField === null || idField === void 0 ? void 0 : idField.value;
+    const id = (idField === null || idField === void 0 ? void 0 : idField.value) || (user === null || user === void 0 ? void 0 : user.id);
     if (!id) {
         return;
     }
     const profileLink = root.querySelector("a[href^='profile']");
-    if (!profileLink) {
-        return;
-    }
-    const [, queryString] = profileLink.href.split("?");
-    const linkQuery = new URLSearchParams(queryString);
-    const username = linkQuery.get("user_name");
+    const [, queryString] = (_b = (_a = profileLink === null || profileLink === void 0 ? void 0 : profileLink.getAttribute("href")) === null || _a === void 0 ? void 0 : _a.split("?")) !== null && _b !== void 0 ? _b : [];
+    const username = (_c = new URLSearchParams(queryString).get("user_name")) !== null && _c !== void 0 ? _c : user === null || user === void 0 ? void 0 : user.username;
     if (!username) {
         return;
     }
     const cards = root.querySelectorAll(".card");
-    let capacity = 5;
+    let capacity;
     for (const card of cards) {
         // This mailbox has 36 / 1,800 items in it currently.
-        const match = (_a = card.textContent) === null || _a === void 0 ? void 0 : _a.match(/This mailbox has [\d,]+ \/ ([\d,]+) items in it currently/);
+        const match = (_d = card.textContent) === null || _d === void 0 ? void 0 : _d.match(/This mailbox has [\d,]+ \/ ([\d,]+) items in it currently/);
         if (!match) {
             continue;
         }
@@ -1533,7 +1533,7 @@ const processMailbox = (root) => {
         capacity = Number(max.replaceAll(",", ""));
         break;
     }
-    const lookingFor = (_c = (_b = (0, page_1.getCardByTitle)("Looking For", root.body)) === null || _b === void 0 ? void 0 : _b.textContent) !== null && _c !== void 0 ? _c : "";
+    const lookingFor = (_f = (_e = (0, page_1.getCardByTitle)("Looking For", root.body)) === null || _e === void 0 ? void 0 : _e.textContent) !== null && _f !== void 0 ? _f : "";
     const timestamp = Date.now();
     return {
         id,
@@ -1556,7 +1556,7 @@ exports.playerMailboxState = new state_1.CachedState(state_1.StorageKey.PLAYER_M
         return;
     }
     const response = yield (0, requests_2.getHTML)(page_1.Page.MAILBOX, new URLSearchParams({ id: user.id }));
-    return processMailbox(response);
+    return processMailbox(response, user);
 }), {
     persist: true,
     timeout: 60 * 24 * 7, // 1 week
@@ -1596,17 +1596,34 @@ const state_1 = __webpack_require__(4782);
 const page_1 = __webpack_require__(7952);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
+// The profile page carries the player's id in the Add Friend button, and — on
+// the rebuilt profile page, which has no such button — in the link to their
+// mailbox. Both are checked, so this works on old and current markup, and on a
+// profile fetched without a session (where the social buttons aren't rendered).
+const getUserId = (root) => {
+    var _a, _b, _c, _d;
+    const addFriendId = (_a = root.querySelector(".addfriendbtn")) === null || _a === void 0 ? void 0 : _a.dataset.id;
+    if (addFriendId) {
+        return addFriendId;
+    }
+    const mailboxLink = root.querySelector("a[href*='mailbox.php?id=']");
+    const [, queryString] = (_c = (_b = mailboxLink === null || mailboxLink === void 0 ? void 0 : mailboxLink.getAttribute("href")) === null || _b === void 0 ? void 0 : _b.split("?")) !== null && _c !== void 0 ? _c : [];
+    return (_d = new URLSearchParams(queryString).get("id")) !== null && _d !== void 0 ? _d : undefined;
+};
+// The username used to be a .sharelink; the rebuilt profile page shows it as a
+// copy-the-@mention link instead.
+const getNameLink = (root) => { var _a; return (_a = root.querySelector(".sharelink")) !== null && _a !== void 0 ? _a : root.querySelector(".copy-to-clipboard"); };
 const processProfile = (root) => {
     var _a, _b, _c, _d, _e, _f;
-    const id = (_a = root.querySelector(".addfriendbtn")) === null || _a === void 0 ? void 0 : _a.dataset.id;
+    const id = getUserId(root);
     if (!id) {
         return;
     }
-    const nameLink = root.querySelector(".sharelink");
+    const nameLink = getNameLink(root);
     if (!nameLink) {
         return;
     }
-    const username = nameLink.textContent;
+    const username = (_a = nameLink.textContent) === null || _a === void 0 ? void 0 : _a.trim();
     if (!username) {
         return;
     }
@@ -5086,7 +5103,11 @@ const openInfoPopup = (userElement) => __awaiter(void 0, void 0, void 0, functio
         userElement.classList.remove("fh-mailbox-info-loading");
         return;
     }
-    if (!user || !mailbox) {
+    // The mailbox page and the profile page are read separately, and either can
+    // come back unreadable when the game changes its markup. Rather than showing
+    // nothing at all — which looks exactly like a broken hover — show whichever
+    // details did load, and say so when none did.
+    if (!user && !mailbox) {
         userElement.classList.remove("fh-mailbox-info-loading");
         return;
     }
@@ -5115,11 +5136,28 @@ const openInfoPopup = (userElement) => __awaiter(void 0, void 0, void 0, functio
     infoPopup.style.fontWeight = "normal";
     infoPopup.style.whiteSpace = "normal";
     infoPopup.style.pointerEvents = "none";
-    infoPopup.innerHTML = `
-    <div><strong>Mailbox:</strong> ${formatter.format(mailbox.capacity)}</div>
-    <div><strong>Looking For:</strong> ${mailbox.lookingFor}</div>
-    <div><strong>Bio:</strong> ${user.bio}</div>
-  `;
+    const rows = [];
+    if ((mailbox === null || mailbox === void 0 ? void 0 : mailbox.capacity) !== undefined) {
+        rows.push(["Mailbox", formatter.format(mailbox.capacity)]);
+    }
+    if (mailbox === null || mailbox === void 0 ? void 0 : mailbox.lookingFor) {
+        rows.push(["Looking For", mailbox.lookingFor]);
+    }
+    if (user === null || user === void 0 ? void 0 : user.bio) {
+        rows.push(["Bio", user.bio]);
+    }
+    if (rows.length === 0) {
+        rows.push(["No details", "this player's profile couldn't be read"]);
+    }
+    for (const [label, value] of rows) {
+        const row = document.createElement("div");
+        const labelElement = document.createElement("strong");
+        labelElement.textContent = `${label}: `;
+        row.append(labelElement);
+        // as text, not markup — bios and Looking For are written by players
+        row.append(document.createTextNode(value));
+        infoPopup.append(row);
+    }
     // eslint-disable-next-line require-atomic-updates
     userElement.classList.remove("fh-mailbox-info-loading");
     userElement.after(infoPopup);
@@ -7060,7 +7098,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.1" !== void 0 ? "1.1.1" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.2" !== void 0 ? "1.1.2" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
