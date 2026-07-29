@@ -243,6 +243,11 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
 
+### 1.1.3
+
+* Fixed: "Body has already been consumed" errors in the console — when two watchers were interested in the same page (the farm page has two), the second one failed and silently lost its update
+* Fixed: a hover that failed to load left "(loading...)" stuck on the username forever
+
 ### 1.1.2
 
 * Fixed: hovering a username in chat showed "(loading...)" and then nothing — the game rebuilt its profile page, so the player's id and name couldn't be read any more

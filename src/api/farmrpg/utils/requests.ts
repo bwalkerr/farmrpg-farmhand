@@ -111,12 +111,28 @@ export const onFetchResponse = async (response: Response): Promise<void> => {
     return;
   }
 
+  // A response body can only be read once, and more than one interceptor can
+  // match the same URL — the farm page has two, one watching crop status and one
+  // watching the farm id. Sharing the response meant the first one to read it
+  // consumed it, so the second threw "Body has already been consumed" as an
+  // unhandled rejection and silently lost its update. Each interceptor gets its
+  // own copy, taken up front and synchronously: the awaits below would otherwise
+  // give whoever asked for this response time to consume it first.
+  const matches: [
+    CachedState<any, any>,
+    QueryInterceptor<any, any>,
+    Response
+  ][] = [];
   for (const [state, interceptor] of queryInterceptors) {
     if (urlMatches(response.url, ...interceptor.match)) {
-      console.debug(`[STATE] fetch intercepted ${response.url}`, interceptor);
-      const previous = await state.get({ doNotFetch: true });
-      interceptor.callback(state, previous, response);
+      matches.push([state, interceptor, response.clone()]);
     }
+  }
+
+  for (const [state, interceptor, body] of matches) {
+    console.debug(`[STATE] fetch intercepted ${response.url}`, interceptor);
+    const previous = await state.get({ doNotFetch: true });
+    interceptor.callback(state, previous, body);
   }
 };
 

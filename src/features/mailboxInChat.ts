@@ -12,18 +12,14 @@ const SETTING_CHAT_MAILBOX_STATS: FeatureSetting = {
   defaultValue: true,
 };
 
-const openInfoPopup = async (userElement: HTMLAnchorElement): Promise<void> => {
+const renderInfoPopup = async (
+  userElement: HTMLAnchorElement,
+  username: string
+): Promise<void> => {
   const formatter = new Intl.NumberFormat();
-  closeInfoPopups();
-  const username = userElement.textContent;
-  if (!username) {
-    return;
-  }
-  userElement.classList.add("fh-mailbox-info-loading");
   const user = await userState.get({ query: username });
   const mailbox = await playerMailboxState.get({ query: username });
   if (userElement.dataset.popup !== "open") {
-    userElement.classList.remove("fh-mailbox-info-loading");
     return;
   }
   // The mailbox page and the profile page are read separately, and either can
@@ -31,12 +27,10 @@ const openInfoPopup = async (userElement: HTMLAnchorElement): Promise<void> => {
   // nothing at all — which looks exactly like a broken hover — show whichever
   // details did load, and say so when none did.
   if (!user && !mailbox) {
-    userElement.classList.remove("fh-mailbox-info-loading");
     return;
   }
   const wrapper = userElement.parentElement;
   if (!wrapper) {
-    userElement.classList.remove("fh-mailbox-info-loading");
     return;
   }
   wrapper.style.position = "relative";
@@ -81,9 +75,25 @@ const openInfoPopup = async (userElement: HTMLAnchorElement): Promise<void> => {
     row.append(document.createTextNode(value));
     infoPopup.append(row);
   }
-  // eslint-disable-next-line require-atomic-updates
-  userElement.classList.remove("fh-mailbox-info-loading");
   userElement.after(infoPopup);
+};
+
+const openInfoPopup = async (userElement: HTMLAnchorElement): Promise<void> => {
+  closeInfoPopups();
+  const username = userElement.textContent;
+  if (!username) {
+    return;
+  }
+  userElement.classList.add("fh-mailbox-info-loading");
+  try {
+    await renderInfoPopup(userElement, username);
+  } catch (error) {
+    // a failed profile or mailbox read used to leave the label stuck on the
+    // name, so a hover looked like it was loading forever
+    console.error(`Failed to load chat info for ${username}`, error);
+  } finally {
+    userElement.classList.remove("fh-mailbox-info-loading");
+  }
 };
 
 const closeInfoPopups = (): void => {
