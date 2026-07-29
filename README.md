@@ -243,6 +243,11 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
 
+### 1.1.4
+
+* Fixed: hovering a name in chat re-registered its handlers on every new chat message, so hovering an older name ran the popup once per copy that had piled up
+* Fixed: cached player profiles, mailboxes and buddy.farm item data expired after under 3 hours instead of the intended week — three caches read their timeout as minutes when it is seconds. Profiles and mailboxes now hold for a day, item data for a week, so hovering the same player again costs nothing
+
 ### 1.1.3
 
 * Fixed: "Body has already been consumed" errors in the console — when two watchers were interested in the same page (the farm page has two), the second one failed and silently lost its update

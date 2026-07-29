@@ -80,7 +80,8 @@ export const playerMailboxState = new CachedState<Mailbox, string>(
   },
   {
     persist: true,
-    timeout: 60 * 24 * 7, // 1 week
+    // seconds — see the note in users.ts; this was under 3 hours, not a week
+    timeout: 60 * 60 * 24, // 1 day
     interceptors: [
       {
         match: [Page.MAILBOX, new URLSearchParams()],

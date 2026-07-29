@@ -81,7 +81,9 @@ export const userState = new CachedState<User, string>(
   },
   {
     persist: true,
-    timeout: 60 * 24 * 7, // 1 week
+    // seconds — the old 60 * 24 * 7 read as a week but is under 3 hours, so
+    // every player got re-fetched several times a day
+    timeout: 60 * 60 * 24, // 1 day
     interceptors: [
       {
         match: [Page.PROFILE, new URLSearchParams()],

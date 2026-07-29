@@ -136,6 +136,12 @@ export const chatMailboxStats: Feature = {
       if (userElement?.dataset.initialized) {
         continue;
       }
+      // This guard was never armed: nothing set `initialized`, and onChatLoad
+      // runs on every mutation of the chat panel — so each new message re-bound
+      // all five handlers to every name still on screen. Hovering an older name
+      // then ran the popup once per accumulated copy, and each touch queued
+      // another long-press timer.
+      userElement.dataset.initialized = "true";
       userElement.addEventListener("mouseover", () => {
         userElement.dataset.popup = "open";
         openInfoPopup(userElement);

@@ -51,7 +51,9 @@ export const itemDataState = new CachedState<Item, string>(
     return item;
   },
   {
-    timeout: 60 * 24 * 7, // 1 week
+    // seconds — this was under 3 hours despite saying a week; item data on
+    // buddy.farm barely changes, so honour the week that was intended
+    timeout: 60 * 60 * 24 * 7, // 1 week
   }
 );
 
