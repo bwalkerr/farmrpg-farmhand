@@ -45,6 +45,9 @@ export const mealsStatusState = new CachedState<MealsStatus>(
     return processMealStatus(response.body);
   },
   {
+    // live status — see the note on farmStatusState. Cooking meals carry ready
+    // times, so a list kept from a previous session is stale by definition.
+    persist: false,
     defaultState: {
       meals: [],
     },

@@ -245,6 +245,10 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
 
+### 1.1.10
+
+* Fixed: crop, oven and meal status were saved between sessions despite being live values that go stale in five seconds, so at load a banner could appear from the previous session's status and vanish a moment later when real data arrived
+
 ### 1.1.9
 
 * Changed: the perk marker is now just a coloured dot and the set's first letter ("● C"), so it always fits in the bottom bar next to your counts. The full set name is in its tooltip

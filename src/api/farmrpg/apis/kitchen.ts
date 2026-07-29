@@ -99,6 +99,8 @@ export const kitchenStatusState = new CachedState<KitchenStatus>(
   },
   {
     timeout: 5,
+    // live status — see the note on farmStatusState
+    persist: false,
     defaultState: {
       status: OvenStatus.EMPTY,
       count: 0,

@@ -94,6 +94,12 @@ export const farmStatusState = new CachedState<FarmStatus>(
   },
   {
     timeout: 5,
+    // Live status, so don't keep it between sessions. A five-second value
+    // written to storage means last session's crop status is still sitting there
+    // at the next load, where it can merge into the first update and show a
+    // banner for crops that aren't ready — before any of this session's data has
+    // arrived. Every other live state here opts out the same way.
+    persist: false,
     defaultState: {
       status: CropStatus.EMPTY,
       count: 4,
