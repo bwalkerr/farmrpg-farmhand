@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.2
+// @version 1.1.3
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
@@ -1767,12 +1767,23 @@ const onFetchResponse = (response) => __awaiter(void 0, void 0, void 0, function
     if (!response.url.startsWith("https://farmrpg.com")) {
         return;
     }
+    // A response body can only be read once, and more than one interceptor can
+    // match the same URL — the farm page has two, one watching crop status and one
+    // watching the farm id. Sharing the response meant the first one to read it
+    // consumed it, so the second threw "Body has already been consumed" as an
+    // unhandled rejection and silently lost its update. Each interceptor gets its
+    // own copy, taken up front and synchronously: the awaits below would otherwise
+    // give whoever asked for this response time to consume it first.
+    const matches = [];
     for (const [state, interceptor] of exports.queryInterceptors) {
         if ((0, exports.urlMatches)(response.url, ...interceptor.match)) {
-            console.debug(`[STATE] fetch intercepted ${response.url}`, interceptor);
-            const previous = yield state.get({ doNotFetch: true });
-            interceptor.callback(state, previous, response);
+            matches.push([state, interceptor, response.clone()]);
         }
+    }
+    for (const [state, interceptor, body] of matches) {
+        console.debug(`[STATE] fetch intercepted ${response.url}`, interceptor);
+        const previous = yield state.get({ doNotFetch: true });
+        interceptor.callback(state, previous, body);
     }
 });
 exports.onFetchResponse = onFetchResponse;
@@ -5089,18 +5100,11 @@ const SETTING_CHAT_MAILBOX_STATS = {
     type: "boolean",
     defaultValue: true,
 };
-const openInfoPopup = (userElement) => __awaiter(void 0, void 0, void 0, function* () {
+const renderInfoPopup = (userElement, username) => __awaiter(void 0, void 0, void 0, function* () {
     const formatter = new Intl.NumberFormat();
-    closeInfoPopups();
-    const username = userElement.textContent;
-    if (!username) {
-        return;
-    }
-    userElement.classList.add("fh-mailbox-info-loading");
     const user = yield users_1.userState.get({ query: username });
     const mailbox = yield userMailboxes_1.playerMailboxState.get({ query: username });
     if (userElement.dataset.popup !== "open") {
-        userElement.classList.remove("fh-mailbox-info-loading");
         return;
     }
     // The mailbox page and the profile page are read separately, and either can
@@ -5108,12 +5112,10 @@ const openInfoPopup = (userElement) => __awaiter(void 0, void 0, void 0, functio
     // nothing at all — which looks exactly like a broken hover — show whichever
     // details did load, and say so when none did.
     if (!user && !mailbox) {
-        userElement.classList.remove("fh-mailbox-info-loading");
         return;
     }
     const wrapper = userElement.parentElement;
     if (!wrapper) {
-        userElement.classList.remove("fh-mailbox-info-loading");
         return;
     }
     wrapper.style.position = "relative";
@@ -5158,9 +5160,26 @@ const openInfoPopup = (userElement) => __awaiter(void 0, void 0, void 0, functio
         row.append(document.createTextNode(value));
         infoPopup.append(row);
     }
-    // eslint-disable-next-line require-atomic-updates
-    userElement.classList.remove("fh-mailbox-info-loading");
     userElement.after(infoPopup);
+});
+const openInfoPopup = (userElement) => __awaiter(void 0, void 0, void 0, function* () {
+    closeInfoPopups();
+    const username = userElement.textContent;
+    if (!username) {
+        return;
+    }
+    userElement.classList.add("fh-mailbox-info-loading");
+    try {
+        yield renderInfoPopup(userElement, username);
+    }
+    catch (error) {
+        // a failed profile or mailbox read used to leave the label stuck on the
+        // name, so a hover looked like it was loading forever
+        console.error(`Failed to load chat info for ${username}`, error);
+    }
+    finally {
+        userElement.classList.remove("fh-mailbox-info-loading");
+    }
 });
 const closeInfoPopups = () => {
     for (const popup of document.querySelectorAll(".fh-mailbox-info")) {
@@ -7098,7 +7117,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.2" !== void 0 ? "1.1.2" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.3" !== void 0 ? "1.1.3" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
