@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.0
+// @version 1.1.1
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
-// @connect greasyfork.org
 // @connect github.com
+// @connect raw.githubusercontent.com
 // @grant GM.deleteValue
 // @grant GM.getValue
 // @grant GM.listValues
@@ -1833,7 +1833,7 @@ exports.timestampToDate = timestampToDate;
 
 /***/ }),
 
-/***/ 1604:
+/***/ 2427:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 
@@ -1847,16 +1847,26 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.latestVersionState = exports.SCRIPT_URL = void 0;
+exports.latestVersionState = exports.CHANGELOG_URL = exports.SCRIPT_URL = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
-exports.SCRIPT_URL = "https://greasyfork.org/en/scripts/497660-farm-rpg-farmhand";
+// This fork is installed from its own build rather than from Greasy Fork, so
+// the update check has to ask the fork. Asking Greasy Fork means being told
+// upstream's version forever, and being offered an "update" that would replace
+// this script with the one it was forked from.
+const REPOSITORY = "bwalkerr/farmrpg-farmhand";
+const BRANCH = "reed-mods";
+// where the script is installed from; opening it offers the update
+exports.SCRIPT_URL = `https://raw.githubusercontent.com/${REPOSITORY}/${BRANCH}/dist/farmrpg-farmhand.user.js`;
+// the metadata-only build — a few hundred bytes rather than the whole script
+const META_URL = `https://raw.githubusercontent.com/${REPOSITORY}/${BRANCH}/dist/farmrpg-farmhand.meta.js`;
+// the changelog lives in the fork's README
+exports.CHANGELOG_URL = `https://github.com/${REPOSITORY}/blob/${BRANCH}/README.md`;
 exports.latestVersionState = new state_1.CachedState(state_1.StorageKey.LATEST_VERSION, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
-    const response = yield (0, requests_1.corsFetch)(exports.SCRIPT_URL);
-    const htmlString = yield response.text();
-    const document = new DOMParser().parseFromString(htmlString, "text/html");
-    return (((_a = document.querySelector("dd.script-show-version")) === null || _a === void 0 ? void 0 : _a.textContent) || "1.0.0");
+    const response = yield (0, requests_1.corsFetch)(META_URL);
+    const metadata = yield response.text();
+    return ((_a = /^\/\/\s*@version\s+(\S+)/m.exec(metadata)) === null || _a === void 0 ? void 0 : _a[1]) || "1.0.0";
 }), {
     timeout: 60 * 60 * 6, // 6 hours
     defaultState: "1.0.0",
@@ -7025,27 +7035,35 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.versionManager = void 0;
+const api_1 = __webpack_require__(2427);
 const requests_1 = __webpack_require__(3813);
 const notifications_1 = __webpack_require__(6783);
-const api_1 = __webpack_require__(1604);
 const popup_1 = __webpack_require__(469);
 const isVersion = (version) => version.split(".").length === 3;
 const normalizeVersion = (version) => version.split("-")[0];
+// Compares release numbers the way you'd read them aloud: the first part that
+// differs decides, and a missing part counts as zero. The old version returned
+// true as soon as ANY part of the candidate was larger, whatever its position,
+// so 1.0.31 counted as newer than 1.1.0 — which is how this fork ended up being
+// offered an "update" to the upstream script it was forked from.
 const isVersionHigher = (test, current) => {
-    const testParts = test.split(".");
-    const currentParts = current.split(".");
-    for (const [index, testPart] of testParts.entries()) {
-        if (Number.parseInt(currentParts[index]) < Number.parseInt(testPart)) {
-            return true;
+    var _a, _b;
+    const testParts = test.split(".").map(Number);
+    const currentParts = current.split(".").map(Number);
+    const length = Math.max(testParts.length, currentParts.length);
+    for (let index = 0; index < length; index++) {
+        const testPart = (_a = testParts[index]) !== null && _a !== void 0 ? _a : 0;
+        const currentPart = (_b = currentParts[index]) !== null && _b !== void 0 ? _b : 0;
+        if (testPart !== currentPart) {
+            return testPart > currentPart;
         }
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.0" !== void 0 ? "1.1.0" : "1.0.0");
-const README_URL = "https://github.com/anstosa/farmrpg-farmhand/blob/main/README.md";
+const currentVersion = normalizeVersion( true && "1.1.1" !== void 0 ? "1.1.1" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
-    const response = yield (0, requests_1.corsFetch)(README_URL);
+    const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
     const htmlString = yield response.text();
     const document = new DOMParser().parseFromString(htmlString, "text/html");
     const body = document.querySelector(".markdown-body");
