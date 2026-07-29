@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.3
+// @version 1.1.4
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
@@ -60,7 +60,9 @@ exports.itemDataState = new state_1.CachedState(state_1.StorageKey.ITEM_DATA, (s
     }
     return item;
 }), {
-    timeout: 60 * 24 * 7, // 1 week
+    // seconds — this was under 3 hours despite saying a week; item data on
+    // buddy.farm barely changes, so honour the week that was intended
+    timeout: 60 * 60 * 24 * 7, // 1 week
 });
 const getAbridgedItem = (itemName) => __awaiter(void 0, void 0, void 0, function* () {
     const item = yield exports.itemDataState.get({ query: itemName, lazy: true });
@@ -1559,7 +1561,8 @@ exports.playerMailboxState = new state_1.CachedState(state_1.StorageKey.PLAYER_M
     return processMailbox(response, user);
 }), {
     persist: true,
-    timeout: 60 * 24 * 7, // 1 week
+    // seconds — see the note in users.ts; this was under 3 hours, not a week
+    timeout: 60 * 60 * 24, // 1 day
     interceptors: [
         {
             match: [page_1.Page.MAILBOX, new URLSearchParams()],
@@ -1654,7 +1657,9 @@ exports.userState = new state_1.CachedState(state_1.StorageKey.PLAYERS, (state, 
     return yield processProfile(response);
 }), {
     persist: true,
-    timeout: 60 * 24 * 7, // 1 week
+    // seconds — the old 60 * 24 * 7 read as a week but is under 3 hours, so
+    // every player got re-fetched several times a day
+    timeout: 60 * 60 * 24, // 1 day
     interceptors: [
         {
             match: [page_1.Page.PROFILE, new URLSearchParams()],
@@ -5215,6 +5220,12 @@ exports.chatMailboxStats = {
             if (userElement === null || userElement === void 0 ? void 0 : userElement.dataset.initialized) {
                 continue;
             }
+            // This guard was never armed: nothing set `initialized`, and onChatLoad
+            // runs on every mutation of the chat panel — so each new message re-bound
+            // all five handlers to every name still on screen. Hovering an older name
+            // then ran the popup once per accumulated copy, and each touch queued
+            // another long-press timer.
+            userElement.dataset.initialized = "true";
             userElement.addEventListener("mouseover", () => {
                 userElement.dataset.popup = "open";
                 openInfoPopup(userElement);
@@ -7117,7 +7128,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.3" !== void 0 ? "1.1.3" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.4" !== void 0 ? "1.1.4" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
