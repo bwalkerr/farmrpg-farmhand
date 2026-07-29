@@ -1,6 +1,12 @@
-import { FeatureSetting } from "~/utils/feature";
-import { getPerkStatus, onPerkStatusChange } from "~/api/farmrpg/apis/perks";
+import { BORDER_GRAY } from "~/utils/theme";
+import { getPage } from "~/utils/page";
+import {
+  getPerkStatus,
+  onPerkStatusChange,
+  primePerkStatus,
+} from "~/api/farmrpg/apis/perks";
 import { getSettingValues, SettingId } from "~/utils/settings";
+import { showPopup } from "~/utils/popup";
 
 // A tiny "● C" marker in the bottom stats bar, after the currency counts,
 // showing which perk set is equipped right now: a coloured dot plus the set's
@@ -23,19 +29,6 @@ import { getSettingValues, SettingId } from "~/utils/settings";
 // game's own help tracker, and the left nav never rendered.
 
 const INDICATOR_ID = "fh-perk-indicator";
-
-// Off by default. When on, the pill reports what the perk manager last decided
-// alongside the set name — which page it recognised, which set that called for,
-// and whether the switch went through. It exists because a phone has no console:
-// the pill is the only surface there that can tell you why perks didn't change.
-export const SETTING_PERK_INDICATOR_DEBUG: FeatureSetting = {
-  id: SettingId.PERK_INDICATOR_DEBUG,
-  title: "Perks: Debug indicator",
-  description:
-    "Show what the perk manager last decided next to the set name in the bottom bar",
-  type: "boolean",
-  defaultValue: false,
-};
 
 // gray for the resting/default set, orange for an activity set that's on
 const COLOR_RESTING = "#9e9e9e";
@@ -103,6 +96,35 @@ const watchOrder = (statsZone: Element): void => {
   observedStatsZone = statsZone;
 };
 
+// Tapping the marker explains itself. This is the only diagnostic surface that
+// works on a phone: there's no console to open, no room in the bar for a longer
+// label, and no hover for the tooltip. It reports which set is on and how
+// certain we are, plus what the perk manager last decided and which page it
+// thinks you're on — enough to tell "this page isn't an activity" from "the page
+// wasn't recognised" from "the switch failed".
+const showPerkDetails = async (): Promise<void> => {
+  const status = getPerkStatus();
+  const [page] = getPage();
+  let state = "selected in the game, not verified this session";
+  if (status.isPending) {
+    state = "switching now";
+  } else if (status.isConfirmed) {
+    state = "equipped (verified this session)";
+  }
+  await showPopup({
+    title: "Perk set",
+    align: "left",
+    contentHTML: `
+      <div><strong>Set:</strong> ${status.name ?? "unknown"}</div>
+      <div><strong>State:</strong> ${state}</div>
+      <div><strong>This page:</strong> ${page ?? "not recognised"}</div>
+      <div><strong>Last decision:</strong> ${
+        status.note ?? "nothing yet this session"
+      }</div>
+    `,
+  });
+};
+
 const buildIndicator = (): HTMLElement => {
   const pill = document.createElement("span");
   pill.id = INDICATOR_ID;
@@ -113,6 +135,15 @@ const buildIndicator = (): HTMLElement => {
   pill.style.verticalAlign = "middle";
   pill.style.fontSize = "11px";
   pill.style.whiteSpace = "nowrap";
+  // a dot and one letter is a small target on a phone, so pad out the tap area
+  // without making the marker itself any bigger
+  pill.style.padding = "6px 4px";
+  pill.style.cursor = "pointer";
+  pill.addEventListener("click", () => {
+    showPerkDetails().catch((error) => {
+      console.error("Failed to show perk details", error);
+    });
+  });
 
   const dot = document.createElement("span");
   dot.dataset.fhRole = "dot";
@@ -153,10 +184,12 @@ export const renderPerkIndicator = async (): Promise<void> => {
   const settings = await getSettingValues();
   const status = getPerkStatus();
 
+  // Some pages don't carry the stats bar at all — arriving at a fishing spot is
+  // where this shows up — and the marker used to simply vanish there, which reads
+  // as "the perk manager stopped working" exactly when you're heading into an
+  // activity. The cap tracker has always had a floating fallback for this; the
+  // marker now uses the same one, so it stays on screen everywhere.
   const statsZone = document.querySelector("#statszone_main");
-  if (!statsZone) {
-    return;
-  }
 
   // sweep any strays from that race before deciding what to draw
   const [pillElement, ...duplicates] = document.querySelectorAll<HTMLElement>(
@@ -167,8 +200,21 @@ export const renderPerkIndicator = async (): Promise<void> => {
   }
   let pill = pillElement;
 
-  if (!settings[SettingId.PERK_MANAGER] || !status.name) {
+  if (!settings[SettingId.PERK_MANAGER]) {
     pill?.remove();
+    return;
+  }
+
+  // Nothing has read the perk sets yet, so there's no set name to show. Ask for
+  // them; the read notifies status listeners, which brings us straight back here
+  // with a name. Without this the marker stayed absent until the session's first
+  // switch — a harvest, or landing on an activity page — which is exactly the
+  // "it didn't come up immediately" behaviour.
+  if (!status.name) {
+    pill?.remove();
+    primePerkStatus().catch((error) => {
+      console.error("Failed to read perk sets", error);
+    });
     return;
   }
 
@@ -178,14 +224,31 @@ export const renderPerkIndicator = async (): Promise<void> => {
   if (!pill) {
     pill = buildIndicator();
   }
-  // sit at the end of the counts, whichever order we mounted in (this also
-  // re-attaches an orphaned pill)
-  keepRightmost(statsZone, pill);
-  watchOrder(statsZone);
+  if (statsZone) {
+    // in the bar: sit at the end of the counts, whichever order we mounted in
+    // (this also re-attaches a pill orphaned by the game rebuilding the toolbar)
+    pill.style.position = "static";
+    pill.style.border = "none";
+    pill.style.backgroundColor = "transparent";
+    keepRightmost(statsZone, pill);
+    watchOrder(statsZone);
+  } else {
+    // no bar on this page: float above where it normally sits, matching the cap
+    // tracker's fallback so the two look like the same system
+    pill.style.position = "fixed";
+    pill.style.right = "8px";
+    pill.style.bottom = "34px";
+    pill.style.zIndex = "5000";
+    pill.style.padding = "4px 8px";
+    pill.style.borderRadius = "6px";
+    pill.style.border = `1px solid ${BORDER_GRAY}`;
+    pill.style.backgroundColor = "rgba(20, 20, 20, 0.92)";
+    if (pill.parentElement !== document.body) {
+      document.body.append(pill);
+    }
+  }
 
-  const isDebug = Boolean(settings[SettingId.PERK_INDICATOR_DEBUG]);
-  const note = isDebug ? status.note ?? "no decision yet" : undefined;
-  const signature = `${status.name}|${status.isPending}|${status.isConfirmed}|${note}`;
+  const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
   if (pill.dataset.fhSignature === signature) {
     return;
   }
@@ -203,9 +266,9 @@ export const renderPerkIndicator = async (): Promise<void> => {
   dot.style.backgroundColor = status.isPending ? "transparent" : color;
   dot.style.border = status.isPending ? `1px solid ${color}` : "none";
   // first letter only. The dot carries the state (hollow while switching), so
-  // the label doesn't need to grow to say the same thing.
-  const initial = status.name.trim().slice(0, 1).toUpperCase();
-  label.textContent = note ? `${initial} · ${note}` : initial;
+  // the label doesn't need to grow to say the same thing. Everything else is a
+  // tap away — see showPerkDetails.
+  label.textContent = status.name.trim().slice(0, 1).toUpperCase();
   label.style.color = color;
   pill.style.opacity = status.isPending ? "0.6" : "1";
   if (status.isPending) {

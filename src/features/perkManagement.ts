@@ -10,10 +10,7 @@ import { Feature, FeatureSetting } from "../utils/feature";
 import { getCurrentPage, getPage, Page } from "~/utils/page";
 import { getSetting, SettingId } from "~/utils/settings";
 import { onQuicksellClick, QuickAction } from "./quickSellSafely";
-import {
-  renderPerkIndicator,
-  SETTING_PERK_INDICATOR_DEBUG,
-} from "./perkIndicator";
+import { renderPerkIndicator } from "./perkIndicator";
 
 const SETTING_PERK_MANAGER: FeatureSetting = {
   id: SettingId.PERK_MANAGER,
@@ -326,7 +323,7 @@ const reconcilePerksForCurrentPage = async (): Promise<void> => {
 };
 
 export const perkManagment: Feature = {
-  settings: [SETTING_PERK_MANAGER, SETTING_PERK_INDICATOR_DEBUG],
+  settings: [SETTING_PERK_MANAGER],
   onPageLoad: async (settings) => {
     if (!settings[SettingId.PERK_MANAGER]) {
       return;

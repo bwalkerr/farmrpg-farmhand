@@ -181,6 +181,22 @@ export const getConfirmedEquippedSetId = (): number | undefined =>
 // ourselves; falls back to the game's own selected-set cache (unconfirmed —
 // it's the optimistic one) so the indicator still says something useful before
 // this session has driven a switch.
+// Read the game's perk sets once if nothing has needed them yet. Until something
+// does, there is no set name to show and the indicator can't draw itself — which
+// is why it used to appear only after the first switch of a session (a harvest,
+// or arriving on an activity page) rather than on the first page load. The state
+// is cached for a day and persisted, so this costs one read.
+let statusPrimed = false;
+
+export const primePerkStatus = async (): Promise<void> => {
+  if (statusPrimed) {
+    return;
+  }
+  statusPrimed = true;
+  await perksState.get();
+  notifyPerkStatus();
+};
+
 export const getPerkStatus = (): PerkStatus => {
   if (pendingPerkSet) {
     return {
