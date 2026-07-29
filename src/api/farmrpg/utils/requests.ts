@@ -2,6 +2,15 @@ import { CachedState, QueryInterceptor } from "../../../utils/state";
 import { getDocument } from "../../../utils/requests";
 import { Page } from "../../../utils/page";
 
+// The game is served from several hosts — farmrpg.com, www.farmrpg.com and
+// alpha.farmrpg.com all serve it in full, and none of them redirects to another.
+// So requests must stay on whichever host the page was actually loaded from.
+// Addressing a fixed host instead meant that anywhere but farmrpg.com every
+// request went cross-origin (no session cookie), and response URLs failed the
+// prefix test below, which silently disabled every interceptor — including on
+// alpha, which the script already claimed to support.
+const GAME_ORIGIN = window.location.origin;
+
 export const getHTML = async (
   page: Page,
   query?: URLSearchParams
@@ -47,7 +56,7 @@ export const getJSON = async <T extends object>(
 
 export const parseUrl = (url: string): [Page, URLSearchParams] => {
   // https://farmrpg.com/worker.php?cachebuster=271544&go=getchat&room=giveaways
-  const truncatedUrl = url.replace("https://farmrpg.com/", "");
+  const truncatedUrl = url.replace(`${GAME_ORIGIN}/`, "");
   // worker.php?cachebuster=271544&go=getchat&room=giveaways
   const [pageRaw, queryRaw] = truncatedUrl.split("?");
   const page = pageRaw.replace(".php", "") as Page;
@@ -82,7 +91,7 @@ export const toUrl = (page: Page, query?: URLSearchParams): string => {
   for (const [key, value] of query.entries()) {
     queryStringSegments.push(`${key}=${value}`);
   }
-  return `https://farmrpg.com/${page}.php?${queryStringSegments.join("&")}`;
+  return `${GAME_ORIGIN}/${page}.php?${queryStringSegments.join("&")}`;
 };
 
 type InterceptableResponse = Response & { hasBeenIntercepted?: boolean };
@@ -106,8 +115,8 @@ export const registerQueryInterceptor = (
 };
 
 export const onFetchResponse = async (response: Response): Promise<void> => {
-  // only check farmrpg URLs
-  if (!response.url.startsWith("https://farmrpg.com")) {
+  // only check game URLs
+  if (!response.url.startsWith(GAME_ORIGIN)) {
     return;
   }
 
@@ -145,8 +154,8 @@ export const watchQueries = (): void => {
           if (this.readyState !== 4) {
             return;
           }
-          // only check farmrpg URLs
-          if (!this.responseURL.startsWith("https://farmrpg.com")) {
+          // only check game URLs
+          if (!this.responseURL.startsWith(GAME_ORIGIN)) {
             return;
           }
           for (const [state, interceptor] of queryInterceptors) {

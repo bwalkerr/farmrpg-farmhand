@@ -245,6 +245,11 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
 
+### 1.1.7
+
+* Fixed: the script never ran on www.farmrpg.com — that host serves the whole game and doesn't redirect to the bare domain, so anyone whose browser used www got no Farmhand at all
+* Fixed: requests are now made to the host the page was loaded from, rather than always to farmrpg.com. On any other host — www, or alpha, which was already supported — requests went cross-origin without your session and every page watcher was silently disabled
+
 ### 1.1.6
 
 * Added: the script now carries update URLs pointing at this fork's own build, so a script manager offers new fork releases by itself. They point only at this repository — the Greasy Fork release, which would replace the fork with upstream, is never consulted

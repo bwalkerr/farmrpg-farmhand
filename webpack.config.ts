@@ -132,7 +132,13 @@ const config: Configuration = {
           ],
           icon: "https://www.google.com/s2/favicons?sz=64&domain=farmrpg.com",
           license: "MIT",
-          match: ["https://farmrpg.com/*", "https://alpha.farmrpg.com/*"],
+          // www.farmrpg.com serves the whole game and does NOT redirect to the
+          // bare host, so a script matched only on farmrpg.com never ran there
+          match: [
+            "https://farmrpg.com/*",
+            "https://www.farmrpg.com/*",
+            "https://alpha.farmrpg.com/*",
+          ],
           // Point updates at THIS fork's build. The header deliberately carried
           // no update URL for a long time, because the Greasy Fork release
           // auto-updates to upstream and would have replaced the fork wholesale.
