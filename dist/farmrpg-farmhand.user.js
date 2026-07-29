@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.10
+// @version 1.1.11
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1160,7 +1160,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.activatePerkSet = exports.isActivePerkSet = exports.getPerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.setPerkStatusNote = exports.PerkActivity = void 0;
+exports.activatePerkSet = exports.isActivePerkSet = exports.getPerkStatus = exports.primePerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.setPerkStatusNote = exports.PerkActivity = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
@@ -1293,6 +1293,21 @@ exports.getConfirmedEquippedSetId = getConfirmedEquippedSetId;
 // ourselves; falls back to the game's own selected-set cache (unconfirmed —
 // it's the optimistic one) so the indicator still says something useful before
 // this session has driven a switch.
+// Read the game's perk sets once if nothing has needed them yet. Until something
+// does, there is no set name to show and the indicator can't draw itself — which
+// is why it used to appear only after the first switch of a session (a harvest,
+// or arriving on an activity page) rather than on the first page load. The state
+// is cached for a day and persisted, so this costs one read.
+let statusPrimed = false;
+const primePerkStatus = () => __awaiter(void 0, void 0, void 0, function* () {
+    if (statusPrimed) {
+        return;
+    }
+    statusPrimed = true;
+    yield exports.perksState.get();
+    notifyPerkStatus();
+});
+exports.primePerkStatus = primePerkStatus;
 const getPerkStatus = () => {
     if (pendingPerkSet) {
         return {
@@ -6022,9 +6037,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.renderPerkIndicator = exports.SETTING_PERK_INDICATOR_DEBUG = void 0;
+exports.renderPerkIndicator = void 0;
+const theme_1 = __webpack_require__(1178);
+const page_1 = __webpack_require__(7952);
 const perks_1 = __webpack_require__(5543);
 const settings_1 = __webpack_require__(126);
+const popup_1 = __webpack_require__(469);
 // A tiny "● C" marker in the bottom stats bar, after the currency counts,
 // showing which perk set is equipped right now: a coloured dot plus the set's
 // first letter. It's deliberately one character wide — the bar is narrow on a
@@ -6045,17 +6063,6 @@ const settings_1 = __webpack_require__(126);
 // mid-screen right and top collide with the chat panel, bottom-left is the
 // game's own help tracker, and the left nav never rendered.
 const INDICATOR_ID = "fh-perk-indicator";
-// Off by default. When on, the pill reports what the perk manager last decided
-// alongside the set name — which page it recognised, which set that called for,
-// and whether the switch went through. It exists because a phone has no console:
-// the pill is the only surface there that can tell you why perks didn't change.
-exports.SETTING_PERK_INDICATOR_DEBUG = {
-    id: settings_1.SettingId.PERK_INDICATOR_DEBUG,
-    title: "Perks: Debug indicator",
-    description: "Show what the perk manager last decided next to the set name in the bottom bar",
-    type: "boolean",
-    defaultValue: false,
-};
 // gray for the resting/default set, orange for an activity set that's on
 const COLOR_RESTING = "#9e9e9e";
 const COLOR_ACTIVE = "#f0932b";
@@ -6113,6 +6120,34 @@ const watchOrder = (statsZone) => {
     orderObserver.observe(statsZone, { childList: true });
     observedStatsZone = statsZone;
 };
+// Tapping the marker explains itself. This is the only diagnostic surface that
+// works on a phone: there's no console to open, no room in the bar for a longer
+// label, and no hover for the tooltip. It reports which set is on and how
+// certain we are, plus what the perk manager last decided and which page it
+// thinks you're on — enough to tell "this page isn't an activity" from "the page
+// wasn't recognised" from "the switch failed".
+const showPerkDetails = () => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    const status = (0, perks_1.getPerkStatus)();
+    const [page] = (0, page_1.getPage)();
+    let state = "selected in the game, not verified this session";
+    if (status.isPending) {
+        state = "switching now";
+    }
+    else if (status.isConfirmed) {
+        state = "equipped (verified this session)";
+    }
+    yield (0, popup_1.showPopup)({
+        title: "Perk set",
+        align: "left",
+        contentHTML: `
+      <div><strong>Set:</strong> ${(_a = status.name) !== null && _a !== void 0 ? _a : "unknown"}</div>
+      <div><strong>State:</strong> ${state}</div>
+      <div><strong>This page:</strong> ${page !== null && page !== void 0 ? page : "not recognised"}</div>
+      <div><strong>Last decision:</strong> ${(_b = status.note) !== null && _b !== void 0 ? _b : "nothing yet this session"}</div>
+    `,
+    });
+});
 const buildIndicator = () => {
     const pill = document.createElement("span");
     pill.id = INDICATOR_ID;
@@ -6123,6 +6158,15 @@ const buildIndicator = () => {
     pill.style.verticalAlign = "middle";
     pill.style.fontSize = "11px";
     pill.style.whiteSpace = "nowrap";
+    // a dot and one letter is a small target on a phone, so pad out the tap area
+    // without making the marker itself any bigger
+    pill.style.padding = "6px 4px";
+    pill.style.cursor = "pointer";
+    pill.addEventListener("click", () => {
+        showPerkDetails().catch((error) => {
+            console.error("Failed to show perk details", error);
+        });
+    });
     const dot = document.createElement("span");
     dot.dataset.fhRole = "dot";
     dot.style.width = "8px";
@@ -6136,7 +6180,6 @@ const buildIndicator = () => {
     return pill;
 };
 const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
     // never touch the DOM while the game is still initializing (see isGameBooted)
     if (!isGameBooted()) {
         if (!bootPoll && bootPollsLeft > 0) {
@@ -6158,18 +6201,32 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     // interleave, both see none, and both mount one — two pills side by side.
     const settings = yield (0, settings_1.getSettingValues)();
     const status = (0, perks_1.getPerkStatus)();
+    // Some pages don't carry the stats bar at all — arriving at a fishing spot is
+    // where this shows up — and the marker used to simply vanish there, which reads
+    // as "the perk manager stopped working" exactly when you're heading into an
+    // activity. The cap tracker has always had a floating fallback for this; the
+    // marker now uses the same one, so it stays on screen everywhere.
     const statsZone = document.querySelector("#statszone_main");
-    if (!statsZone) {
-        return;
-    }
     // sweep any strays from that race before deciding what to draw
     const [pillElement, ...duplicates] = document.querySelectorAll(`#${INDICATOR_ID}`);
     for (const duplicate of duplicates) {
         duplicate.remove();
     }
     let pill = pillElement;
-    if (!settings[settings_1.SettingId.PERK_MANAGER] || !status.name) {
+    if (!settings[settings_1.SettingId.PERK_MANAGER]) {
         pill === null || pill === void 0 ? void 0 : pill.remove();
+        return;
+    }
+    // Nothing has read the perk sets yet, so there's no set name to show. Ask for
+    // them; the read notifies status listeners, which brings us straight back here
+    // with a name. Without this the marker stayed absent until the session's first
+    // switch — a harvest, or landing on an activity page — which is exactly the
+    // "it didn't come up immediately" behaviour.
+    if (!status.name) {
+        pill === null || pill === void 0 ? void 0 : pill.remove();
+        (0, perks_1.primePerkStatus)().catch((error) => {
+            console.error("Failed to read perk sets", error);
+        });
         return;
     }
     // mount once and reuse, exactly like the cap tracker in this same bar. The
@@ -6178,13 +6235,31 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     if (!pill) {
         pill = buildIndicator();
     }
-    // sit at the end of the counts, whichever order we mounted in (this also
-    // re-attaches an orphaned pill)
-    keepRightmost(statsZone, pill);
-    watchOrder(statsZone);
-    const isDebug = Boolean(settings[settings_1.SettingId.PERK_INDICATOR_DEBUG]);
-    const note = isDebug ? (_a = status.note) !== null && _a !== void 0 ? _a : "no decision yet" : undefined;
-    const signature = `${status.name}|${status.isPending}|${status.isConfirmed}|${note}`;
+    if (statsZone) {
+        // in the bar: sit at the end of the counts, whichever order we mounted in
+        // (this also re-attaches a pill orphaned by the game rebuilding the toolbar)
+        pill.style.position = "static";
+        pill.style.border = "none";
+        pill.style.backgroundColor = "transparent";
+        keepRightmost(statsZone, pill);
+        watchOrder(statsZone);
+    }
+    else {
+        // no bar on this page: float above where it normally sits, matching the cap
+        // tracker's fallback so the two look like the same system
+        pill.style.position = "fixed";
+        pill.style.right = "8px";
+        pill.style.bottom = "34px";
+        pill.style.zIndex = "5000";
+        pill.style.padding = "4px 8px";
+        pill.style.borderRadius = "6px";
+        pill.style.border = `1px solid ${theme_1.BORDER_GRAY}`;
+        pill.style.backgroundColor = "rgba(20, 20, 20, 0.92)";
+        if (pill.parentElement !== document.body) {
+            document.body.append(pill);
+        }
+    }
+    const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
     if (pill.dataset.fhSignature === signature) {
         return;
     }
@@ -6200,9 +6275,9 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     dot.style.backgroundColor = status.isPending ? "transparent" : color;
     dot.style.border = status.isPending ? `1px solid ${color}` : "none";
     // first letter only. The dot carries the state (hollow while switching), so
-    // the label doesn't need to grow to say the same thing.
-    const initial = status.name.trim().slice(0, 1).toUpperCase();
-    label.textContent = note ? `${initial} · ${note}` : initial;
+    // the label doesn't need to grow to say the same thing. Everything else is a
+    // tap away — see showPerkDetails.
+    label.textContent = status.name.trim().slice(0, 1).toUpperCase();
     label.style.color = color;
     pill.style.opacity = status.isPending ? "0.6" : "1";
     if (status.isPending) {
@@ -6517,7 +6592,7 @@ const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, fun
     yield switchTo(defaultPerks, where);
 });
 exports.perkManagment = {
-    settings: [SETTING_PERK_MANAGER, perkIndicator_1.SETTING_PERK_INDICATOR_DEBUG],
+    settings: [SETTING_PERK_MANAGER],
     onPageLoad: (settings) => __awaiter(void 0, void 0, void 0, function* () {
         if (!settings[settings_1.SettingId.PERK_MANAGER]) {
             return;
@@ -7215,7 +7290,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.10" !== void 0 ? "1.1.10" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.11" !== void 0 ? "1.1.11" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -8443,7 +8518,6 @@ var SettingId;
     SettingId["KITCHEN_COMPLETE_NOTIFICATIONS"] = "readyNotifications";
     SettingId["KITCHEN_EMPTY_NOTIFICATIONS"] = "kitchenEmptyNotifications";
     SettingId["MAX_ANIMALS"] = "maxAnimals";
-    SettingId["PERK_INDICATOR_DEBUG"] = "perkIndicatorDebug";
     SettingId["MAX_CONTAINERS"] = "maxContainers";
     SettingId["MEAL_NOTIFICATIONS"] = "mealNotifications";
     SettingId["MINER"] = "miner";
