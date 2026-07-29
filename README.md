@@ -25,7 +25,7 @@ Fork releases are numbered from **1.1.0** onwards; upstream's own releases are t
 
 #### Perk sets that are actually equipped when it counts
 
-* **Perk set indicator** — a pill in the bottom stats bar showing which set you're playing under: gray for Default, orange for an activity set, faded while a switch is in flight. It reports what the game has confirmed equipped, not merely what was requested. It replaces upstream's "…perks activated" banners, which pushed the page (and whatever button was under your finger) down each time they appeared.
+* **Perk set indicator** — a pill in the bottom stats bar showing which set you're playing under: gray for Default, orange for an activity set, faded while a switch is in flight. On a phone it sits at the left end of the bar, left of your currency counts. It reports what the game has confirmed equipped, not merely what was requested. It replaces upstream's "…perks activated" banners, which pushed the page (and whatever button was under your finger) down each time they appeared.
 * **Perks stay on while you browse** — an activity set is activated when you reach an activity page and put away when you go home or to your farm. Opening an item, your inventory or a wiki page mid-run leaves your perks alone instead of swapping them out and back.
 * **Farming and Mining perk sets** — upstream supports Crafting/Fishing/Exploring/Selling/Friendship/Temple/Locksmith/Wheel; this fork adds sets named "Farming" and "Mining", the latter covering both the mine list and the dig board.
 * **A shared "Town" set** — if you have a set named "Town" it covers the temple, wheel, locksmith, vault, farmers market and the town hub, so walking between town buildings doesn't re-switch perks at every door. Without one, each building still falls back to its own set.
@@ -242,6 +242,10 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.1.5
+
+* Added: on a phone the perk set pill sits at the left end of the bottom bar, just left of your currency counts, instead of being appended past the game's home and chat buttons where it can't be seen. It follows the layout if you rotate the device
 
 ### 1.1.4
 
