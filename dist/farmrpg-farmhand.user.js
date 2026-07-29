@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.6
+// @version 1.1.7
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
+// @match https://www.farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
 // @connect github.com
 // @connect raw.githubusercontent.com
@@ -1695,6 +1696,14 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.watchQueries = exports.onFetchResponse = exports.registerQueryInterceptor = exports.queryInterceptors = exports.toUrl = exports.urlMatches = exports.parseUrl = exports.getJSON = exports.postData = exports.getHTML = void 0;
 const requests_1 = __webpack_require__(3813);
+// The game is served from several hosts — farmrpg.com, www.farmrpg.com and
+// alpha.farmrpg.com all serve it in full, and none of them redirects to another.
+// So requests must stay on whichever host the page was actually loaded from.
+// Addressing a fixed host instead meant that anywhere but farmrpg.com every
+// request went cross-origin (no session cookie), and response URLs failed the
+// prefix test below, which silently disabled every interceptor — including on
+// alpha, which the script already claimed to support.
+const GAME_ORIGIN = window.location.origin;
 const getHTML = (page, query) => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield fetch((0, exports.toUrl)(page, query), {
         method: "POST",
@@ -1730,7 +1739,7 @@ const getJSON = (page, query) => __awaiter(void 0, void 0, void 0, function* () 
 exports.getJSON = getJSON;
 const parseUrl = (url) => {
     // https://farmrpg.com/worker.php?cachebuster=271544&go=getchat&room=giveaways
-    const truncatedUrl = url.replace("https://farmrpg.com/", "");
+    const truncatedUrl = url.replace(`${GAME_ORIGIN}/`, "");
     // worker.php?cachebuster=271544&go=getchat&room=giveaways
     const [pageRaw, queryRaw] = truncatedUrl.split("?");
     const page = pageRaw.replace(".php", "");
@@ -1761,7 +1770,7 @@ const toUrl = (page, query) => {
     for (const [key, value] of query.entries()) {
         queryStringSegments.push(`${key}=${value}`);
     }
-    return `https://farmrpg.com/${page}.php?${queryStringSegments.join("&")}`;
+    return `${GAME_ORIGIN}/${page}.php?${queryStringSegments.join("&")}`;
 };
 exports.toUrl = toUrl;
 exports.queryInterceptors = [];
@@ -1770,8 +1779,8 @@ const registerQueryInterceptor = (interceptor) => {
 };
 exports.registerQueryInterceptor = registerQueryInterceptor;
 const onFetchResponse = (response) => __awaiter(void 0, void 0, void 0, function* () {
-    // only check farmrpg URLs
-    if (!response.url.startsWith("https://farmrpg.com")) {
+    // only check game URLs
+    if (!response.url.startsWith(GAME_ORIGIN)) {
         return;
     }
     // A response body can only be read once, and more than one interceptor can
@@ -1802,8 +1811,8 @@ const watchQueries = () => {
                     if (this.readyState !== 4) {
                         return;
                     }
-                    // only check farmrpg URLs
-                    if (!this.responseURL.startsWith("https://farmrpg.com")) {
+                    // only check game URLs
+                    if (!this.responseURL.startsWith(GAME_ORIGIN)) {
                         return;
                     }
                     for (const [state, interceptor] of exports.queryInterceptors) {
@@ -7159,7 +7168,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.6" !== void 0 ? "1.1.6" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.7" !== void 0 ? "1.1.7" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);

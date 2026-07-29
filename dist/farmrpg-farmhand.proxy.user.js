@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.6
+// @version 1.1.7
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
+// @match https://www.farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
 // @connect github.com
 // @connect raw.githubusercontent.com
