@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.8
+// @version 1.1.9
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -6014,8 +6014,12 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.renderPerkIndicator = exports.SETTING_PERK_INDICATOR_DEBUG = void 0;
 const perks_1 = __webpack_require__(5543);
 const settings_1 = __webpack_require__(126);
-// A small "● Crafting" pill in the bottom stats bar, right of the currency
-// counts and the cap tracker, showing which perk set is equipped right now.
+// A tiny "● C" marker in the bottom stats bar, after the currency counts,
+// showing which perk set is equipped right now: a coloured dot plus the set's
+// first letter. It's deliberately one character wide — the bar is narrow on a
+// phone, and a full set name plus the counts and the game's own buttons left the
+// marker clipped or pushed out of sight. The full name is in the tooltip, and
+// the debug setting can put more detail in the label when you ask for it.
 //
 // It replaces the old "…perks activated" notification banner, which was
 // inserted into the page's own content — so it shoved everything below it down,
@@ -6184,8 +6188,10 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     // happens (the settle wait makes it ~1s — long enough to see it land)
     dot.style.backgroundColor = status.isPending ? "transparent" : color;
     dot.style.border = status.isPending ? `1px solid ${color}` : "none";
-    const setLabel = status.isPending ? `${status.name}…` : status.name;
-    label.textContent = note ? `${setLabel} · ${note}` : setLabel;
+    // first letter only. The dot carries the state (hollow while switching), so
+    // the label doesn't need to grow to say the same thing.
+    const initial = status.name.trim().slice(0, 1).toUpperCase();
+    label.textContent = note ? `${initial} · ${note}` : initial;
     label.style.color = color;
     pill.style.opacity = status.isPending ? "0.6" : "1";
     if (status.isPending) {
@@ -7198,7 +7204,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.8" !== void 0 ? "1.1.8" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.9" !== void 0 ? "1.1.9" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
