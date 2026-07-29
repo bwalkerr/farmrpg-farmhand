@@ -45,6 +45,21 @@ Fork releases are numbered from **1.1.0** onwards; upstream's own releases are t
 * Explore areas, fishing spots and mines are all served by the same kind of URL and could be given each other's perks; the activity in the URL is now what decides.
 * Inventory cap could be parsed from the wagon upgrade pitch (next tier's number) instead of your actual cap.
 
+### Sending fixes back upstream
+
+The fork's history is built as one commit per change on top of upstream `main`, so the fixes that aren't fork-specific can be offered upstream one at a time. None have been submitted yet. In cherry-pick order, each applies to upstream on its own:
+
+| Commit | Fix | Why it's upstream's |
+| --- | --- | --- |
+| `2fef5e4` | Verify crops are ready before saying so | The ready time is a guess when it comes from the home page, so the banner fires early for everyone |
+| `374891e` | Only warn about empty ovens if the player has ovens | Affects every player who hasn't unlocked the kitchen |
+| `b498b1a` | Keep gold and ancient coins visible in the bottom bar | The compressed navigation styles hide them for everyone using that feature |
+| `7a3ddf7` | Don't let a page-excluded banner hide the banners after it | Any page with an excluded notification loses the rest |
+| `dda223d` | Compare release numbers part by part, in order | Version comparison misfires whenever a later part of the candidate exceeds the current release's |
+| `d91d299` | Make perk set switching actually land | Same three causes upstream has (drifting active-set cache, the game confirming a switch before applying it, clearing perks racing the next action) — but it exports state the perk indicator consumes, so it pairs with `6f8fd9b` or needs a note |
+
+The rest — sticky activity perks, the Town cluster, the consolidated quick-action set, the cap tracker and the perk indicator — are fork behaviour rather than bug fixes, and are not proposed upstream.
+
 ## Usage
 
 Note that Farmhand is designed to make navigating Redbrook and your FarmRPG life easier *in ways that do not violate the [Code of Conduct](https://farmrpg.com/index.php#!/coc.php)*.
@@ -226,7 +241,7 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 
 ## Changelog
 
-*Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. Entries between 1.0.41 and 1.0.75 were not written down — those changes are in the fork feature list above and in the commit history.*
+*Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
 
 ### 1.1.1
 
@@ -240,6 +255,129 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 * Changed: activity perk sets stay on while you browse; they're put away when you go home or to your farm
 * Fixed: quick sales could go out under the wrong perks; harvest and replant now wait for the farm perks to be equipped
 * Fixed: a notification excluded from a page no longer hides every notification after it
+
+*Everything below is the older fork line. Releases 1.0.50–1.0.62 were one long hunt for why perk sets weren't reliably equipped; several of those steps were later undone once the real cause was found, so read that run as a whole rather than as individual improvements.*
+
+### 1.0.75
+
+* Changed: activity perk sets stay on while you browse — perks are put away when you go home or to your farm, and left alone everywhere else
+* Fixed: explore areas, fishing spots and mines share a page identity, so a fishing spot could be given Exploring perks; the activity named in the location URL now decides
+
+### 1.0.74
+
+* Fixed: the perk indicator and the cap tracker fought over position in the stats bar depending on which mounted first; the indicator now keeps itself to the right
+
+### 1.0.73
+
+* Fixed: one notification excluded from a page hid every notification sorted after it — on the farm page that meant no oven, meal, pets or update banners
+
+### 1.0.72
+
+* Fixed: the perk indicator could mount twice, leaving two pills in the stats bar
+
+### 1.0.71
+
+* Added: perk set indicator in the bottom stats bar, this time mounted only after the game has finished booting
+
+### 1.0.70
+
+* Fixed: harvest and replant now wait for the farm perks to actually be equipped before harvesting
+
+### 1.0.69
+
+* Fixed: rollback to 1.0.67's code, republished at a higher version, after 1.0.68 left the game unable to finish loading
+
+### 1.0.68
+
+* Withdrawn: added the perk indicator and the harvest fix together; touching the page before the game's own start-up finished left the game unresponsive
+
+### 1.0.67
+
+* Fixed: crafting on the workshop re-switched perks (and re-flashed the banner) on every craft, because a moment of page rebuilding read as "you left the activity"
+* Changed: the perks banner stays up while the perks are on instead of disappearing on a timer
+
+### 1.0.66
+
+* Changed: the whole town area (hub, temple, wheel, locksmith, vault, market) stays on one Town set instead of re-switching at each building
+* Fixed: the "perks activated" banner appeared even when no switch actually happened
+
+### 1.0.65
+
+* Changed: repeat quick sells no longer re-switch perks that are already equipped; quick give skips the switch when Default already covers it; harvest is snappy again
+
+### 1.0.64
+
+* Fixed: removed a duplicate quick-give proxy that made the button's safety depend on feature load order
+
+### 1.0.63
+
+* Changed: the quick-action banner flashes briefly instead of lingering through navigation
+
+### 1.0.62
+
+* Fixed: perk sets are now reliably equipped for quick sell, craft and give — the switch is forced (an internal cache could wrongly report the set was already on), and the action waits for the game to finish equipping, since the game confirms a switch before it has applied it
+
+### 1.0.56–1.0.61
+
+* Changed: quick sell, craft and give share one consolidated perk set, so clicking between them never swaps perks
+* Fixed: restored the clear-perks-first step that upstream had, then narrowed it to the cases that benefit — clearing perks immediately before a sale could leave no perks equipped at all
+* Note: 1.0.55, 1.0.57, 1.0.59 and 1.0.61 were intermediate builds in the same work with no separately recorded change
+
+### 1.0.54
+
+* Fixed: quick actions wait after switching sets, because the game confirms activating a set before the perks are actually equipped
+
+### 1.0.53
+
+* Fixed: quick actions force the switch instead of trusting a cache that could wrongly say the set was already active
+
+### 1.0.52
+
+* Changed: perks are no longer reverted to Default on item pages, which was leaving the set label and the equipped perks disagreeing
+
+### 1.0.51
+
+* Changed: a minimum gap between perk switches (later removed once the real cause was found)
+
+### 1.0.50
+
+* Fixed: the farmers market sometimes sold at the base rate — the game fires its page-load event several times per navigation, and two of those runs disagreed about which set to use; all page-based switching now goes through one check that reads the live page
+
+### 1.0.49
+
+* Changed: version bump only
+
+### 1.0.48
+
+* Fixed: perk switches are queued so two of them can't overlap, which could leave a partially applied set
+
+### 1.0.47
+
+* Fixed: quick sell no longer reverts perks on a timer, which raced the revert that already happens when you navigate away
+
+### 1.0.46
+
+* Fixed: the quick-sell perk swap was registered on every page load, so one sale fired it once per page you'd visited
+
+### 1.0.45
+
+* Added: a shared "Town" perk set covering the temple, wheel, locksmith and vault, each still falling back to its own set
+
+### 1.0.44
+
+* Changed: dropped the clear-perks-first step before switching sets (restored later — it turned out to be load-bearing)
+
+### 1.0.43
+
+* Changed: cap tracker rendering centralized; quick craft also refreshes it
+
+### 1.0.42
+
+* Fixed: mine drops are learned by reading the dig board, replacing a popup scan that never matched the game's markup, so a mine's row never narrowed down
+
+### 1.0.41
+
+* Fixed: the cap tracker went stale after quick sell and quick give, which use the item page's own buttons rather than the requests it was watching
 
 ### 1.0.40
 
