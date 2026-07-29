@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.7
+// @version 1.1.8
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1149,7 +1149,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.activatePerkSet = exports.isActivePerkSet = exports.getPerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.PerkActivity = void 0;
+exports.activatePerkSet = exports.isActivePerkSet = exports.getPerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.setPerkStatusNote = exports.PerkActivity = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
@@ -1209,6 +1209,15 @@ let confirmedEquippedSet;
 // settle wait) rather than only after it lands.
 let pendingPerkSet;
 const perkStatusListeners = [];
+let statusNote;
+const setPerkStatusNote = (note) => {
+    if (statusNote === note) {
+        return;
+    }
+    statusNote = note;
+    notifyPerkStatus();
+};
+exports.setPerkStatusNote = setPerkStatusNote;
 const onPerkStatusChange = (listener) => {
     perkStatusListeners.push(listener);
 };
@@ -1275,18 +1284,29 @@ exports.getConfirmedEquippedSetId = getConfirmedEquippedSetId;
 // this session has driven a switch.
 const getPerkStatus = () => {
     if (pendingPerkSet) {
-        return { name: pendingPerkSet.name, isPending: true, isConfirmed: false };
+        return {
+            name: pendingPerkSet.name,
+            isPending: true,
+            isConfirmed: false,
+            note: statusNote,
+        };
     }
     if (confirmedEquippedSet) {
         return {
             name: confirmedEquippedSet.name,
             isPending: false,
             isConfirmed: true,
+            note: statusNote,
         };
     }
     const state = exports.perksState.read();
     const current = state === null || state === void 0 ? void 0 : state.perkSets.find(({ id }) => id === (state === null || state === void 0 ? void 0 : state.currentPerkSetId));
-    return { name: current === null || current === void 0 ? void 0 : current.name, isPending: false, isConfirmed: false };
+    return {
+        name: current === null || current === void 0 ? void 0 : current.name,
+        isPending: false,
+        isConfirmed: false,
+        note: statusNote,
+    };
 };
 exports.getPerkStatus = getPerkStatus;
 const isActivePerkSet = (set, options) => __awaiter(void 0, void 0, void 0, function* () {
@@ -5991,7 +6011,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.renderPerkIndicator = void 0;
+exports.renderPerkIndicator = exports.SETTING_PERK_INDICATOR_DEBUG = void 0;
 const perks_1 = __webpack_require__(5543);
 const settings_1 = __webpack_require__(126);
 // A small "● Crafting" pill in the bottom stats bar, right of the currency
@@ -6010,6 +6030,17 @@ const settings_1 = __webpack_require__(126);
 // mid-screen right and top collide with the chat panel, bottom-left is the
 // game's own help tracker, and the left nav never rendered.
 const INDICATOR_ID = "fh-perk-indicator";
+// Off by default. When on, the pill reports what the perk manager last decided
+// alongside the set name — which page it recognised, which set that called for,
+// and whether the switch went through. It exists because a phone has no console:
+// the pill is the only surface there that can tell you why perks didn't change.
+exports.SETTING_PERK_INDICATOR_DEBUG = {
+    id: settings_1.SettingId.PERK_INDICATOR_DEBUG,
+    title: "Perks: Debug indicator",
+    description: "Show what the perk manager last decided next to the set name in the bottom bar",
+    type: "boolean",
+    defaultValue: false,
+};
 // gray for the resting/default set, orange for an activity set that's on
 const COLOR_RESTING = "#9e9e9e";
 const COLOR_ACTIVE = "#f0932b";
@@ -6036,41 +6067,15 @@ let bootPoll;
 // re-asserted on every render, and watched so a later arrival (the tracker
 // mounting, or the game rewriting the toolbar) is corrected at once.
 //
-// Which end we hold depends on the layout. A desktop bar has room to the right of
-// the currency counts and the cap tracker. A phone's bar holds the counts and the
-// game's own home and chat buttons and nothing else, so anything appended lands
-// off the right edge where it can't be seen — there the pill goes first, just
-// left of the counts.
-const MOBILE_MAX_WIDTH = 767; // the breakpoint the fork's own nav styles use
-const isMobileLayout = () => window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH}px)`).matches;
-const keepAnchored = (statsZone, pill) => {
-    if (isMobileLayout()) {
-        // margin belongs on the side facing the counts
-        pill.style.marginLeft = "0px";
-        pill.style.marginRight = "10px";
-        if (statsZone.firstElementChild !== pill) {
-            statsZone.prepend(pill);
-        }
-        return;
-    }
-    pill.style.marginLeft = "10px";
-    pill.style.marginRight = "0px";
+// Last child works on a phone too: #statszone_main holds only the currency
+// counts, while the Menu, home and chat buttons are inserted next to #homebtn in
+// the toolbar outside it — so the end of this container is the gap between the
+// counts and those buttons, which is where the pill belongs on both layouts.
+const keepRightmost = (statsZone, pill) => {
     if (statsZone.lastElementChild !== pill) {
         statsZone.append(pill);
     }
 };
-// Rotating a phone or resizing a window can cross the breakpoint, and the
-// childList observer below never fires for that — so re-anchor on the media
-// query itself. Registering the listener touches no DOM, and the callback only
-// moves a pill that already exists, so this is safe to do at load time.
-window
-    .matchMedia(`(max-width: ${MOBILE_MAX_WIDTH}px)`)
-    .addEventListener("change", () => {
-    const pill = document.querySelector(`#${INDICATOR_ID}`);
-    if (pill === null || pill === void 0 ? void 0 : pill.parentElement) {
-        keepAnchored(pill.parentElement, pill);
-    }
-});
 let observedStatsZone;
 let orderObserver;
 const watchOrder = (statsZone) => {
@@ -6085,7 +6090,7 @@ const watchOrder = (statsZone) => {
         // only ever move ourselves, and only while we're actually in this bar —
         // if the game dropped the pill, the next render remounts it
         if ((pill === null || pill === void 0 ? void 0 : pill.parentElement) === statsZone) {
-            keepAnchored(statsZone, pill);
+            keepRightmost(statsZone, pill);
         }
     });
     // childList only: this fires when something is added to or removed from the
@@ -6116,6 +6121,7 @@ const buildIndicator = () => {
     return pill;
 };
 const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     // never touch the DOM while the game is still initializing (see isGameBooted)
     if (!isGameBooted()) {
         if (!bootPoll && bootPollsLeft > 0) {
@@ -6157,11 +6163,13 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     if (!pill) {
         pill = buildIndicator();
     }
-    // take up the right end of the bar on desktop, the left end on a phone —
-    // whichever order we mounted in, and re-attaching an orphaned pill
-    keepAnchored(statsZone, pill);
+    // sit at the end of the counts, whichever order we mounted in (this also
+    // re-attaches an orphaned pill)
+    keepRightmost(statsZone, pill);
     watchOrder(statsZone);
-    const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
+    const isDebug = Boolean(settings[settings_1.SettingId.PERK_INDICATOR_DEBUG]);
+    const note = isDebug ? (_a = status.note) !== null && _a !== void 0 ? _a : "no decision yet" : undefined;
+    const signature = `${status.name}|${status.isPending}|${status.isConfirmed}|${note}`;
     if (pill.dataset.fhSignature === signature) {
         return;
     }
@@ -6176,7 +6184,8 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     // happens (the settle wait makes it ~1s — long enough to see it land)
     dot.style.backgroundColor = status.isPending ? "transparent" : color;
     dot.style.border = status.isPending ? `1px solid ${color}` : "none";
-    label.textContent = status.isPending ? `${status.name}…` : status.name;
+    const setLabel = status.isPending ? `${status.name}…` : status.name;
+    label.textContent = note ? `${setLabel} · ${note}` : setLabel;
     label.style.color = color;
     pill.style.opacity = status.isPending ? "0.6" : "1";
     if (status.isPending) {
@@ -6433,24 +6442,44 @@ const isRestingPage = (page) => page === page_1.Page.HOME_PAGE || page === page_
 // (partial sell perks). Keying every run off the same live page makes the
 // duplicate runs agree on the same set, so the redundant ones no-op via the
 // activatePerkSet guard instead of fighting each other.
+// Runs a page-driven switch and leaves a record of how it went, which the
+// indicator can show in debug mode. A failed switch was invisible before: the
+// switch chain swallows failures to protect the next switch, so there was no way
+// to tell a request that failed from a page that was never recognised — and on a
+// phone there's no console to check either way.
+const switchTo = (set, where) => __awaiter(void 0, void 0, void 0, function* () {
+    (0, perks_1.setPerkStatusNote)(`${where} → ${set.name}`);
+    try {
+        const switched = yield (0, perks_1.activatePerkSet)(set, { settle: true });
+        (0, perks_1.setPerkStatusNote)(`${where} → ${set.name}${switched ? "" : " (already on)"}`);
+    }
+    catch (error) {
+        console.error(`Failed to activate the ${set.name} perk set`, error);
+        (0, perks_1.setPerkStatusNote)(`${where} → ${set.name} FAILED`);
+    }
+});
 const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, function* () {
     const { value: isEnabled } = yield (0, settings_1.getSetting)(SETTING_PERK_MANAGER);
     if (!isEnabled) {
         return;
     }
     const [page] = (0, page_1.getPage)();
+    // `page` is the live page id, or undefined when the page can't be identified
+    const where = page !== null && page !== void 0 ? page : "unknown page";
     // don't touch perks on the perks page so you can edit sets freely
     if (page === page_1.Page.PERKS) {
+        (0, perks_1.setPerkStatusNote)(`${where}: left alone`);
         return;
     }
     const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
     if (!defaultPerks) {
         console.warn("Default perk set not found");
+        (0, perks_1.setPerkStatusNote)("no Default set");
         return;
     }
     const activation = yield getPageActivation(page);
     if (activation) {
-        yield (0, perks_1.activatePerkSet)(activation.set, { settle: true });
+        yield switchTo(activation.set, where);
         return;
     }
     // Not an activity page, and not a resting one either — you're browsing
@@ -6462,15 +6491,16 @@ const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, fun
     // reliable "you've left the activity" signal and once caused the workshop to
     // reset and re-activate Crafting on every single craft.
     if (!isRestingPage(page)) {
+        (0, perks_1.setPerkStatusNote)(`${where}: keeping current set`);
         return;
     }
     // back to Default (settle: the game acks the switch before it equips, so
     // without waiting the label flips to Default while the previous set's perks
     // stay on)
-    yield (0, perks_1.activatePerkSet)(defaultPerks, { settle: true });
+    yield switchTo(defaultPerks, where);
 });
 exports.perkManagment = {
-    settings: [SETTING_PERK_MANAGER],
+    settings: [SETTING_PERK_MANAGER, perkIndicator_1.SETTING_PERK_INDICATOR_DEBUG],
     onPageLoad: (settings) => __awaiter(void 0, void 0, void 0, function* () {
         if (!settings[settings_1.SettingId.PERK_MANAGER]) {
             return;
@@ -7168,7 +7198,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.7" !== void 0 ? "1.1.7" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.8" !== void 0 ? "1.1.8" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -8396,6 +8426,7 @@ var SettingId;
     SettingId["KITCHEN_COMPLETE_NOTIFICATIONS"] = "readyNotifications";
     SettingId["KITCHEN_EMPTY_NOTIFICATIONS"] = "kitchenEmptyNotifications";
     SettingId["MAX_ANIMALS"] = "maxAnimals";
+    SettingId["PERK_INDICATOR_DEBUG"] = "perkIndicatorDebug";
     SettingId["MAX_CONTAINERS"] = "maxContainers";
     SettingId["MEAL_NOTIFICATIONS"] = "mealNotifications";
     SettingId["MINER"] = "miner";
