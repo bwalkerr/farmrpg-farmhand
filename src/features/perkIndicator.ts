@@ -1,3 +1,4 @@
+import { FeatureSetting } from "~/utils/feature";
 import { getPerkStatus, onPerkStatusChange } from "~/api/farmrpg/apis/perks";
 import { getSettingValues, SettingId } from "~/utils/settings";
 
@@ -18,6 +19,19 @@ import { getSettingValues, SettingId } from "~/utils/settings";
 // game's own help tracker, and the left nav never rendered.
 
 const INDICATOR_ID = "fh-perk-indicator";
+
+// Off by default. When on, the pill reports what the perk manager last decided
+// alongside the set name — which page it recognised, which set that called for,
+// and whether the switch went through. It exists because a phone has no console:
+// the pill is the only surface there that can tell you why perks didn't change.
+export const SETTING_PERK_INDICATOR_DEBUG: FeatureSetting = {
+  id: SettingId.PERK_INDICATOR_DEBUG,
+  title: "Perks: Debug indicator",
+  description:
+    "Show what the perk manager last decided next to the set name in the bottom bar",
+  type: "boolean",
+  defaultValue: false,
+};
 
 // gray for the resting/default set, orange for an activity set that's on
 const COLOR_RESTING = "#9e9e9e";
@@ -51,44 +65,15 @@ let bootPoll: ReturnType<typeof setTimeout> | undefined;
 // re-asserted on every render, and watched so a later arrival (the tracker
 // mounting, or the game rewriting the toolbar) is corrected at once.
 //
-// Which end we hold depends on the layout. A desktop bar has room to the right of
-// the currency counts and the cap tracker. A phone's bar holds the counts and the
-// game's own home and chat buttons and nothing else, so anything appended lands
-// off the right edge where it can't be seen — there the pill goes first, just
-// left of the counts.
-const MOBILE_MAX_WIDTH = 767; // the breakpoint the fork's own nav styles use
-const isMobileLayout = (): boolean =>
-  window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH}px)`).matches;
-
-const keepAnchored = (statsZone: Element, pill: HTMLElement): void => {
-  if (isMobileLayout()) {
-    // margin belongs on the side facing the counts
-    pill.style.marginLeft = "0px";
-    pill.style.marginRight = "10px";
-    if (statsZone.firstElementChild !== pill) {
-      statsZone.prepend(pill);
-    }
-    return;
-  }
-  pill.style.marginLeft = "10px";
-  pill.style.marginRight = "0px";
+// Last child works on a phone too: #statszone_main holds only the currency
+// counts, while the Menu, home and chat buttons are inserted next to #homebtn in
+// the toolbar outside it — so the end of this container is the gap between the
+// counts and those buttons, which is where the pill belongs on both layouts.
+const keepRightmost = (statsZone: Element, pill: HTMLElement): void => {
   if (statsZone.lastElementChild !== pill) {
     statsZone.append(pill);
   }
 };
-
-// Rotating a phone or resizing a window can cross the breakpoint, and the
-// childList observer below never fires for that — so re-anchor on the media
-// query itself. Registering the listener touches no DOM, and the callback only
-// moves a pill that already exists, so this is safe to do at load time.
-window
-  .matchMedia(`(max-width: ${MOBILE_MAX_WIDTH}px)`)
-  .addEventListener("change", () => {
-    const pill = document.querySelector<HTMLElement>(`#${INDICATOR_ID}`);
-    if (pill?.parentElement) {
-      keepAnchored(pill.parentElement, pill);
-    }
-  });
 
 let observedStatsZone: Element | undefined;
 let orderObserver: MutationObserver | undefined;
@@ -105,7 +90,7 @@ const watchOrder = (statsZone: Element): void => {
     // only ever move ourselves, and only while we're actually in this bar —
     // if the game dropped the pill, the next render remounts it
     if (pill?.parentElement === statsZone) {
-      keepAnchored(statsZone, pill);
+      keepRightmost(statsZone, pill);
     }
   });
   // childList only: this fires when something is added to or removed from the
@@ -189,12 +174,14 @@ export const renderPerkIndicator = async (): Promise<void> => {
   if (!pill) {
     pill = buildIndicator();
   }
-  // take up the right end of the bar on desktop, the left end on a phone —
-  // whichever order we mounted in, and re-attaching an orphaned pill
-  keepAnchored(statsZone, pill);
+  // sit at the end of the counts, whichever order we mounted in (this also
+  // re-attaches an orphaned pill)
+  keepRightmost(statsZone, pill);
   watchOrder(statsZone);
 
-  const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
+  const isDebug = Boolean(settings[SettingId.PERK_INDICATOR_DEBUG]);
+  const note = isDebug ? status.note ?? "no decision yet" : undefined;
+  const signature = `${status.name}|${status.isPending}|${status.isConfirmed}|${note}`;
   if (pill.dataset.fhSignature === signature) {
     return;
   }
@@ -211,7 +198,8 @@ export const renderPerkIndicator = async (): Promise<void> => {
   // happens (the settle wait makes it ~1s — long enough to see it land)
   dot.style.backgroundColor = status.isPending ? "transparent" : color;
   dot.style.border = status.isPending ? `1px solid ${color}` : "none";
-  label.textContent = status.isPending ? `${status.name}…` : status.name;
+  const setLabel = status.isPending ? `${status.name}…` : status.name;
+  label.textContent = note ? `${setLabel} · ${note}` : setLabel;
   label.style.color = color;
   pill.style.opacity = status.isPending ? "0.6" : "1";
   if (status.isPending) {

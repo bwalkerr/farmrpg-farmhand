@@ -32,6 +32,7 @@ export enum SettingId {
   KITCHEN_COMPLETE_NOTIFICATIONS = "readyNotifications",
   KITCHEN_EMPTY_NOTIFICATIONS = "kitchenEmptyNotifications",
   MAX_ANIMALS = "maxAnimals",
+  PERK_INDICATOR_DEBUG = "perkIndicatorDebug",
   MAX_CONTAINERS = "maxContainers",
   MEAL_NOTIFICATIONS = "mealNotifications",
   MINER = "miner",

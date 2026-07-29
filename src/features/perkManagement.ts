@@ -4,12 +4,16 @@ import {
   getConfirmedEquippedSetId,
   PerkActivity,
   PerkSet,
+  setPerkStatusNote,
 } from "~/api/farmrpg/apis/perks";
 import { Feature, FeatureSetting } from "../utils/feature";
 import { getCurrentPage, getPage, Page } from "~/utils/page";
 import { getSetting, SettingId } from "~/utils/settings";
 import { onQuicksellClick, QuickAction } from "./quickSellSafely";
-import { renderPerkIndicator } from "./perkIndicator";
+import {
+  renderPerkIndicator,
+  SETTING_PERK_INDICATOR_DEBUG,
+} from "./perkIndicator";
 
 const SETTING_PERK_MANAGER: FeatureSetting = {
   id: SettingId.PERK_MANAGER,
@@ -255,6 +259,24 @@ const isRestingPage = (page: Page | undefined): boolean =>
 // (partial sell perks). Keying every run off the same live page makes the
 // duplicate runs agree on the same set, so the redundant ones no-op via the
 // activatePerkSet guard instead of fighting each other.
+// Runs a page-driven switch and leaves a record of how it went, which the
+// indicator can show in debug mode. A failed switch was invisible before: the
+// switch chain swallows failures to protect the next switch, so there was no way
+// to tell a request that failed from a page that was never recognised — and on a
+// phone there's no console to check either way.
+const switchTo = async (set: PerkSet, where: string): Promise<void> => {
+  setPerkStatusNote(`${where} → ${set.name}`);
+  try {
+    const switched = await activatePerkSet(set, { settle: true });
+    setPerkStatusNote(
+      `${where} → ${set.name}${switched ? "" : " (already on)"}`
+    );
+  } catch (error) {
+    console.error(`Failed to activate the ${set.name} perk set`, error);
+    setPerkStatusNote(`${where} → ${set.name} FAILED`);
+  }
+};
+
 const reconcilePerksForCurrentPage = async (): Promise<void> => {
   const { value: isEnabled } = await getSetting(SETTING_PERK_MANAGER);
   if (!isEnabled) {
@@ -262,21 +284,25 @@ const reconcilePerksForCurrentPage = async (): Promise<void> => {
   }
 
   const [page] = getPage();
+  // `page` is the live page id, or undefined when the page can't be identified
+  const where = page ?? "unknown page";
 
   // don't touch perks on the perks page so you can edit sets freely
   if (page === Page.PERKS) {
+    setPerkStatusNote(`${where}: left alone`);
     return;
   }
 
   const defaultPerks = await getActivityPerksSet(PerkActivity.DEFAULT);
   if (!defaultPerks) {
     console.warn("Default perk set not found");
+    setPerkStatusNote("no Default set");
     return;
   }
 
   const activation = await getPageActivation(page);
   if (activation) {
-    await activatePerkSet(activation.set, { settle: true });
+    await switchTo(activation.set, where);
     return;
   }
 
@@ -289,17 +315,18 @@ const reconcilePerksForCurrentPage = async (): Promise<void> => {
   // reliable "you've left the activity" signal and once caused the workshop to
   // reset and re-activate Crafting on every single craft.
   if (!isRestingPage(page)) {
+    setPerkStatusNote(`${where}: keeping current set`);
     return;
   }
 
   // back to Default (settle: the game acks the switch before it equips, so
   // without waiting the label flips to Default while the previous set's perks
   // stay on)
-  await activatePerkSet(defaultPerks, { settle: true });
+  await switchTo(defaultPerks, where);
 };
 
 export const perkManagment: Feature = {
-  settings: [SETTING_PERK_MANAGER],
+  settings: [SETTING_PERK_MANAGER, SETTING_PERK_INDICATOR_DEBUG],
   onPageLoad: async (settings) => {
     if (!settings[SettingId.PERK_MANAGER]) {
       return;

@@ -82,7 +82,22 @@ export interface PerkStatus {
   name?: string;
   isPending: boolean;
   isConfirmed: boolean;
+  // A few words about what the perk manager last decided or attempted, shown by
+  // the indicator when its debug setting is on. On a phone there is no console
+  // to read, so this is the only way to see which page was recognised, which set
+  // it called for, and whether the switch actually went through.
+  note?: string;
 }
+
+let statusNote: string | undefined;
+
+export const setPerkStatusNote = (note: string): void => {
+  if (statusNote === note) {
+    return;
+  }
+  statusNote = note;
+  notifyPerkStatus();
+};
 
 export const onPerkStatusChange = (listener: () => void): void => {
   perkStatusListeners.push(listener);
@@ -168,20 +183,31 @@ export const getConfirmedEquippedSetId = (): number | undefined =>
 // this session has driven a switch.
 export const getPerkStatus = (): PerkStatus => {
   if (pendingPerkSet) {
-    return { name: pendingPerkSet.name, isPending: true, isConfirmed: false };
+    return {
+      name: pendingPerkSet.name,
+      isPending: true,
+      isConfirmed: false,
+      note: statusNote,
+    };
   }
   if (confirmedEquippedSet) {
     return {
       name: confirmedEquippedSet.name,
       isPending: false,
       isConfirmed: true,
+      note: statusNote,
     };
   }
   const state = perksState.read();
   const current = state?.perkSets.find(
     ({ id }) => id === state?.currentPerkSetId
   );
-  return { name: current?.name, isPending: false, isConfirmed: false };
+  return {
+    name: current?.name,
+    isPending: false,
+    isConfirmed: false,
+    note: statusNote,
+  };
 };
 
 export const isActivePerkSet = async (
