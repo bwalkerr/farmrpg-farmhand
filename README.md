@@ -226,7 +226,20 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 
 ## Changelog
 
-*Versions 1.0.32+ are fork releases ([bwalkerr/farmrpg-farmhand](https://github.com/bwalkerr/farmrpg-farmhand)); 1.0.31 and below are upstream.*
+*Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. Entries between 1.0.41 and 1.0.75 were not written down — those changes are in the fork feature list above and in the commit history.*
+
+### 1.1.1
+
+* Fixed: the update check asked Greasy Fork, so it offered upstream's release as an "update" — it now checks this fork's own build
+* Fixed: release numbers are compared part by part in order, so 1.0.31 is no longer treated as newer than 1.1.0
+* Changed: "View Changes" shows this changelog rather than upstream's
+
+### 1.1.0
+
+* Added: perk set indicator in the bottom stats bar, replacing the "…perks activated" banners
+* Changed: activity perk sets stay on while you browse; they're put away when you go home or to your farm
+* Fixed: quick sales could go out under the wrong perks; harvest and replant now wait for the farm perks to be equipped
+* Fixed: a notification excluded from a page no longer hides every notification after it
 
 ### 1.0.40
 

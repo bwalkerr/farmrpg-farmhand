@@ -135,7 +135,7 @@ const config: Configuration = {
           match: ["https://farmrpg.com/*", "https://alpha.farmrpg.com/*"],
           name: "Farm RPG Farmhand",
           namespace: "https://github.com/anstosa/farmrpg-farmhand",
-          connect: ["greasyfork.org", "github.com"],
+          connect: ["github.com", "raw.githubusercontent.com"],
           // from package.json
           //   description
           //   version
