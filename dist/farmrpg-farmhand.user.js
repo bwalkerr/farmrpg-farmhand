@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.4
+// @version 1.1.5
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://alpha.farmrpg.com/*
@@ -6018,18 +6018,48 @@ const BOOT_POLL_MS = 250;
 const BOOT_POLL_LIMIT = 40; // ~10s, then give up until the next page load
 let bootPollsLeft = BOOT_POLL_LIMIT;
 let bootPoll;
-// The pill shares the stats bar with the cap tracker, and both simply append
-// themselves — so which one ends up on the left came down to who mounted first.
-// The tracker waits on an inventory fetch, so on a cold load we win the race and
-// sit left of it; on a reload with cached data it wins and we sit right. Rather
-// than depend on that timing, we keep "last child" as a maintained property: fix
-// the position on every render, and watch the bar so a later arrival (the
-// tracker mounting, or the game rewriting the toolbar) is corrected at once.
-const keepRightmost = (statsZone, pill) => {
+// The pill shares the stats bar with the cap tracker, and both simply add
+// themselves — so position came down to who mounted first. The tracker waits on
+// an inventory fetch, so on a cold load we win the race and on a cached reload we
+// don't. Rather than depend on that timing, position is a maintained property:
+// re-asserted on every render, and watched so a later arrival (the tracker
+// mounting, or the game rewriting the toolbar) is corrected at once.
+//
+// Which end we hold depends on the layout. A desktop bar has room to the right of
+// the currency counts and the cap tracker. A phone's bar holds the counts and the
+// game's own home and chat buttons and nothing else, so anything appended lands
+// off the right edge where it can't be seen — there the pill goes first, just
+// left of the counts.
+const MOBILE_MAX_WIDTH = 767; // the breakpoint the fork's own nav styles use
+const isMobileLayout = () => window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH}px)`).matches;
+const keepAnchored = (statsZone, pill) => {
+    if (isMobileLayout()) {
+        // margin belongs on the side facing the counts
+        pill.style.marginLeft = "0px";
+        pill.style.marginRight = "10px";
+        if (statsZone.firstElementChild !== pill) {
+            statsZone.prepend(pill);
+        }
+        return;
+    }
+    pill.style.marginLeft = "10px";
+    pill.style.marginRight = "0px";
     if (statsZone.lastElementChild !== pill) {
         statsZone.append(pill);
     }
 };
+// Rotating a phone or resizing a window can cross the breakpoint, and the
+// childList observer below never fires for that — so re-anchor on the media
+// query itself. Registering the listener touches no DOM, and the callback only
+// moves a pill that already exists, so this is safe to do at load time.
+window
+    .matchMedia(`(max-width: ${MOBILE_MAX_WIDTH}px)`)
+    .addEventListener("change", () => {
+    const pill = document.querySelector(`#${INDICATOR_ID}`);
+    if (pill === null || pill === void 0 ? void 0 : pill.parentElement) {
+        keepAnchored(pill.parentElement, pill);
+    }
+});
 let observedStatsZone;
 let orderObserver;
 const watchOrder = (statsZone) => {
@@ -6044,7 +6074,7 @@ const watchOrder = (statsZone) => {
         // only ever move ourselves, and only while we're actually in this bar —
         // if the game dropped the pill, the next render remounts it
         if ((pill === null || pill === void 0 ? void 0 : pill.parentElement) === statsZone) {
-            keepRightmost(statsZone, pill);
+            keepAnchored(statsZone, pill);
         }
     });
     // childList only: this fires when something is added to or removed from the
@@ -6115,11 +6145,10 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     // rather than building a second one
     if (!pill) {
         pill = buildIndicator();
-        statsZone.append(pill);
     }
-    // stay to the right of the currency counts and the cap tracker, whichever
-    // order we happened to mount in (also re-attaches an orphaned pill)
-    keepRightmost(statsZone, pill);
+    // take up the right end of the bar on desktop, the left end on a phone —
+    // whichever order we mounted in, and re-attaching an orphaned pill
+    keepAnchored(statsZone, pill);
     watchOrder(statsZone);
     const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
     if (pill.dataset.fhSignature === signature) {
@@ -7128,7 +7157,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.4" !== void 0 ? "1.1.4" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.5" !== void 0 ? "1.1.5" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
