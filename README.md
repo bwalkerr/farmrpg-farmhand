@@ -243,6 +243,11 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
 
+### 1.1.2
+
+* Fixed: hovering a username in chat showed "(loading...)" and then nothing — the game rebuilt its profile page, so the player's id and name couldn't be read any more
+* Changed: the hover popup shows whichever details it could load instead of nothing at all, and says so when a profile can't be read; a mailbox with no stated capacity no longer reports a made-up one
+
 ### 1.1.1
 
 * Fixed: the update check asked Greasy Fork, so it offered upstream's release as an "update" — it now checks this fork's own build

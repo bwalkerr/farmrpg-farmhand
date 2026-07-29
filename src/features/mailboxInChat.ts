@@ -26,7 +26,11 @@ const openInfoPopup = async (userElement: HTMLAnchorElement): Promise<void> => {
     userElement.classList.remove("fh-mailbox-info-loading");
     return;
   }
-  if (!user || !mailbox) {
+  // The mailbox page and the profile page are read separately, and either can
+  // come back unreadable when the game changes its markup. Rather than showing
+  // nothing at all — which looks exactly like a broken hover — show whichever
+  // details did load, and say so when none did.
+  if (!user && !mailbox) {
     userElement.classList.remove("fh-mailbox-info-loading");
     return;
   }
@@ -55,11 +59,28 @@ const openInfoPopup = async (userElement: HTMLAnchorElement): Promise<void> => {
   infoPopup.style.fontWeight = "normal";
   infoPopup.style.whiteSpace = "normal";
   infoPopup.style.pointerEvents = "none";
-  infoPopup.innerHTML = `
-    <div><strong>Mailbox:</strong> ${formatter.format(mailbox.capacity)}</div>
-    <div><strong>Looking For:</strong> ${mailbox.lookingFor}</div>
-    <div><strong>Bio:</strong> ${user.bio}</div>
-  `;
+  const rows: [string, string][] = [];
+  if (mailbox?.capacity !== undefined) {
+    rows.push(["Mailbox", formatter.format(mailbox.capacity)]);
+  }
+  if (mailbox?.lookingFor) {
+    rows.push(["Looking For", mailbox.lookingFor]);
+  }
+  if (user?.bio) {
+    rows.push(["Bio", user.bio]);
+  }
+  if (rows.length === 0) {
+    rows.push(["No details", "this player's profile couldn't be read"]);
+  }
+  for (const [label, value] of rows) {
+    const row = document.createElement("div");
+    const labelElement = document.createElement("strong");
+    labelElement.textContent = `${label}: `;
+    row.append(labelElement);
+    // as text, not markup — bios and Looking For are written by players
+    row.append(document.createTextNode(value));
+    infoPopup.append(row);
+  }
   // eslint-disable-next-line require-atomic-updates
   userElement.classList.remove("fh-mailbox-info-loading");
   userElement.after(infoPopup);

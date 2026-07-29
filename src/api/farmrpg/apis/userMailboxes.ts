@@ -2,35 +2,38 @@ import { CachedState, StorageKey } from "../../../utils/state";
 import { getCardByTitle, Page } from "../../../utils/page";
 import { getDocument } from "../../../utils/requests";
 import { getHTML } from "../utils/requests";
-import { userState } from "./users";
+import { User, userState } from "./users";
 
 export interface Mailbox {
   id: string;
   username: string;
-  capacity: number;
+  // undefined when the page doesn't state a capacity, so callers can leave it
+  // out instead of showing a made-up number
+  capacity?: number;
   lookingFor: string;
   timestamp: number;
 }
 
-const processMailbox = (root: Document): Mailbox | undefined => {
+// `user` is who the page was requested for, when that's known. The id and name
+// are read from the page first, but falling back to the requested player means a
+// change to the mailbox page's own markup costs us the capacity line at worst,
+// rather than the whole mailbox.
+const processMailbox = (root: Document, user?: User): Mailbox | undefined => {
   const idField = root.querySelector<HTMLInputElement>("#mb_to_id");
-  const id = idField?.value;
+  const id = idField?.value || user?.id;
   if (!id) {
     return;
   }
   const profileLink =
     root.querySelector<HTMLAnchorElement>("a[href^='profile']");
-  if (!profileLink) {
-    return;
-  }
-  const [, queryString] = profileLink.href.split("?");
-  const linkQuery = new URLSearchParams(queryString);
-  const username = linkQuery.get("user_name");
+  const [, queryString] = profileLink?.getAttribute("href")?.split("?") ?? [];
+  const username =
+    new URLSearchParams(queryString).get("user_name") ?? user?.username;
   if (!username) {
     return;
   }
   const cards = root.querySelectorAll(".card");
-  let capacity = 5;
+  let capacity: number | undefined;
   for (const card of cards) {
     // This mailbox has 36 / 1,800 items in it currently.
     const match = card.textContent?.match(
@@ -73,7 +76,7 @@ export const playerMailboxState = new CachedState<Mailbox, string>(
       Page.MAILBOX,
       new URLSearchParams({ id: user.id })
     );
-    return processMailbox(response);
+    return processMailbox(response, user);
   },
   {
     persist: true,

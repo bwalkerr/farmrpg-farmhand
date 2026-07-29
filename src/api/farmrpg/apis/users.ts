@@ -12,16 +12,38 @@ export interface User {
   timestamp: number;
 }
 
+// The profile page carries the player's id in the Add Friend button, and — on
+// the rebuilt profile page, which has no such button — in the link to their
+// mailbox. Both are checked, so this works on old and current markup, and on a
+// profile fetched without a session (where the social buttons aren't rendered).
+const getUserId = (root: Document): string | undefined => {
+  const addFriendId =
+    root.querySelector<HTMLAnchorElement>(".addfriendbtn")?.dataset.id;
+  if (addFriendId) {
+    return addFriendId;
+  }
+  const mailboxLink = root.querySelector<HTMLAnchorElement>(
+    "a[href*='mailbox.php?id=']"
+  );
+  const [, queryString] = mailboxLink?.getAttribute("href")?.split("?") ?? [];
+  return new URLSearchParams(queryString).get("id") ?? undefined;
+};
+
+// The username used to be a .sharelink; the rebuilt profile page shows it as a
+// copy-the-@mention link instead.
+const getNameLink = (root: Document): Element | null =>
+  root.querySelector(".sharelink") ?? root.querySelector(".copy-to-clipboard");
+
 const processProfile = (root: Document): User | undefined => {
-  const id = root.querySelector<HTMLAnchorElement>(".addfriendbtn")?.dataset.id;
+  const id = getUserId(root);
   if (!id) {
     return;
   }
-  const nameLink = root.querySelector(".sharelink");
+  const nameLink = getNameLink(root);
   if (!nameLink) {
     return;
   }
-  const username = nameLink.textContent;
+  const username = nameLink.textContent?.trim();
   if (!username) {
     return;
   }
