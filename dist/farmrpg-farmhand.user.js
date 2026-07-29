@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.9
+// @version 1.1.10
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -346,6 +346,12 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
     return processFarmPage(response.body);
 }), {
     timeout: 5,
+    // Live status, so don't keep it between sessions. A five-second value
+    // written to storage means last session's crop status is still sitting there
+    // at the next load, where it can merge into the first update and show a
+    // banner for crops that aren't ready — before any of this session's data has
+    // arrived. Every other live state here opts out the same way.
+    persist: false,
     defaultState: {
         status: CropStatus.EMPTY,
         count: 4,
@@ -717,6 +723,8 @@ exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_
     return processKitchenPage(response.body);
 }), {
     timeout: 5,
+    // live status — see the note on farmStatusState
+    persist: false,
     defaultState: {
         status: OvenStatus.EMPTY,
         count: 0,
@@ -977,6 +985,9 @@ exports.mealsStatusState = new state_1.CachedState(state_1.StorageKey.MEALS_STAT
     const response = yield (0, requests_2.getHTML)(page_1.Page.HOME_PATH);
     return processMealStatus(response.body);
 }), {
+    // live status — see the note on farmStatusState. Cooking meals carry ready
+    // times, so a list kept from a previous session is stale by definition.
+    persist: false,
     defaultState: {
         meals: [],
     },
@@ -7204,7 +7215,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.9" !== void 0 ? "1.1.9" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.10" !== void 0 ? "1.1.10" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
