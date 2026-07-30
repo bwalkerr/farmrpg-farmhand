@@ -32,6 +32,7 @@ Version lines are kept apart so a mix-up is visible: `reed-mods` is **1.1.x**, t
   * While you're actually fishing, exploring, mining, harvesting or selling, the game's own requests refresh it (at most once every 15 seconds), so it keeps up as you play.
   * On a fishing spot, explore area or mine, the row narrows to items that actually drop *there*. Those drop lists are learned from your own play — explore and fishing results, and the dig board for mines — and remembered, so each location only needs to be seen once. A location it hasn't learned yet shows everything rather than nothing.
   * A **−** control collapses the row to two numbers (at cap / near cap) and remembers that choice.
+  * *On this branch the row is not drawn on a phone layout* (below 768px). It's up to 20 icons wide and the phone's stats bar only has room for the currency counts and the game's own buttons, so it crowded out the perk marker this branch exists to look at. The inventory page's MAX/NEAR badges are unaffected.
 
 #### Perk sets that are actually equipped when it counts
 
@@ -256,6 +257,10 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.2.2
+
+* Changed: the cap tracker row no longer appears in the bottom bar on a phone layout, where it never fit — up to 20 item icons next to the currency counts and the game's own buttons — and was crowding out the perk marker. It comes back if the layout widens past 768px, and the inventory page's own MAX/NEAR badges are untouched
 
 ### 1.2.1
 

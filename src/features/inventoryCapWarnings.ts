@@ -13,6 +13,7 @@ import {
   parseUrl,
   registerQueryInterceptor,
 } from "~/api/farmrpg/utils/requests";
+import { isMobileLayout, onLayoutChange } from "~/utils/layout";
 import { Responselike } from "~/utils/requests";
 import { SettingId } from "~/utils/settings";
 
@@ -294,6 +295,20 @@ const learnCurrentLocation = (): void => {
 
 const renderCapTracker = (): void => {
   let box = document.querySelector<HTMLDivElement>("#fh-cap-tracker");
+
+  // Not on a phone. The row is up to 20 item icons wide and the phone's stats
+  // bar has room for the currency counts and the game's own buttons and nothing
+  // else, so wherever it's put it either overflows the bar or pushes the counts
+  // off it. Collapsing it by default would fit, but it isn't what's wanted here:
+  // this branch exists to look at the perk marker on a phone, and the tracker is
+  // the thing crowding it out. The inventory page's own MAX/NEAR badges are a
+  // separate feature and are unaffected — the cap information is still there,
+  // just not in the bar.
+  if (isMobileLayout()) {
+    box?.remove();
+    return;
+  }
+
   const key = getLocationKey();
   const learned = key ? locationDrops[key] : undefined;
   // filter to this location's known drops; before a location has been
@@ -413,6 +428,11 @@ const scheduleRender = (): void => {
     renderCapTracker();
   });
 };
+
+// Crossing the breakpoint changes whether the row is drawn at all, and nothing
+// else would repaint it — so rotating a phone, or dragging a desktop window
+// narrow, would otherwise leave the tracker in whichever shape it mounted in.
+onLayoutChange(scheduleRender);
 
 const updateFromRoot = (root: HTMLElement): void => {
   const result = collectCapItems(root);
