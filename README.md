@@ -8,11 +8,17 @@ All features are configurable and optional.
 
 This is a fork of [anstosa/farmrpg-farmhand](https://github.com/anstosa/farmrpg-farmhand) maintained at [bwalkerr/farmrpg-farmhand](https://github.com/bwalkerr/farmrpg-farmhand) with additional fixes and features, listed below. Everything else in this README is the upstream project's documentation and applies unchanged.
 
-Install this fork's build directly: <https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js>
+> **This is the `mobile` branch.** It carries the perk work aimed at phones — the compact marker, the tap-for-details panel, the floating fallback and the left-end placement — while `reed-mods` keeps the plain desktop pill. The open question it exists to answer is whether the perk reconciler switches perks on a phone at all; the tap panel is the only way to see that without a console. Everything else is identical to `reed-mods`.
+>
+> Install the **desktop** build from `reed-mods` instead if you're not debugging the phone: <https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js>
 
-Updates come from this repository: the script's update URLs point at the build above, so your script manager offers fork releases on its own. It never consults the Greasy Fork release, which is upstream's and would replace this fork entirely.
+Install this branch's build: <https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/mobile/dist/farmrpg-farmhand.user.js>
 
-Fork releases are numbered from **1.1.0** onwards; upstream's own releases are the 1.0.x line, so a version starting 1.1 is always this fork.
+Updates come from this branch: the script's update URLs point at the build above, so your script manager offers `mobile` releases on its own and can never pull the desktop build. It never consults the Greasy Fork release, which is upstream's and would replace this fork entirely.
+
+The `@name` and `@namespace` match the desktop build on purpose, so installing this **replaces** a `reed-mods` install rather than running beside it and firing every feature twice. That also means switching back is a reinstall from the URL above it, not an update.
+
+Version lines are kept apart so a mix-up is visible: `reed-mods` is **1.1.x**, this branch is **1.2.x**, and upstream's own releases are the 1.0.x line.
 
 ### Fork features
 
@@ -49,7 +55,7 @@ Fork releases are numbered from **1.1.0** onwards; upstream's own releases are t
 
 ### Sending fixes back upstream
 
-The fork's history is built as one commit per change on top of upstream `main`, so the fixes that aren't fork-specific can be offered upstream one at a time. None have been submitted yet. In cherry-pick order, each applies to upstream on its own:
+The fork's history is built as one commit per change on top of upstream `main`, so the fixes that aren't fork-specific can be offered upstream one at a time. None have been submitted yet. In cherry-pick order:
 
 | Commit | Fix | Why it's upstream's |
 | --- | --- | --- |
@@ -60,6 +66,7 @@ The fork's history is built as one commit per change on top of upstream `main`, 
 | `dda223d` | Compare release numbers part by part, in order | Version comparison misfires whenever a later part of the candidate exceeds the current release's |
 | `42928ff` | Give each page watcher its own copy of the response | Two watchers on one URL (the farm page has exactly that) meant the second threw "Body has already been consumed" and lost its update |
 | `f68d29c` | Run on www.farmrpg.com, and address the host the page came from | www serves the whole game and doesn't redirect, so the script never ran there; and requests were addressed to a fixed host, which broke alpha.farmrpg.com support the same way |
+| `656ac93` | Hand each response to the page watchers once, not twice | `getJSON` runs the watchers itself on top of the fetch wrapper having already done it, so every watcher on that path fires twice. Upstream is shielded only by the bug above — the second pass loses the race for the response body and dies — so this must be cherry-picked *with* `42928ff`, which removes that shield and makes the duplicate real (upstream's harvest popup would appear twice) |
 | `895efea` | Don't keep live crop, oven and meal status between sessions | A five-second status written to storage lets the previous session's data draw a banner at startup |
 | `d91d299` | Make perk set switching actually land | Same three causes upstream has (drifting active-set cache, the game confirming a switch before applying it, clearing perks racing the next action) — but it exports state the perk indicator consumes, so it pairs with `6f8fd9b` or needs a note |
 
@@ -247,6 +254,15 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.2.0
+
+* Changed: this branch now tracks itself for updates and starts its own **1.2.x** version line, so the phone install follows the mobile work and the desktop install follows `reed-mods` — neither can pull the other's build
+* Everything at 1.1.12 and below is shared with `reed-mods`, including the duplicate harvest-popup fix
+
+### 1.1.12
+
+* Fixed: harvesting showed the "Harvested Crops" popup **twice**, one modal exactly on top of the other — so Replant looked like it needed two clicks, when the first click was replanting and closing the top popup to reveal its twin. Every page watcher on the same code path was running twice for the same reason, since 1.1.3
 
 ### 1.1.11
 
