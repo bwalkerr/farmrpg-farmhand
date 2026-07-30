@@ -50,7 +50,13 @@ export const getJSON = async <T extends object>(
     mode: "cors",
     credentials: "include",
   });
-  onFetchResponse(response);
+  // No dispatch here: watchQueries' fetch wrapper already ran the interceptors
+  // for this response. Doing it a second time ran every matching interceptor
+  // twice — harmless while the second pass died on an already-consumed body,
+  // but once each interceptor got its own clone (1.1.3) both passes succeeded,
+  // so harvesting fired the "Harvested Crops" popup twice. The two modals sat
+  // exactly on top of each other, so Replant looked like it needed two clicks:
+  // the first one replanted and closed the top popup, revealing its twin.
   return await response.json();
 };
 
