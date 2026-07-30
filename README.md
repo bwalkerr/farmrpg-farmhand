@@ -27,7 +27,7 @@ Fork releases are numbered from **1.1.0** onwards; upstream's own releases are t
 
 #### Perk sets that are actually equipped when it counts
 
-* **Perk set indicator** — a coloured dot and the set's first letter in the bottom stats bar, showing which set you're playing under: gray for Default, orange for an activity set, hollow while a switch is in flight. Tap it for the full state: which set, whether it's verified, and what the perk manager last decided. It sits just after the currency counts, before the Menu button, on phones as well as desktop. It reports what the game has confirmed equipped, not merely what was requested. It replaces upstream's "…perks activated" banners, which pushed the page (and whatever button was under your finger) down each time they appeared.
+* **Perk set indicator** — a coloured dot and the set's name in the bottom stats bar, just after your currency counts, showing which set you're playing under: gray for Default, orange for an activity set, hollow while a switch is in flight. It reports what the game has confirmed equipped, not merely what was requested. It replaces upstream's "…perks activated" banners, which pushed the page (and whatever button was under your finger) down each time they appeared.
 * **Perks stay on while you browse** — an activity set is activated when you reach an activity page and put away when you go home or to your farm. Opening an item, your inventory or a wiki page mid-run leaves your perks alone instead of swapping them out and back.
 * **Farming and Mining perk sets** — upstream supports Crafting/Fishing/Exploring/Selling/Friendship/Temple/Locksmith/Wheel; this fork adds sets named "Farming" and "Mining", the latter covering both the mine list and the dig board.
 * **A shared "Town" set** — if you have a set named "Town" it covers the temple, wheel, locksmith, vault, farmers market and the town hub, so walking between town buildings doesn't re-switch perks at every door. Without one, each building still falls back to its own set.
@@ -49,7 +49,7 @@ Fork releases are numbered from **1.1.0** onwards; upstream's own releases are t
 
 ### Sending fixes back upstream
 
-The fork's history is built as one commit per change on top of upstream `main`, so the fixes that aren't fork-specific can be offered upstream one at a time. None have been submitted yet. In cherry-pick order, each applies to upstream on its own:
+The fork's history is built as one commit per change on top of upstream `main`, so the fixes that aren't fork-specific can be offered upstream one at a time. None have been submitted yet. In cherry-pick order:
 
 | Commit | Fix | Why it's upstream's |
 | --- | --- | --- |
@@ -60,6 +60,7 @@ The fork's history is built as one commit per change on top of upstream `main`, 
 | `dda223d` | Compare release numbers part by part, in order | Version comparison misfires whenever a later part of the candidate exceeds the current release's |
 | `42928ff` | Give each page watcher its own copy of the response | Two watchers on one URL (the farm page has exactly that) meant the second threw "Body has already been consumed" and lost its update |
 | `f68d29c` | Run on www.farmrpg.com, and address the host the page came from | www serves the whole game and doesn't redirect, so the script never ran there; and requests were addressed to a fixed host, which broke alpha.farmrpg.com support the same way |
+| `656ac93` | Hand each response to the page watchers once, not twice | `getJSON` runs the watchers itself on top of the fetch wrapper having already done it, so every watcher on that path fires twice. Upstream is shielded only by the bug above — the second pass loses the race for the response body and dies — so this must be cherry-picked *with* `42928ff`, which removes that shield and makes the duplicate real (upstream's harvest popup would appear twice) |
 | `895efea` | Don't keep live crop, oven and meal status between sessions | A five-second status written to storage lets the previous session's data draw a banner at startup |
 | `d91d299` | Make perk set switching actually land | Same three causes upstream has (drifting active-set cache, the game confirming a switch before applying it, clearing perks racing the next action) — but it exports state the perk indicator consumes, so it pairs with `6f8fd9b` or needs a note |
 
@@ -247,6 +248,14 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.1.13
+
+* Changed: the perk marker is back to its plain desktop shape — the full set name in the bottom bar, and nothing else. The dot-and-letter marker, the tap-for-details panel, the floating fallback and the mobile placement were all built to make the perk manager legible on a phone, where there's no console to read; that work continues on the `mobile` branch (1.2.x), which this branch no longer carries. Nothing about perk switching itself changed
+
+### 1.1.12
+
+* Fixed: harvesting showed the "Harvested Crops" popup **twice**, one modal exactly on top of the other — so Replant looked like it needed two clicks, when the first click was replanting and closing the top popup to reveal its twin. Every page watcher on the same code path was running twice for the same reason, since 1.1.3
 
 ### 1.1.11
 
