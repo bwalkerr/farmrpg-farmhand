@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand (mobile)
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.2.1
+// @version 1.2.2
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -4355,6 +4355,7 @@ exports.inventoryCapWarnings = void 0;
 const theme_1 = __webpack_require__(1178);
 const page_1 = __webpack_require__(7952);
 const requests_1 = __webpack_require__(3300);
+const layout_1 = __webpack_require__(6253);
 const settings_1 = __webpack_require__(126);
 const SETTING_INVENTORY_CAP_WARNINGS = {
     id: settings_1.SettingId.INVENTORY_CAP_WARNINGS,
@@ -4591,6 +4592,18 @@ const learnCurrentLocation = () => {
 };
 const renderCapTracker = () => {
     let box = document.querySelector("#fh-cap-tracker");
+    // Not on a phone. The row is up to 20 item icons wide and the phone's stats
+    // bar has room for the currency counts and the game's own buttons and nothing
+    // else, so wherever it's put it either overflows the bar or pushes the counts
+    // off it. Collapsing it by default would fit, but it isn't what's wanted here:
+    // this branch exists to look at the perk marker on a phone, and the tracker is
+    // the thing crowding it out. The inventory page's own MAX/NEAR badges are a
+    // separate feature and are unaffected — the cap information is still there,
+    // just not in the bar.
+    if ((0, layout_1.isMobileLayout)()) {
+        box === null || box === void 0 ? void 0 : box.remove();
+        return;
+    }
     const key = getLocationKey();
     const learned = key ? locationDrops[key] : undefined;
     // filter to this location's known drops; before a location has been
@@ -4707,6 +4720,10 @@ const scheduleRender = () => {
         renderCapTracker();
     });
 };
+// Crossing the breakpoint changes whether the row is drawn at all, and nothing
+// else would repaint it — so rotating a phone, or dragging a desktop window
+// narrow, would otherwise leave the tracker in whichever shape it mounted in.
+(0, layout_1.onLayoutChange)(scheduleRender);
 const updateFromRoot = (root) => {
     const result = collectCapItems(root);
     if (!result) {
@@ -7296,7 +7313,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.2.1" !== void 0 ? "1.2.1" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.2.2" !== void 0 ? "1.2.2" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -7995,6 +8012,36 @@ const replaceSelect = (proxySelect, options) => {
 exports.replaceSelect = replaceSelect;
 const clearDropdown = () => { var _a; return (_a = document === null || document === void 0 ? void 0 : document.querySelector(".fh-item-selector-menu")) === null || _a === void 0 ? void 0 : _a.remove(); };
 exports.clearDropdown = clearDropdown;
+
+
+/***/ }),
+
+/***/ 6253:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.onLayoutChange = exports.isMobileLayout = exports.MOBILE_MAX_WIDTH = void 0;
+// Where the game switches to its phone layout. 767px is the breakpoint the
+// fork's own navigation styles already use, so anything keyed off this agrees
+// with what the rest of the script considers "mobile".
+//
+// This matters because the bottom stats bar is a fundamentally different space
+// on the two layouts. On a desktop there's room past the currency counts for
+// anything we want to add. On a phone the bar holds the counts and the game's
+// own home and chat buttons and nothing more — so an addition either fits in a
+// few characters or doesn't belong there at all.
+exports.MOBILE_MAX_WIDTH = 767;
+const query = () => window.matchMedia(`(max-width: ${exports.MOBILE_MAX_WIDTH}px)`);
+const isMobileLayout = () => query().matches;
+exports.isMobileLayout = isMobileLayout;
+// Fires when the layout crosses the breakpoint — rotating a phone, or dragging a
+// desktop window narrow. Anything that renders differently on the two layouts
+// has to repaint here, or it keeps whatever shape it happened to mount in.
+const onLayoutChange = (listener) => {
+    query().addEventListener("change", listener);
+};
+exports.onLayoutChange = onLayoutChange;
 
 
 /***/ }),
