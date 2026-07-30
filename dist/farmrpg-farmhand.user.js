@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.11
+// @version 1.1.12
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1779,7 +1779,13 @@ const getJSON = (page, query) => __awaiter(void 0, void 0, void 0, function* () 
         mode: "cors",
         credentials: "include",
     });
-    (0, exports.onFetchResponse)(response);
+    // No dispatch here: watchQueries' fetch wrapper already ran the interceptors
+    // for this response. Doing it a second time ran every matching interceptor
+    // twice — harmless while the second pass died on an already-consumed body,
+    // but once each interceptor got its own clone (1.1.3) both passes succeeded,
+    // so harvesting fired the "Harvested Crops" popup twice. The two modals sat
+    // exactly on top of each other, so Replant looked like it needed two clicks:
+    // the first one replanted and closed the top popup, revealing its twin.
     return yield response.json();
 });
 exports.getJSON = getJSON;
@@ -7290,7 +7296,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.11" !== void 0 ? "1.1.11" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.12" !== void 0 ? "1.1.12" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
