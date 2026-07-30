@@ -1,6 +1,6 @@
 {
   "name": "farmrpg-farmhand",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes",
   "main": "index.js",
   "repository": "git@github.com:bwalkerr/farmrpg-farmhand.git",

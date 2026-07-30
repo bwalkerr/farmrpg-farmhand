@@ -16,7 +16,9 @@ Install this branch's build: <https://raw.githubusercontent.com/bwalkerr/farmrpg
 
 Updates come from this branch: the script's update URLs point at the build above, so your script manager offers `mobile` releases on its own and can never pull the desktop build. It never consults the Greasy Fork release, which is upstream's and would replace this fork entirely.
 
-The `@name` and `@namespace` match the desktop build on purpose, so installing this **replaces** a `reed-mods` install rather than running beside it and firing every feature twice. That also means switching back is a reinstall from the URL above it, not an update.
+This build is named **Farm RPG Farmhand (mobile)**, so your script manager lists it as its own entry next to the desktop build instead of replacing it — which is what comparing the two needs. Switching between them is the manager's enable toggle, not a reinstall.
+
+> ⚠️ **Keep exactly one of them enabled.** Both match `farmrpg.com`, so with both on, every feature runs twice — doubled requests, two harvest popups, the lot. That looks identical to the duplicate-dispatch bug fixed in 1.1.12 and will send you hunting for a code bug that isn't there. There's no runtime guard for it: managers sandbox each script's `window`, so neither copy can reliably see the other.
 
 Version lines are kept apart so a mix-up is visible: `reed-mods` is **1.1.x**, this branch is **1.2.x**, and upstream's own releases are the 1.0.x line.
 
@@ -254,6 +256,10 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.2.1
+
+* Changed: this build is named **Farm RPG Farmhand (mobile)**, so it sits beside the desktop build in your script manager as a separate entry rather than replacing it. Switching between the two is now a toggle instead of a reinstall — but only ever have one enabled, or every feature runs twice
 
 ### 1.2.0
 

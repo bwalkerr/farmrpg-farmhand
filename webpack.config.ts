@@ -155,12 +155,27 @@ const config: Configuration = {
             "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/mobile/dist/farmrpg-farmhand.meta.js",
           downloadURL:
             "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/mobile/dist/farmrpg-farmhand.user.js",
-          // Same @name and @namespace as the desktop build on purpose: userscript
-          // managers key an install on that pair, so installing this one on the
-          // phone REPLACES the reed-mods install rather than running alongside
-          // it. A distinct name would leave both enabled on farmrpg.com and every
-          // feature would fire twice.
-          name: "Farm RPG Farmhand",
+          // Named apart from the desktop build. Userscript managers key an
+          // install on @name + @namespace, so this is what decides whether the
+          // two builds are one entry or two:
+          //
+          //   same name  → installing this REPLACES the reed-mods install, and
+          //                going back is another reinstall
+          //   this way   → two entries side by side, told apart at a glance and
+          //                switched with the manager's enable toggle
+          //
+          // The second is what the debugging actually needs — the whole point is
+          // comparing the two builds — but it comes with a hazard worth stating
+          // plainly: BOTH match farmrpg.com, so if both are enabled at once every
+          // feature runs twice. That looks exactly like the duplicate-dispatch bug
+          // fixed in 1.1.12 (two harvest popups, doubled requests) and would send
+          // you hunting for a code bug that isn't there. Keep exactly one enabled.
+          //
+          // No runtime guard against that: with @grant set, managers give each
+          // script its own sandboxed `window`, so a "one instance already running"
+          // flag isn't reliably visible across the two. The manager's own toggle is
+          // the real protection.
+          name: "Farm RPG Farmhand (mobile)",
           namespace: "https://github.com/anstosa/farmrpg-farmhand",
           connect: ["github.com", "raw.githubusercontent.com"],
           // from package.json
