@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name Farm RPG Farmhand
+// @name Farm RPG Farmhand (mobile)
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.2.0
+// @version 1.2.1
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -7296,7 +7296,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.2.0" !== void 0 ? "1.2.0" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.2.1" !== void 0 ? "1.2.1" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
