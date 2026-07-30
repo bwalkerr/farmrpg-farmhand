@@ -144,10 +144,22 @@ const config: Configuration = {
           // auto-updates to upstream and would have replaced the fork wholesale.
           // Pointing at the fork's own raw dist gets the automatic updates
           // without that risk — nothing here can pull upstream's build.
+          //
+          // This branch tracks ITSELF, not reed-mods: the phone install follows
+          // the mobile work, and the desktop install follows reed-mods, and
+          // neither updater can drag the other branch's build onto the wrong
+          // machine. The version lines are kept apart for the same reason —
+          // reed-mods is 1.1.x, this is 1.2.x — so a mix-up shows up in the
+          // version number instead of silently "updating" sideways.
           updateURL:
-            "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.meta.js",
+            "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/mobile/dist/farmrpg-farmhand.meta.js",
           downloadURL:
-            "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/reed-mods/dist/farmrpg-farmhand.user.js",
+            "https://raw.githubusercontent.com/bwalkerr/farmrpg-farmhand/mobile/dist/farmrpg-farmhand.user.js",
+          // Same @name and @namespace as the desktop build on purpose: userscript
+          // managers key an install on that pair, so installing this one on the
+          // phone REPLACES the reed-mods install rather than running alongside
+          // it. A distinct name would leave both enabled on farmrpg.com and every
+          // feature would fire twice.
           name: "Farm RPG Farmhand",
           namespace: "https://github.com/anstosa/farmrpg-farmhand",
           connect: ["github.com", "raw.githubusercontent.com"],
