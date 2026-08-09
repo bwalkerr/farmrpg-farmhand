@@ -73,7 +73,12 @@ export const mealsStatusState = new CachedState<MealsStatus>(
 const removeFinishedMeals = async (): Promise<void> => {
   const state = await mealsStatusState.get({ doNotFetch: true });
   await mealsStatusState.set({
-    meals: state?.meals.filter((meal) => meal.finishedAt < Date.now()) ?? [],
+    // keep the meals that are STILL RUNNING. This test was the wrong way round
+    // (`<`), so every time a meal's timer came due it kept the meal that had
+    // just finished and threw away the ones still ticking — the "N meals
+    // active" banner then sat there listing an expired meal for the rest of the
+    // session, which is exactly the "it thinks I haven't done it yet" shape.
+    meals: state?.meals.filter((meal) => meal.finishedAt > Date.now()) ?? [],
   });
 };
 

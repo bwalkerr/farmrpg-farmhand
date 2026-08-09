@@ -1,4 +1,8 @@
-import { CachedState, StorageKey } from "../../../utils/state";
+import {
+  CachedState,
+  QueryInterceptor,
+  StorageKey,
+} from "../../../utils/state";
 import { getDocument } from "../../../utils/requests";
 import { getHTML } from "../utils/requests";
 import { Page, WorkerGo } from "~/utils/page";
@@ -91,6 +95,31 @@ const processKitchenPage = (root: HTMLElement): KitchenStatus | undefined => {
 
 const scheduledUpdates: Record<number, NodeJS.Timeout> = {};
 
+// Stirring, tasting and seasoning are what clear "Ovens need attention", and
+// nothing was watching for them: only `seasonmealsall` had an interceptor at all
+// (and the wrong one — a copy of the collect handler, which declared the ovens
+// EMPTY and popped a "meals collected" message for a seasoning). So doing the
+// actions left the status on ATTENTION and the banner nagged for work already
+// done until something else happened to refresh the kitchen.
+//
+// What each oven still needs afterwards is only knowable from the kitchen page,
+// so these re-read it rather than guessing. `ignoreCache` is required: `set()`
+// stamps the state as freshly updated, so a plain `get()` inside five seconds of
+// an action returns the very value we are trying to replace.
+const MEAL_ACTIONS = [
+  WorkerGo.SEASON_MEALS,
+  WorkerGo.STIR_MEALS,
+  WorkerGo.TASTE_MEALS,
+];
+
+const mealActionInterceptors: QueryInterceptor<KitchenStatus, void>[] =
+  MEAL_ACTIONS.map((go) => ({
+    match: [Page.WORKER, new URLSearchParams({ go })],
+    callback: async (state) => {
+      await state.get({ ignoreCache: true });
+    },
+  }));
+
 export const kitchenStatusState = new CachedState<KitchenStatus>(
   StorageKey.KITHCEN_STATUS,
   async () => {
@@ -147,33 +176,14 @@ export const kitchenStatusState = new CachedState<KitchenStatus>(
             status: OvenStatus.EMPTY,
             checkAt: Number.POSITIVE_INFINITY,
           });
+          // Clearing the banner immediately is right, but EMPTY is only a guess:
+          // collect takes the ready meals and leaves anything still cooking, so
+          // confirm against the kitchen page. `ignoreCache` because the `set()`
+          // above just stamped this state as fresh.
+          await state.get({ ignoreCache: true });
         },
       },
-      {
-        match: [
-          Page.WORKER,
-          new URLSearchParams({ go: WorkerGo.SEASON_MEALS }),
-        ],
-        callback: async (state, previous, response) => {
-          const root = await getDocument(response);
-          const successCount =
-            root.body.textContent?.match(/success/g)?.length ?? 0;
-          if (successCount) {
-            showPopup({
-              title: "Success!",
-              contentHTML: `${successCount} meal${
-                successCount === 1 ? "" : "s"
-              } collected`,
-            });
-          }
-          await state.set({
-            ...previous,
-            status: OvenStatus.EMPTY,
-            checkAt: Number.POSITIVE_INFINITY,
-          });
-          await state.get();
-        },
-      },
+      ...mealActionInterceptors,
       {
         match: [Page.WORKER, new URLSearchParams({ go: WorkerGo.COOK_ALL })],
         callback: async (state, previous) => {
