@@ -62,6 +62,7 @@ The fork's history is built as one commit per change on top of upstream `main`, 
 | `f68d29c` | Run on www.farmrpg.com, and address the host the page came from | www serves the whole game and doesn't redirect, so the script never ran there; and requests were addressed to a fixed host, which broke alpha.farmrpg.com support the same way |
 | `656ac93` | Hand each response to the page watchers once, not twice | `getJSON` runs the watchers itself on top of the fetch wrapper having already done it, so every watcher on that path fires twice. Upstream is shielded only by the bug above — the second pass loses the race for the response body and dies — so this must be cherry-picked *with* `42928ff`, which removes that shield and makes the duplicate real (upstream's harvest popup would appear twice) |
 | `895efea` | Don't keep live crop, oven and meal status between sessions | A five-second status written to storage lets the previous session's data draw a banner at startup |
+| `63f7e9c` | Clear "Ovens need attention" when the ovens are attended to | Nothing watches for stirring or tasting at all, and the watcher for seasoning is a copy of the one for collecting — so it empties the ovens and announces "meals collected" for a seasoning. Also fixes the active-meals banner keeping the meal that just expired instead of the ones still running |
 | `d91d299` | Make perk set switching actually land | Same three causes upstream has (drifting active-set cache, the game confirming a switch before applying it, clearing perks racing the next action) — but it exports state the perk indicator consumes, so it pairs with `6f8fd9b` or needs a note |
 
 The rest — sticky activity perks, the Town cluster, the consolidated quick-action set, the cap tracker and the perk indicator — are fork behaviour rather than bug fixes, and are not proposed upstream.
@@ -248,6 +249,16 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.1.15
+
+* Fixed: whether a banner is hidden on its own page — "Meals are ready!" while you're standing in the kitchen — rested on a single page attribute the game is free to rename. The route in the address bar now counts as well, so either one hides it
+
+### 1.1.14
+
+* Fixed: **"Ovens need attention" didn't clear after you attended to them.** Stirring, tasting and seasoning are what settle it, and nothing was watching for any of them. Seasoning had a watcher, but the wrong one — a copy of the collect handler, so seasoning a meal declared the ovens empty and announced "meals collected". All three now re-read the kitchen page, which is the only thing that knows what each oven still needs
+* Fixed: collecting meals assumed every oven was then empty, when it only takes the ones that were ready and leaves the rest cooking. It now confirms against the kitchen page
+* Fixed: the active meals banner listed a meal that had already worn off for the rest of the session — each time a meal's timer came due it kept the one that had just finished and threw away the ones still running
 
 ### 1.1.13
 
