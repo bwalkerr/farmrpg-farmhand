@@ -112,6 +112,18 @@ export const removeNotification = (
   renderNotifications();
 };
 
+// What a banner should look like on the page: its id, colour, text and the
+// labels of its actions. Stamped onto the element as it's drawn, so a later
+// render can tell whether the page already shows the current state instead of
+// just counting how many banners are on it.
+const toSignature = (notification: Notification<any>): string =>
+  [
+    notification.id,
+    notification.class ?? "",
+    notification.text,
+    ...(notification.actions?.map((action) => action.text) ?? []),
+  ].join("|");
+
 const renderNotifications = (force: boolean = false): void => {
   const pageContent = getCurrentPage()?.querySelector(".page-content");
   if (!pageContent) {
@@ -143,9 +155,29 @@ const renderNotifications = (force: boolean = false): void => {
     )
     .toSorted((a, b) => a.id.localeCompare(b.id) || 0);
 
-  // remove existing notifications
-  const notifications = pageContent.querySelectorAll(".fh-notification");
-  if (!force && notifications.length === visibleNotifications.length) {
+  // Skip the rebuild only if what's on the page is what we would draw. This
+  // compared the NUMBER of banners before, which the game's own navigation
+  // defeats: Framework7 keeps the page you came from in the DOM, banners and
+  // all, and re-shows that same element when you go back — so a page you return
+  // to arrives carrying the banners it had when you left. Same count, so the
+  // render bailed out and the old text stayed: "Crops are ready!" after you
+  // harvested, "Ovens need attention" after you attended to them. Whichever
+  // banner was on the page you keep coming back to looked frozen in time, which
+  // is why this seemed to be about one page rather than all of them.
+  const notifications =
+    pageContent.querySelectorAll<HTMLElement>(".fh-notification");
+  // Sorted on both sides so this doesn't quietly depend on the order the elements
+  // go in below (they're prepended, which reverses them). The order itself comes
+  // from the id sort above, so it can't change unless the set does.
+  const rendered = [...notifications]
+    .map((element) => element.dataset.fhSignature ?? "")
+    .toSorted()
+    .join("");
+  const expected = visibleNotifications
+    .map((notification) => toSignature(notification))
+    .toSorted()
+    .join("");
+  if (!force && rendered === expected) {
     return;
   }
   for (const notification of notifications) {
@@ -179,6 +211,7 @@ const renderNotifications = (force: boolean = false): void => {
       notificationElement.classList.add(notification.class);
     }
     notificationElement.textContent = notification.text;
+    notificationElement.dataset.fhSignature = toSignature(notification);
     if (isHandlerNotification(notification)) {
       notificationElement.addEventListener("click", async (event) => {
         event.preventDefault();
