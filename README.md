@@ -62,6 +62,7 @@ The fork's history is built as one commit per change on top of upstream `main`, 
 | `f68d29c` | Run on www.farmrpg.com, and address the host the page came from | www serves the whole game and doesn't redirect, so the script never ran there; and requests were addressed to a fixed host, which broke alpha.farmrpg.com support the same way |
 | `656ac93` | Hand each response to the page watchers once, not twice | `getJSON` runs the watchers itself on top of the fetch wrapper having already done it, so every watcher on that path fires twice. Upstream is shielded only by the bug above — the second pass loses the race for the response body and dies — so this must be cherry-picked *with* `42928ff`, which removes that shield and makes the duplicate real (upstream's harvest popup would appear twice) |
 | `895efea` | Don't keep live crop, oven and meal status between sessions | A five-second status written to storage lets the previous session's data draw a banner at startup |
+| `b501513` | Redraw a banner when what it says changes, not just when the count does | The renderer skips its rebuild on a matching banner *count*, and Framework7 re-shows a cached page with the banners it had when you left it — so any returned-to page can show stale text |
 | `63f7e9c` | Clear "Ovens need attention" when the ovens are attended to | Nothing watches for stirring or tasting at all, and the watcher for seasoning is a copy of the one for collecting — so it empties the ovens and announces "meals collected" for a seasoning. Also fixes the active-meals banner keeping the meal that just expired instead of the ones still running |
 | `d91d299` | Make perk set switching actually land | Same three causes upstream has (drifting active-set cache, the game confirming a switch before applying it, clearing perks racing the next action) — but it exports state the perk indicator consumes, so it pairs with `6f8fd9b` or needs a note |
 
@@ -249,6 +250,10 @@ Do you like Farmhand? Tip me at [@anstosa in-game](https://farmrpg.com/#!/profil
 ## Changelog
 
 *Fork releases are 1.1.0 and up, plus the older 1.0.32–1.0.75 line; 1.0.31 and below are upstream. The fork's history was tidied into modular commits at 1.1.0, so releases up to 1.0.75 no longer have a commit each — the entries below are what each of those releases changed.*
+
+### 1.1.16
+
+* Fixed: a banner could sit there showing what it said the last time you were on that page — "Crops are ready!" after you'd harvested, "Ovens need attention" after you'd attended to them. The redraw was skipped whenever the *number* of banners already on the page matched the number it was about to draw, and the game keeps the page you came from in the DOM with its banners still inside it, then re-shows that same page when you go back. It now compares what the banners actually say
 
 ### 1.1.15
 
