@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.15
+// @version 1.1.16
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -7226,7 +7226,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.15" !== void 0 ? "1.1.15" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.16" !== void 0 ? "1.1.16" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -7994,6 +7994,19 @@ const removeNotification = (notification) => {
     renderNotifications();
 };
 exports.removeNotification = removeNotification;
+// What a banner should look like on the page: its id, colour, text and the
+// labels of its actions. Stamped onto the element as it's drawn, so a later
+// render can tell whether the page already shows the current state instead of
+// just counting how many banners are on it.
+const toSignature = (notification) => {
+    var _a, _b, _c;
+    return [
+        notification.id,
+        (_a = notification.class) !== null && _a !== void 0 ? _a : "",
+        notification.text,
+        ...((_c = (_b = notification.actions) === null || _b === void 0 ? void 0 : _b.map((action) => action.text)) !== null && _c !== void 0 ? _c : []),
+    ].join("|");
+};
 const renderNotifications = (force = false) => {
     var _a, _b, _c, _d, _e, _f, _g;
     const pageContent = (_a = (0, page_1.getCurrentPage)()) === null || _a === void 0 ? void 0 : _a.querySelector(".page-content");
@@ -8022,9 +8035,28 @@ const renderNotifications = (force = false) => {
     const visibleNotifications = state.notifications
         .filter(({ excludePages }) => !(excludePages === null || excludePages === void 0 ? void 0 : excludePages.some((page) => pageIds.has(page))))
         .toSorted((a, b) => a.id.localeCompare(b.id) || 0);
-    // remove existing notifications
+    // Skip the rebuild only if what's on the page is what we would draw. This
+    // compared the NUMBER of banners before, which the game's own navigation
+    // defeats: Framework7 keeps the page you came from in the DOM, banners and
+    // all, and re-shows that same element when you go back — so a page you return
+    // to arrives carrying the banners it had when you left. Same count, so the
+    // render bailed out and the old text stayed: "Crops are ready!" after you
+    // harvested, "Ovens need attention" after you attended to them. Whichever
+    // banner was on the page you keep coming back to looked frozen in time, which
+    // is why this seemed to be about one page rather than all of them.
     const notifications = pageContent.querySelectorAll(".fh-notification");
-    if (!force && notifications.length === visibleNotifications.length) {
+    // Sorted on both sides so this doesn't quietly depend on the order the elements
+    // go in below (they're prepended, which reverses them). The order itself comes
+    // from the id sort above, so it can't change unless the set does.
+    const rendered = [...notifications]
+        .map((element) => { var _a; return (_a = element.dataset.fhSignature) !== null && _a !== void 0 ? _a : ""; })
+        .toSorted()
+        .join("");
+    const expected = visibleNotifications
+        .map((notification) => toSignature(notification))
+        .toSorted()
+        .join("");
+    if (!force && rendered === expected) {
         return;
     }
     for (const notification of notifications) {
@@ -8052,6 +8084,7 @@ const renderNotifications = (force = false) => {
             notificationElement.classList.add(notification.class);
         }
         notificationElement.textContent = notification.text;
+        notificationElement.dataset.fhSignature = toSignature(notification);
         if (isHandlerNotification(notification)) {
             notificationElement.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
                 event.preventDefault();
