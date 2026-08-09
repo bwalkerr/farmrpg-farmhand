@@ -1,5 +1,5 @@
 import { Feature } from "./feature";
-import { getCurrentPage } from "~/utils/page";
+import { getCurrentPage, getHashPage } from "~/utils/page";
 import { isObject } from "./object";
 
 const KEY_NOTIFICATIONS = "notifications";
@@ -127,10 +127,20 @@ const renderNotifications = (force: boolean = false): void => {
   // gives the no-op check below the right number to compare against (against
   // the unfiltered total it could never match on a page with an exclusion, so
   // every render wiped and rebuilt every banner).
+  //
+  // A notification is excluded if EITHER signal says we are on its own page: the
+  // page element's `data-page`, or the route in the address bar. Matching on
+  // `data-page` alone means one attribute the game is free to rename decides
+  // whether "Meals are ready!" is hidden while you are standing in the kitchen —
+  // and when it doesn't match, the banner nags about work you are already there
+  // to do. The perk code stopped trusting that attribute by itself for the same
+  // reason.
   const currentPage = getCurrentPage();
-  const currentPageId = currentPage?.dataset.page ?? "";
+  const pageIds = new Set([currentPage?.dataset.page, getHashPage()]);
   const visibleNotifications = state.notifications
-    .filter(({ excludePages }) => !excludePages?.includes(currentPageId))
+    .filter(
+      ({ excludePages }) => !excludePages?.some((page) => pageIds.has(page))
+    )
     .toSorted((a, b) => a.id.localeCompare(b.id) || 0);
 
   // remove existing notifications

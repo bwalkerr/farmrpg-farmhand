@@ -62,6 +62,16 @@ export const getPage = (): [Page | undefined, URLSearchParams] => {
   return [page, parameters];
 };
 
+// The route the game is currently on, read from the address bar
+// (`#!/kitchen.php` -> `kitchen`). A second opinion on top of `getPage()`, whose
+// `data-page` attribute this fork has found unreliable often enough that the
+// perk code matches several pages by URL instead. Undefined on the shell itself,
+// where there is no route yet.
+export const getHashPage = (): Page | undefined => {
+  const [path] = window.location.hash.replace(/^#!?\/*/, "").split("?");
+  return path ? (path.replace(".php", "") as Page) : undefined;
+};
+
 export const getPreviousPage = (): HTMLElement | null =>
   document.querySelector(".page-on-left");
 
