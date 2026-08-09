@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.13
+// @version 1.1.14
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -718,6 +718,28 @@ const processKitchenPage = (root) => {
     };
 };
 const scheduledUpdates = {};
+// Stirring, tasting and seasoning are what clear "Ovens need attention", and
+// nothing was watching for them: only `seasonmealsall` had an interceptor at all
+// (and the wrong one — a copy of the collect handler, which declared the ovens
+// EMPTY and popped a "meals collected" message for a seasoning). So doing the
+// actions left the status on ATTENTION and the banner nagged for work already
+// done until something else happened to refresh the kitchen.
+//
+// What each oven still needs afterwards is only knowable from the kitchen page,
+// so these re-read it rather than guessing. `ignoreCache` is required: `set()`
+// stamps the state as freshly updated, so a plain `get()` inside five seconds of
+// an action returns the very value we are trying to replace.
+const MEAL_ACTIONS = [
+    page_1.WorkerGo.SEASON_MEALS,
+    page_1.WorkerGo.STIR_MEALS,
+    page_1.WorkerGo.TASTE_MEALS,
+];
+const mealActionInterceptors = MEAL_ACTIONS.map((go) => ({
+    match: [page_1.Page.WORKER, new URLSearchParams({ go })],
+    callback: (state) => __awaiter(void 0, void 0, void 0, function* () {
+        yield state.get({ ignoreCache: true });
+    }),
+}));
 exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_STATUS, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_2.getHTML)(page_1.Page.KITCHEN, new URLSearchParams());
     return processKitchenPage(response.body);
@@ -763,27 +785,14 @@ exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_
                     });
                 }
                 yield state.set(Object.assign(Object.assign({}, previous), { status: OvenStatus.EMPTY, checkAt: Number.POSITIVE_INFINITY }));
+                // Clearing the banner immediately is right, but EMPTY is only a guess:
+                // collect takes the ready meals and leaves anything still cooking, so
+                // confirm against the kitchen page. `ignoreCache` because the `set()`
+                // above just stamped this state as fresh.
+                yield state.get({ ignoreCache: true });
             }),
         },
-        {
-            match: [
-                page_1.Page.WORKER,
-                new URLSearchParams({ go: page_1.WorkerGo.SEASON_MEALS }),
-            ],
-            callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
-                var _a, _b, _c;
-                const root = yield (0, requests_1.getDocument)(response);
-                const successCount = (_c = (_b = (_a = root.body.textContent) === null || _a === void 0 ? void 0 : _a.match(/success/g)) === null || _b === void 0 ? void 0 : _b.length) !== null && _c !== void 0 ? _c : 0;
-                if (successCount) {
-                    (0, popup_1.showPopup)({
-                        title: "Success!",
-                        contentHTML: `${successCount} meal${successCount === 1 ? "" : "s"} collected`,
-                    });
-                }
-                yield state.set(Object.assign(Object.assign({}, previous), { status: OvenStatus.EMPTY, checkAt: Number.POSITIVE_INFINITY }));
-                yield state.get();
-            }),
-        },
+        ...mealActionInterceptors,
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COOK_ALL })],
             callback: (state, previous) => __awaiter(void 0, void 0, void 0, function* () {
@@ -1012,7 +1021,12 @@ const removeFinishedMeals = () => __awaiter(void 0, void 0, void 0, function* ()
     var _a;
     const state = yield exports.mealsStatusState.get({ doNotFetch: true });
     yield exports.mealsStatusState.set({
-        meals: (_a = state === null || state === void 0 ? void 0 : state.meals.filter((meal) => meal.finishedAt < Date.now())) !== null && _a !== void 0 ? _a : [],
+        // keep the meals that are STILL RUNNING. This test was the wrong way round
+        // (`<`), so every time a meal's timer came due it kept the meal that had
+        // just finished and threw away the ones still ticking — the "N meals
+        // active" banner then sat there listing an expired meal for the rest of the
+        // session, which is exactly the "it thinks I haven't done it yet" shape.
+        meals: (_a = state === null || state === void 0 ? void 0 : state.meals.filter((meal) => meal.finishedAt > Date.now())) !== null && _a !== void 0 ? _a : [],
     });
 });
 // automatically remove meals when finished
@@ -7212,7 +7226,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.13" !== void 0 ? "1.1.13" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.14" !== void 0 ? "1.1.14" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
