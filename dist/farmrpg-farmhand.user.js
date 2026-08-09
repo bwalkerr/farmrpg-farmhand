@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.14
+// @version 1.1.15
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -7226,7 +7226,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.14" !== void 0 ? "1.1.14" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.15" !== void 0 ? "1.1.15" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -7995,7 +7995,7 @@ const removeNotification = (notification) => {
 };
 exports.removeNotification = removeNotification;
 const renderNotifications = (force = false) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g;
     const pageContent = (_a = (0, page_1.getCurrentPage)()) === null || _a === void 0 ? void 0 : _a.querySelector(".page-content");
     if (!pageContent) {
         console.error("Page content not found");
@@ -8009,10 +8009,18 @@ const renderNotifications = (force = false) => {
     // gives the no-op check below the right number to compare against (against
     // the unfiltered total it could never match on a page with an exclusion, so
     // every render wiped and rebuilt every banner).
+    //
+    // A notification is excluded if EITHER signal says we are on its own page: the
+    // page element's `data-page`, or the route in the address bar. Matching on
+    // `data-page` alone means one attribute the game is free to rename decides
+    // whether "Meals are ready!" is hidden while you are standing in the kitchen —
+    // and when it doesn't match, the banner nags about work you are already there
+    // to do. The perk code stopped trusting that attribute by itself for the same
+    // reason.
     const currentPage = (0, page_1.getCurrentPage)();
-    const currentPageId = (_b = currentPage === null || currentPage === void 0 ? void 0 : currentPage.dataset.page) !== null && _b !== void 0 ? _b : "";
+    const pageIds = new Set([currentPage === null || currentPage === void 0 ? void 0 : currentPage.dataset.page, (0, page_1.getHashPage)()]);
     const visibleNotifications = state.notifications
-        .filter(({ excludePages }) => !(excludePages === null || excludePages === void 0 ? void 0 : excludePages.includes(currentPageId)))
+        .filter(({ excludePages }) => !(excludePages === null || excludePages === void 0 ? void 0 : excludePages.some((page) => pageIds.has(page))))
         .toSorted((a, b) => a.id.localeCompare(b.id) || 0);
     // remove existing notifications
     const notifications = pageContent.querySelectorAll(".fh-notification");
@@ -8027,10 +8035,10 @@ const renderNotifications = (force = false) => {
         // replace native notification if relevant
         if (notification.replacesHref) {
             const link = currentPage === null || currentPage === void 0 ? void 0 : currentPage.querySelector(`a[href="${notification.replacesHref}"]`);
-            if ((_c = link === null || link === void 0 ? void 0 : link.classList) === null || _c === void 0 ? void 0 : _c.contains("button")) {
+            if ((_b = link === null || link === void 0 ? void 0 : link.classList) === null || _b === void 0 ? void 0 : _b.contains("button")) {
                 link.remove();
             }
-            if ((_e = (_d = link === null || link === void 0 ? void 0 : link.parentElement) === null || _d === void 0 ? void 0 : _d.classList) === null || _e === void 0 ? void 0 : _e.contains("button")) {
+            if ((_d = (_c = link === null || link === void 0 ? void 0 : link.parentElement) === null || _c === void 0 ? void 0 : _c.classList) === null || _d === void 0 ? void 0 : _d.contains("button")) {
                 link.parentElement.remove();
             }
         }
@@ -8062,8 +8070,8 @@ const renderNotifications = (force = false) => {
         else if (isLinkNotification(notification)) {
             notificationElement.setAttribute("href", notification.href);
         }
-        for (const action of (_f = notification.actions) !== null && _f !== void 0 ? _f : []) {
-            notificationElement.append(document.createTextNode(((_g = notification.actions) === null || _g === void 0 ? void 0 : _g.indexOf(action)) === 0 ? " " : " / "));
+        for (const action of (_e = notification.actions) !== null && _e !== void 0 ? _e : []) {
+            notificationElement.append(document.createTextNode(((_f = notification.actions) === null || _f === void 0 ? void 0 : _f.indexOf(action)) === 0 ? " " : " / "));
             const actionElement = document.createElement("a");
             actionElement.classList.add("fh-notification-action");
             actionElement.style.cursor = "pointer";
@@ -8088,7 +8096,7 @@ const renderNotifications = (force = false) => {
             }
             notificationElement.append(actionElement);
         }
-        if ((_h = pageContent.firstElementChild) === null || _h === void 0 ? void 0 : _h.classList.contains("pull-to-refresh-layer")) {
+        if ((_g = pageContent.firstElementChild) === null || _g === void 0 ? void 0 : _g.classList.contains("pull-to-refresh-layer")) {
             pageContent.insertBefore(notificationElement, pageContent.children[1]);
         }
         else {
@@ -8122,7 +8130,7 @@ exports.isObject = isObject;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getListByTitle = exports.getCardByTitle = exports.getTitle = exports.setTitle = exports.getCurrentPage = exports.getPreviousPage = exports.getPage = exports.WorkerGo = exports.Page = void 0;
+exports.getListByTitle = exports.getCardByTitle = exports.getTitle = exports.setTitle = exports.getCurrentPage = exports.getPreviousPage = exports.getHashPage = exports.getPage = exports.WorkerGo = exports.Page = void 0;
 var Page;
 (function (Page) {
     Page["AREA"] = "area";
@@ -8187,6 +8195,16 @@ const getPage = () => {
     return [page, parameters];
 };
 exports.getPage = getPage;
+// The route the game is currently on, read from the address bar
+// (`#!/kitchen.php` -> `kitchen`). A second opinion on top of `getPage()`, whose
+// `data-page` attribute this fork has found unreliable often enough that the
+// perk code matches several pages by URL instead. Undefined on the shell itself,
+// where there is no route yet.
+const getHashPage = () => {
+    const [path] = window.location.hash.replace(/^#!?\/*/, "").split("?");
+    return path ? path.replace(".php", "") : undefined;
+};
+exports.getHashPage = getHashPage;
 const getPreviousPage = () => document.querySelector(".page-on-left");
 exports.getPreviousPage = getPreviousPage;
 const getCurrentPage = () => document.querySelector(".page-on-center, .page-from-right-to-center, .view-main .page:only-child");
