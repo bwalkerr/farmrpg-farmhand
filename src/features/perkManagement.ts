@@ -17,7 +17,7 @@ const SETTING_PERK_MANAGER: FeatureSetting = {
   title: "Perks: Auto manage",
   description: `
     1. Save your default perks set as "Default"<br>
-    2. Save perks for "Crafting", "Farming", "Fishing", "Exploring", "Mining", "Selling", "Friendship", "Temple", "Locksmith", or "Wheel" activities<br>
+    2. Save perks for "Cooking", "Crafting", "Farming", "Fishing", "Exploring", "Mining", "Selling", "Friendship", "Temple", "Locksmith", or "Wheel" activities<br>
     3. Activity perk sets will automatically be enabled for those activities and reverted to "Default" after
   `,
   type: "boolean",
@@ -176,6 +176,15 @@ const getPageActivation = async (
 ): Promise<{ activity: PerkActivity; set: PerkSet } | undefined> => {
   const directMatches: { activity: PerkActivity; matches: boolean }[] = [
     { activity: PerkActivity.CRAFTING, matches: page === Page.WORKSHOP },
+    // The kitchen and the individual ovens (oven.php?num=N) are one activity —
+    // cooking is started and tended from both, and bouncing between the list and
+    // an oven shouldn't swap sets. Neither is a resting page, so with no
+    // "Cooking" set this resolves to nothing and the perks are simply left as
+    // they are, exactly like any other non-activity page.
+    {
+      activity: PerkActivity.COOKING,
+      matches: page === Page.KITCHEN || page === Page.OVEN,
+    },
     // location.php's own type wins over the page id, and is checked first, so a
     // fishing spot can't be mistaken for an explore area (see getLocationType)
     {

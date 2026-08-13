@@ -9,6 +9,7 @@ import { getListByTitle, Page, WorkerGo } from "../../../utils/page";
 
 export enum PerkActivity {
   DEFAULT = "Default",
+  COOKING = "Cooking",
   CRAFTING = "Crafting",
   FISHING = "Fishing",
   EXPLORING = "Exploring",
