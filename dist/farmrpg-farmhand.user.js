@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.16
+// @version 1.1.17
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -729,17 +729,40 @@ const scheduledUpdates = {};
 // so these re-read it rather than guessing. `ignoreCache` is required: `set()`
 // stamps the state as freshly updated, so a plain `get()` inside five seconds of
 // an action returns the very value we are trying to replace.
-const MEAL_ACTIONS = [
-    page_1.WorkerGo.SEASON_MEALS,
-    page_1.WorkerGo.STIR_MEALS,
-    page_1.WorkerGo.TASTE_MEALS,
-];
-const mealActionInterceptors = MEAL_ACTIONS.map((go) => ({
-    match: [page_1.Page.WORKER, new URLSearchParams({ go })],
-    callback: (state) => __awaiter(void 0, void 0, void 0, function* () {
-        yield state.get({ ignoreCache: true });
-    }),
-}));
+//
+// Watching the three names WorkerGo knows only covers the kitchen list's "all"
+// buttons. The same work is done one oven at a time from oven.php?num=N, whose
+// actions have different names that aren't in WorkerGo at all — so tending or
+// collecting an oven from its own page left the status untouched and the banner
+// still asking for it. Rather than guess at names, this matches any oven-shaped
+// worker action, which also covers whatever the game adds next.
+const MEAL_ACTION_PATTERN = /cook|meal|season|stir|taste/;
+// these two have interceptors of their own below, which do more than re-read
+const OWN_INTERCEPTORS = new Set([
+    page_1.WorkerGo.COLLECT_ALL_MEALS,
+    page_1.WorkerGo.COOK_ALL,
+]);
+let scheduledMealRefresh;
+const mealActionInterceptor = {
+    // every worker action, filtered in the callback (the match only compares the
+    // keys it's given, so an empty query matches them all)
+    match: [page_1.Page.WORKER, new URLSearchParams()],
+    callback: (state, previous, response) => {
+        var _a;
+        const [, query] = (0, requests_2.parseUrl)(response.url);
+        const go = (_a = query.get("go")) !== null && _a !== void 0 ? _a : "";
+        if (!MEAL_ACTION_PATTERN.test(go) || OWN_INTERCEPTORS.has(go)) {
+            return Promise.resolve();
+        }
+        // Tending an oven is a burst of clicks, and each one would otherwise cost a
+        // kitchen page read; wait for the burst to finish and read once.
+        clearTimeout(scheduledMealRefresh);
+        scheduledMealRefresh = setTimeout(() => {
+            state.get({ ignoreCache: true });
+        }, 600);
+        return Promise.resolve();
+    },
+};
 exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_STATUS, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_2.getHTML)(page_1.Page.KITCHEN, new URLSearchParams());
     return processKitchenPage(response.body);
@@ -792,7 +815,7 @@ exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_
                 yield state.get({ ignoreCache: true });
             }),
         },
-        ...mealActionInterceptors,
+        mealActionInterceptor,
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COOK_ALL })],
             callback: (state, previous) => __awaiter(void 0, void 0, void 0, function* () {
@@ -1182,6 +1205,7 @@ const page_1 = __webpack_require__(7952);
 var PerkActivity;
 (function (PerkActivity) {
     PerkActivity["DEFAULT"] = "Default";
+    PerkActivity["COOKING"] = "Cooking";
     PerkActivity["CRAFTING"] = "Crafting";
     PerkActivity["FISHING"] = "Fishing";
     PerkActivity["EXPLORING"] = "Exploring";
@@ -5051,19 +5075,19 @@ const renderOvens = (settings, state) => __awaiter(void 0, void 0, void 0, funct
     }
     else if (state.status === kitchen_1.OvenStatus.ATTENTION &&
         settings[settings_1.SettingId.ATTENTION_NOTIFICATIONS]) {
-        const state = yield kitchen_1.kitchenStatusState.get();
-        if (settings[settings_1.SettingId.ATTENTION_NOTIFICATIONS] || (state === null || state === void 0 ? void 0 : state.allReady)) {
-            (0, notifications_1.sendNotification)({
-                class: "btnorange",
-                id: notifications_1.NotificationId.OVEN,
-                text: "Ovens need attention",
-                href: (0, requests_1.toUrl)(page_1.Page.KITCHEN, new URLSearchParams()),
-                excludePages: [page_1.Page.KITCHEN],
-            });
-        }
-        else {
-            (0, notifications_1.removeNotification)(notifications_1.NotificationId.OVEN);
-        }
+        // This re-read the state it had just been handed, from inside that state's
+        // own update listener, to decide something the condition above has already
+        // decided: the test was `settings[ATTENTION_NOTIFICATIONS] || allReady`
+        // inside a branch that requires ATTENTION_NOTIFICATIONS, so it was always
+        // true. (It reads as an attempt to honour the "all actions" setting, which
+        // is a separate matter — see SETTING_ATTENTION_VERBOSE, still unused.)
+        (0, notifications_1.sendNotification)({
+            class: "btnorange",
+            id: notifications_1.NotificationId.OVEN,
+            text: "Ovens need attention",
+            href: (0, requests_1.toUrl)(page_1.Page.KITCHEN, new URLSearchParams()),
+            excludePages: [page_1.Page.KITCHEN],
+        });
     }
     else if (state.status === kitchen_1.OvenStatus.READY &&
         settings[settings_1.SettingId.KITCHEN_COMPLETE_NOTIFICATIONS]) {
@@ -6262,7 +6286,7 @@ const SETTING_PERK_MANAGER = {
     title: "Perks: Auto manage",
     description: `
     1. Save your default perks set as "Default"<br>
-    2. Save perks for "Crafting", "Farming", "Fishing", "Exploring", "Mining", "Selling", "Friendship", "Temple", "Locksmith", or "Wheel" activities<br>
+    2. Save perks for "Cooking", "Crafting", "Farming", "Fishing", "Exploring", "Mining", "Selling", "Friendship", "Temple", "Locksmith", or "Wheel" activities<br>
     3. Activity perk sets will automatically be enabled for those activities and reverted to "Default" after
   `,
     type: "boolean",
@@ -6395,6 +6419,15 @@ const installQuickActionProxy = (nativeSelector, label) => {
 const getPageActivation = (page) => __awaiter(void 0, void 0, void 0, function* () {
     const directMatches = [
         { activity: perks_1.PerkActivity.CRAFTING, matches: page === page_1.Page.WORKSHOP },
+        // The kitchen and the individual ovens (oven.php?num=N) are one activity —
+        // cooking is started and tended from both, and bouncing between the list and
+        // an oven shouldn't swap sets. Neither is a resting page, so with no
+        // "Cooking" set this resolves to nothing and the perks are simply left as
+        // they are, exactly like any other non-activity page.
+        {
+            activity: perks_1.PerkActivity.COOKING,
+            matches: page === page_1.Page.KITCHEN || page === page_1.Page.OVEN,
+        },
         // location.php's own type wins over the page id, and is checked first, so a
         // fishing spot can't be mistaken for an explore area (see getLocationType)
         {
@@ -7226,7 +7259,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.16" !== void 0 ? "1.1.16" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.17" !== void 0 ? "1.1.17" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -8031,6 +8064,27 @@ const renderNotifications = (force = false) => {
     // to do. The perk code stopped trusting that attribute by itself for the same
     // reason.
     const currentPage = (0, page_1.getCurrentPage)();
+    // Banners belong to the page you are looking at, and only that one. Framework7
+    // keeps the page you came from in the DOM — banners and all — so every render
+    // left a second, frozen copy sitting in a hidden page, ready to be shown again
+    // the moment you navigated back. Since this render only ever touches the
+    // current page's own container, those copies were never corrected or cleared;
+    // they are the "banner that won't go away" when the thing it announced is long
+    // since done. Sweep them on every render: whatever the page you land on should
+    // be showing is drawn below.
+    //
+    // Scoped to the main view, and skipped entirely if the page we're drawing
+    // into isn't in it: getCurrentPage() searches the whole document, and the
+    // side panel holds a view of its own whose pages carry the same classes. If
+    // that ever wins, drawing into the panel is the old, harmless mistake —
+    // sweeping the real page's banners on the way there would not be.
+    if (pageContent.closest(".view-main")) {
+        for (const stray of document.querySelectorAll(".view-main .fh-notification")) {
+            if (!pageContent.contains(stray)) {
+                stray.remove();
+            }
+        }
+    }
     const pageIds = new Set([currentPage === null || currentPage === void 0 ? void 0 : currentPage.dataset.page, (0, page_1.getHashPage)()]);
     const visibleNotifications = state.notifications
         .filter(({ excludePages }) => !(excludePages === null || excludePages === void 0 ? void 0 : excludePages.some((page) => pageIds.has(page))))
@@ -8137,7 +8191,49 @@ const renderNotifications = (force = false) => {
         }
     }
 };
+// Re-draw when the game slides a different page into view. onPageLoad is driven
+// by a childList observer, so it only fires when a page element is ADDED —
+// which going BACK doesn't do: Framework7 keeps the previous page in the DOM and
+// re-shows it by changing its class. So on back-navigation nothing here ran, and
+// the page arrived showing whatever banners it had when you left it, with no
+// render to correct them. Watching the class instead catches every transition,
+// forward and back.
+//
+// Cheap to be wrong about: a render whose result matches what's already drawn
+// returns without touching the DOM.
+let renderTimeout;
+const scheduleRender = () => {
+    clearTimeout(renderTimeout);
+    renderTimeout = setTimeout(() => renderNotifications(), 100);
+};
+const watchPageTransitions = () => {
+    const pages = document.querySelector(".view-main .pages");
+    if (!pages) {
+        console.error("Pages not found");
+        return;
+    }
+    const observer = new MutationObserver((mutations) => {
+        var _a, _b;
+        for (const mutation of mutations) {
+            // Only a page's own class, never a descendant's: with subtree watching,
+            // the classes this render puts on the banners it creates would otherwise
+            // schedule another render, and so on.
+            if ((_b = (_a = mutation.target).matches) === null || _b === void 0 ? void 0 : _b.call(_a, ".page")) {
+                scheduleRender();
+                return;
+            }
+        }
+    });
+    observer.observe(pages, {
+        attributeFilter: ["class"],
+        attributes: true,
+        subtree: true,
+    });
+};
 exports.notifications = {
+    onInitialize: () => {
+        watchPageTransitions();
+    },
     onPageLoad: () => {
         setTimeout(renderNotifications, 500);
     },
@@ -8181,6 +8277,7 @@ var Page;
     Page["LOCKSMITH"] = "locksmith";
     Page["MAILBOX"] = "mailbox";
     Page["MINING"] = "mining";
+    Page["OVEN"] = "oven";
     Page["PASTURE"] = "pasture";
     Page["PERKS"] = "perks";
     Page["PETS"] = "allpetitems";
