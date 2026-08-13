@@ -96,18 +96,19 @@ const renderOvens = async (
     state.status === OvenStatus.ATTENTION &&
     settings[SettingId.ATTENTION_NOTIFICATIONS]
   ) {
-    const state = await kitchenStatusState.get();
-    if (settings[SettingId.ATTENTION_NOTIFICATIONS] || state?.allReady) {
-      sendNotification({
-        class: "btnorange",
-        id: NotificationId.OVEN,
-        text: "Ovens need attention",
-        href: toUrl(Page.KITCHEN, new URLSearchParams()),
-        excludePages: [Page.KITCHEN],
-      });
-    } else {
-      removeNotification(NotificationId.OVEN);
-    }
+    // This re-read the state it had just been handed, from inside that state's
+    // own update listener, to decide something the condition above has already
+    // decided: the test was `settings[ATTENTION_NOTIFICATIONS] || allReady`
+    // inside a branch that requires ATTENTION_NOTIFICATIONS, so it was always
+    // true. (It reads as an attempt to honour the "all actions" setting, which
+    // is a separate matter — see SETTING_ATTENTION_VERBOSE, still unused.)
+    sendNotification({
+      class: "btnorange",
+      id: NotificationId.OVEN,
+      text: "Ovens need attention",
+      href: toUrl(Page.KITCHEN, new URLSearchParams()),
+      excludePages: [Page.KITCHEN],
+    });
   } else if (
     state.status === OvenStatus.READY &&
     settings[SettingId.KITCHEN_COMPLETE_NOTIFICATIONS]

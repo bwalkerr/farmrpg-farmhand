@@ -4,7 +4,7 @@ import {
   StorageKey,
 } from "../../../utils/state";
 import { getDocument } from "../../../utils/requests";
-import { getHTML } from "../utils/requests";
+import { getHTML, parseUrl } from "../utils/requests";
 import { Page, WorkerGo } from "~/utils/page";
 import { showPopup } from "~/utils/popup";
 import { timestampToDate } from "../utils/time";
@@ -106,19 +106,42 @@ const scheduledUpdates: Record<number, NodeJS.Timeout> = {};
 // so these re-read it rather than guessing. `ignoreCache` is required: `set()`
 // stamps the state as freshly updated, so a plain `get()` inside five seconds of
 // an action returns the very value we are trying to replace.
-const MEAL_ACTIONS = [
-  WorkerGo.SEASON_MEALS,
-  WorkerGo.STIR_MEALS,
-  WorkerGo.TASTE_MEALS,
-];
+//
+// Watching the three names WorkerGo knows only covers the kitchen list's "all"
+// buttons. The same work is done one oven at a time from oven.php?num=N, whose
+// actions have different names that aren't in WorkerGo at all — so tending or
+// collecting an oven from its own page left the status untouched and the banner
+// still asking for it. Rather than guess at names, this matches any oven-shaped
+// worker action, which also covers whatever the game adds next.
+const MEAL_ACTION_PATTERN = /cook|meal|season|stir|taste/;
 
-const mealActionInterceptors: QueryInterceptor<KitchenStatus, void>[] =
-  MEAL_ACTIONS.map((go) => ({
-    match: [Page.WORKER, new URLSearchParams({ go })],
-    callback: async (state) => {
-      await state.get({ ignoreCache: true });
-    },
-  }));
+// these two have interceptors of their own below, which do more than re-read
+const OWN_INTERCEPTORS = new Set<string>([
+  WorkerGo.COLLECT_ALL_MEALS,
+  WorkerGo.COOK_ALL,
+]);
+
+let scheduledMealRefresh: NodeJS.Timeout | undefined;
+
+const mealActionInterceptor: QueryInterceptor<KitchenStatus, void> = {
+  // every worker action, filtered in the callback (the match only compares the
+  // keys it's given, so an empty query matches them all)
+  match: [Page.WORKER, new URLSearchParams()],
+  callback: (state, previous, response) => {
+    const [, query] = parseUrl(response.url);
+    const go = query.get("go") ?? "";
+    if (!MEAL_ACTION_PATTERN.test(go) || OWN_INTERCEPTORS.has(go)) {
+      return Promise.resolve();
+    }
+    // Tending an oven is a burst of clicks, and each one would otherwise cost a
+    // kitchen page read; wait for the burst to finish and read once.
+    clearTimeout(scheduledMealRefresh);
+    scheduledMealRefresh = setTimeout(() => {
+      state.get({ ignoreCache: true });
+    }, 600);
+    return Promise.resolve();
+  },
+};
 
 export const kitchenStatusState = new CachedState<KitchenStatus>(
   StorageKey.KITHCEN_STATUS,
@@ -183,7 +206,7 @@ export const kitchenStatusState = new CachedState<KitchenStatus>(
           await state.get({ ignoreCache: true });
         },
       },
-      ...mealActionInterceptors,
+      mealActionInterceptor,
       {
         match: [Page.WORKER, new URLSearchParams({ go: WorkerGo.COOK_ALL })],
         callback: async (state, previous) => {
