@@ -148,6 +148,31 @@ const renderNotifications = (force: boolean = false): void => {
   // to do. The perk code stopped trusting that attribute by itself for the same
   // reason.
   const currentPage = getCurrentPage();
+
+  // Banners belong to the page you are looking at, and only that one. Framework7
+  // keeps the page you came from in the DOM — banners and all — so every render
+  // left a second, frozen copy sitting in a hidden page, ready to be shown again
+  // the moment you navigated back. Since this render only ever touches the
+  // current page's own container, those copies were never corrected or cleared;
+  // they are the "banner that won't go away" when the thing it announced is long
+  // since done. Sweep them on every render: whatever the page you land on should
+  // be showing is drawn below.
+  //
+  // Scoped to the main view, and skipped entirely if the page we're drawing
+  // into isn't in it: getCurrentPage() searches the whole document, and the
+  // side panel holds a view of its own whose pages carry the same classes. If
+  // that ever wins, drawing into the panel is the old, harmless mistake —
+  // sweeping the real page's banners on the way there would not be.
+  if (pageContent.closest(".view-main")) {
+    for (const stray of document.querySelectorAll<HTMLElement>(
+      ".view-main .fh-notification"
+    )) {
+      if (!pageContent.contains(stray)) {
+        stray.remove();
+      }
+    }
+  }
+
   const pageIds = new Set([currentPage?.dataset.page, getHashPage()]);
   const visibleNotifications = state.notifications
     .filter(
@@ -269,7 +294,54 @@ const renderNotifications = (force: boolean = false): void => {
   }
 };
 
+// Re-draw when the game slides a different page into view. onPageLoad is driven
+// by a childList observer, so it only fires when a page element is ADDED —
+// which going BACK doesn't do: Framework7 keeps the previous page in the DOM and
+// re-shows it by changing its class. So on back-navigation nothing here ran, and
+// the page arrived showing whatever banners it had when you left it, with no
+// render to correct them. Watching the class instead catches every transition,
+// forward and back.
+//
+// Cheap to be wrong about: a render whose result matches what's already drawn
+// returns without touching the DOM.
+let renderTimeout: number | undefined;
+
+const scheduleRender = (): void => {
+  clearTimeout(renderTimeout);
+  renderTimeout = setTimeout(
+    () => renderNotifications(),
+    100
+  ) as unknown as number;
+};
+
+const watchPageTransitions = (): void => {
+  const pages = document.querySelector(".view-main .pages");
+  if (!pages) {
+    console.error("Pages not found");
+    return;
+  }
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      // Only a page's own class, never a descendant's: with subtree watching,
+      // the classes this render puts on the banners it creates would otherwise
+      // schedule another render, and so on.
+      if ((mutation.target as HTMLElement).matches?.(".page")) {
+        scheduleRender();
+        return;
+      }
+    }
+  });
+  observer.observe(pages, {
+    attributeFilter: ["class"],
+    attributes: true,
+    subtree: true,
+  });
+};
+
 export const notifications: Feature = {
+  onInitialize: () => {
+    watchPageTransitions();
+  },
   onPageLoad: () => {
     setTimeout(renderNotifications, 500);
   },
