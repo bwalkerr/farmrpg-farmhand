@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.27
+// @version 1.1.28
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -428,7 +428,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.craftworksState = void 0;
+exports.restoreQueue = exports.activateSet = exports.craftworksState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3300);
 const craftworks_1 = __webpack_require__(7831);
@@ -455,6 +455,81 @@ exports.craftworksState = new state_1.CachedState(state_1.StorageKey.CRAFTWORKS,
 }), {
     timeout: 5 * 60, // 5 minutes
 });
+// worker.php answers these with a bare word ("success", "cannotadd"), not JSON
+// or HTML, so this goes through fetch directly. It still passes through the
+// patched window.fetch, so the usual interceptors observe it.
+const postWorker = (query) => __awaiter(void 0, void 0, void 0, function* () {
+    const response = yield fetch((0, requests_1.toUrl)(page_1.Page.WORKER, query), {
+        credentials: "include",
+        method: "POST",
+        mode: "cors",
+    });
+    const text = yield response.text();
+    return text.trim();
+});
+// Load a saved set from anywhere, the way the perk manager loads a perk set.
+//
+// The game's own button fires `removeallcw` fire-and-forget, waits a fixed
+// 500ms, then activates — so a failed activation leaves the queue wiped with
+// nothing to restore it. This awaits the wipe, refuses to continue if it did
+// not come back, and hands the caller the previous queue either way so a
+// failure can be walked back. That is why it is worth reimplementing here
+// rather than forwarding a click: the copy is strictly safer than the original.
+const activateSet = (setId, previous) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        yield postWorker(new URLSearchParams({ go: "removeallcw" }));
+    }
+    catch (_a) {
+        // nothing was wiped, so nothing is lost
+        return {
+            message: "Could not clear the queue; nothing was changed.",
+            ok: false,
+            previous,
+        };
+    }
+    try {
+        const result = yield postWorker(new URLSearchParams({ go: "activatecwset", id: setId }));
+        if (result !== "success") {
+            return {
+                message: `The queue was cleared but the set did not load (${result || "no response"}).`,
+                ok: false,
+                previous,
+            };
+        }
+    }
+    catch (_b) {
+        return {
+            message: "The queue was cleared but the set did not load.",
+            ok: false,
+            previous,
+        };
+    }
+    yield exports.craftworksState.get({ ignoreCache: true });
+    return { message: "Set loaded.", ok: true, previous };
+});
+exports.activateSet = activateSet;
+// Put a queue back, in order. Appending each item to the bottom reproduces the
+// original order without needing the reorder endpoint.
+const restoreQueue = (slots) => __awaiter(void 0, void 0, void 0, function* () {
+    let restored = 0;
+    for (const slot of slots) {
+        if (!slot.id) {
+            continue;
+        }
+        try {
+            const result = yield postWorker(new URLSearchParams({ go: "addcwitem", id: slot.id, pos: "bot" }));
+            if (result === "success") {
+                restored += 1;
+            }
+        }
+        catch (_a) {
+            break;
+        }
+    }
+    yield exports.craftworksState.get({ ignoreCache: true });
+    return restored;
+});
+exports.restoreQueue = restoreQueue;
 
 
 /***/ }),
@@ -2749,10 +2824,10 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.briefingPanel = void 0;
+const craftworks_1 = __webpack_require__(920);
 const goals_1 = __webpack_require__(1267);
-const craftworks_1 = __webpack_require__(7831);
+const craftworks_2 = __webpack_require__(7831);
 const theme_1 = __webpack_require__(1178);
-const craftworks_2 = __webpack_require__(920);
 const recipes_1 = __webpack_require__(498);
 const api_1 = __webpack_require__(3413);
 const suggestions_1 = __webpack_require__(9262);
@@ -2994,7 +3069,7 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
     const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_a = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _a !== void 0 ? _a : ""));
     const [snapshot, craftworks, quests, goals, mastery, basicItems] = yield Promise.all([
         (0, promise_1.orUndefined)(inventory_1.inventoryState.get({ ignoreCache: force })),
-        (0, promise_1.orUndefined)(craftworks_2.craftworksState.get({ ignoreCache: force })),
+        (0, promise_1.orUndefined)(craftworks_1.craftworksState.get({ ignoreCache: force })),
         fetchActiveQuests(),
         (0, goals_1.getGoals)(),
         (0, promise_1.orUndefined)(mastery_1.masteryState.get({ ignoreCache: force })),
@@ -3003,7 +3078,7 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
     const inventory = (_b = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _b !== void 0 ? _b : {};
     const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
     const advice = craftworks
-        ? (0, craftworks_1.adviseOnSlots)(craftworks.slots, cap, unlimited)
+        ? (0, craftworks_2.adviseOnSlots)(craftworks.slots, cap, unlimited)
         : undefined;
     const questGoals = quests ? yield (0, quests_1.getQuestGoals)(quests) : undefined;
     const graph = yield (0, recipes_1.gatherRecipeGraph)([
@@ -3207,7 +3282,7 @@ const renderSuggestions = (body, context, rerender) => {
         body.append(row);
     }
 };
-const renderCraftworks = (body, context) => {
+const renderCraftworks = (body, context, reload) => {
     var _a, _b;
     const { advice, cap, craftworks, goals, graph, inventory, mastery, unlimited, } = context;
     if (!advice || !craftworks) {
@@ -3252,6 +3327,7 @@ const renderCraftworks = (body, context) => {
     if (active) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`active set: ${active.name}`]));
     }
+    renderSetLoader(body, context, reload);
     const frozen = (0, suggestions_1.getFrozenMastery)(mastery, inventory, cap);
     if (frozen.length > 0) {
         body.append(makeHeading("Mastery frozen at cap"));
@@ -3276,7 +3352,7 @@ const renderCraftworks = (body, context) => {
         : advice.roots
             .filter((root) => { var _a; return (_a = graph.nodes.get(root.name)) === null || _a === void 0 ? void 0 : _a.canCraft; })
             .map((root) => ({ name: root.name, quantity: 1 }));
-    const suggestions = (0, craftworks_1.suggestQueueChanges)(desired, craftworks.slots, inventory, cap, maxSlots, unlimited);
+    const suggestions = (0, craftworks_2.suggestQueueChanges)(desired, craftworks.slots, inventory, cap, maxSlots, unlimited);
     if (suggestions.length > 0) {
         body.append(makeHeading("Suggested changes"));
         for (const suggestion of suggestions) {
@@ -3293,6 +3369,59 @@ const renderCraftworks = (body, context) => {
             ]));
         }
     }
+};
+// Loading a set is destructive: it clears the queue first. So it takes two
+// presses -- the second one states exactly how many items it will clear -- and
+// on failure it offers to put the old queue back, which the game's own button
+// cannot do because it never knew what was there.
+const renderSetLoader = (body, context, reload) => {
+    const { craftworks, goals, itemNames } = context;
+    if (!craftworks) {
+        return;
+    }
+    const recommended = (0, suggestions_1.getRecommendedSet)(goals, craftworks.sets, itemNames);
+    if (!recommended) {
+        return;
+    }
+    const line = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
+        `“${recommended.name}” matches your ${recommended.goalName} goal — `,
+    ]);
+    const action = document.createElement("a");
+    action.href = "#";
+    action.style.color = theme_1.TEXT_SUCCESS;
+    action.style.textDecoration = "underline";
+    action.textContent = "load it";
+    let armed = false;
+    action.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!armed) {
+            armed = true;
+            action.textContent = `confirm — clears ${craftworks.slots.length} item${craftworks.slots.length === 1 ? "" : "s"}`;
+            action.style.color = theme_1.TEXT_WARNING;
+            return;
+        }
+        action.textContent = "loading…";
+        action.style.color = theme_1.TEXT_GRAY;
+        const result = yield (0, craftworks_1.activateSet)(recommended.id, craftworks.slots);
+        if (result.ok) {
+            reload();
+            return;
+        }
+        line.append((0, gameLinks_1.makeMutedText)(` ${result.message}`));
+        action.textContent = "put the old queue back";
+        action.style.color = theme_1.TEXT_ERROR;
+        action.addEventListener("click", (undoEvent) => __awaiter(void 0, void 0, void 0, function* () {
+            undoEvent.preventDefault();
+            undoEvent.stopPropagation();
+            action.textContent = "restoring…";
+            const restored = yield (0, craftworks_1.restoreQueue)(result.previous);
+            action.textContent = `restored ${restored} of ${result.previous.length}`;
+            reload();
+        }), { once: true });
+    }));
+    line.append(action);
+    body.append(line);
 };
 // One button and one panel for the whole session, hung off document.body.
 //
@@ -3349,7 +3478,7 @@ const ensurePanel = () => {
             });
         }
         else {
-            renderCraftworks(body, context);
+            renderCraftworks(body, context, () => load(true));
         }
     };
     const load = (force) => __awaiter(void 0, void 0, void 0, function* () {
@@ -3421,12 +3550,12 @@ const ensurePanel = () => {
 const primeBadge = () => __awaiter(void 0, void 0, void 0, function* () {
     const [snapshot, craftworks] = yield Promise.all([
         (0, promise_1.orUndefined)(inventory_1.inventoryState.get({ doNotFetch: true })),
-        (0, promise_1.orUndefined)(craftworks_2.craftworksState.get({ doNotFetch: true })),
+        (0, promise_1.orUndefined)(craftworks_1.craftworksState.get({ doNotFetch: true })),
     ]);
     if (!craftworks) {
         return;
     }
-    const advice = (0, craftworks_1.adviseOnSlots)(craftworks.slots, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap);
+    const advice = (0, craftworks_2.adviseOnSlots)(craftworks.slots, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap);
     setBadge(advice.dead.length + advice.ordering.length);
 });
 exports.briefingPanel = {
@@ -9152,7 +9281,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.27" !== void 0 ? "1.1.27" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.28" !== void 0 ? "1.1.28" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
