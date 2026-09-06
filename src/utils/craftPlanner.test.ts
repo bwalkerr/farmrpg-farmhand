@@ -6,6 +6,11 @@ import {
   suggestQueueChanges,
 } from "./craftworks";
 import {
+  getFrozenMastery,
+  getMasterySuggestions,
+  getQuestSuggestions,
+} from "./suggestions";
+import {
   getGoalStatuses,
   getNearlyDone,
   Goal,
@@ -20,6 +25,7 @@ import {
   RecipeNode,
 } from "./craftPlanner";
 import { Item } from "~/api/buddyfarm/types";
+import { MasteryEntry } from "~/api/farmrpg/apis/mastery";
 import { parseUnlimitedItems } from "./unlimited";
 
 let failures = 0;
@@ -546,6 +552,95 @@ console.info("suggestQueueChanges");
       8
     ).filter((entry) => entry.action === "add").length,
     0
+  );
+}
+
+console.info("mastery suggestions: Reed's real mastery page, cap 1032");
+{
+  const entry = (
+    name: string,
+    value: number,
+    required: number
+  ): MasteryEntry => ({
+    name,
+    remaining: required - value,
+    required,
+    tier: "t2",
+    value,
+  });
+  // taken from the live page: Twine is a hair from tier V but sits at the cap
+  const entries = [
+    entry("Cave Paste", 99, 100),
+    entry("Twine", 93_093, 100_000),
+    entry("Sunflower Oil", 9, 10),
+    entry("Iron Ring", 160_964, 1_000_000),
+  ];
+  const inventory = { "Iron Ring": 1032, Twine: 1032 };
+
+  // Twine is 93% done and Iron Ring 16%, but Twine needs 6,907 more and Iron
+  // Ring 839,036 — ranking on percentage would put Twine behind Cave Paste's
+  // single remaining unit, which is the wrong advice
+  check(
+    "ranked by units left, not percentage",
+    getMasterySuggestions(entries, inventory, 1032, []).map(
+      (suggestion) => suggestion.name
+    ),
+    ["Cave Paste", "Sunflower Oil", "Twine", "Iron Ring"]
+  );
+  check(
+    "capped items are flagged frozen",
+    getMasterySuggestions(entries, inventory, 1032, [])
+      .filter((suggestion) => suggestion.isFrozen)
+      .map((suggestion) => suggestion.name),
+    ["Twine", "Iron Ring"]
+  );
+  check(
+    "already-tracked items are not suggested again",
+    getMasterySuggestions(entries, inventory, 1032, [
+      { addedAt: 0, name: "Cave Paste", quantity: 1 },
+    ]).some((suggestion) => suggestion.name === "Cave Paste"),
+    false
+  );
+  check(
+    "frozen mastery is the at-cap intersection, nearest first",
+    getFrozenMastery(entries, inventory, 1032).map((item) => item.name),
+    ["Twine", "Iron Ring"]
+  );
+  check(
+    "without a known cap nothing is called frozen",
+    getFrozenMastery(entries, inventory, undefined).length,
+    0
+  );
+}
+
+console.info("quest suggestions ask for the shortfall, not the requirement");
+{
+  const questGoals: Goal[] = [
+    {
+      kind: "quest",
+      label: "Green Alchemy XIII",
+      needs: [{ name: "Emerald", quantity: 500 }],
+    },
+    {
+      kind: "quest",
+      label: "Gem Hunt",
+      needs: [{ name: "Emerald", quantity: 900 }],
+    },
+    {
+      kind: "quest",
+      label: "Covered Already",
+      needs: [{ name: "Wood", quantity: 5 }],
+    },
+  ];
+  const suggestions = getQuestSuggestions(
+    questGoals,
+    { Emerald: 200, Wood: 50 },
+    []
+  );
+  check(
+    "covered requests drop out, and the larger ask wins",
+    suggestions.map((entry) => [entry.name, entry.quantity]),
+    [["Emerald", 700]]
   );
 }
 
