@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.19
+// @version 1.1.20
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2661,6 +2661,413 @@ exports.banker = {
 
 /***/ }),
 
+/***/ 5299:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.briefingPanel = void 0;
+const craftworks_1 = __webpack_require__(7831);
+const theme_1 = __webpack_require__(1178);
+const craftworks_2 = __webpack_require__(920);
+const recipes_1 = __webpack_require__(498);
+const focus_1 = __webpack_require__(7167);
+const requests_1 = __webpack_require__(3300);
+const quests_1 = __webpack_require__(303);
+const inventory_1 = __webpack_require__(4514);
+const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
+const promise_1 = __webpack_require__(6762);
+const page_1 = __webpack_require__(7952);
+const craftPlanner_1 = __webpack_require__(5825);
+const settings_1 = __webpack_require__(126);
+const SETTING_BRIEFING_PANEL = {
+    id: settings_1.SettingId.BRIEFING_PANEL,
+    title: "Briefing: Floating panel",
+    description: `
+    A button above the bottom bar that opens the Craftworks queue, your open
+    requests and where to go, from any page
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+const BUTTON_ID = "fh-briefing-button";
+const PANEL_ID = "fh-briefing-panel";
+const STYLE_ID = "fh-briefing-style";
+const MAX_LISTED = 5;
+// Bottom-left, mirroring the cap tracker's floating fallback on the right, so
+// the two never collide and both clear the bottom bar.
+const EDGE_OFFSET = "8px";
+const BOTTOM_OFFSET = "62px";
+const injectStyles = () => {
+    if (document.querySelector(`#${STYLE_ID}`)) {
+        return;
+    }
+    document.head.insertAdjacentHTML("beforeend", `<style id="${STYLE_ID}">
+      #${BUTTON_ID} {
+        position: fixed;
+        left: ${EDGE_OFFSET};
+        bottom: ${BOTTOM_OFFSET};
+        z-index: 5000;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        border: 1px solid ${theme_1.BORDER_GRAY};
+        background: rgba(20, 20, 20, 0.92);
+        color: ${theme_1.TEXT_GRAY};
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+        transition: transform 140ms ease, color 140ms ease,
+          border-color 140ms ease;
+        -webkit-backdrop-filter: blur(6px);
+        backdrop-filter: blur(6px);
+      }
+      #${BUTTON_ID}:hover { color: ${theme_1.TEXT_WHITE}; border-color: #5a5a5a; }
+      #${BUTTON_ID}:active { transform: scale(0.94); }
+      #${BUTTON_ID}[data-open="true"] {
+        color: ${theme_1.TEXT_WHITE};
+        transform: rotate(90deg);
+      }
+      #${BUTTON_ID} .fh-badge {
+        position: absolute;
+        top: -2px;
+        right: -2px;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 4px;
+        border-radius: 9px;
+        background: ${theme_1.TEXT_WARNING};
+        color: #111;
+        font-size: 11px;
+        font-weight: bold;
+        line-height: 18px;
+        text-align: center;
+      }
+      #${PANEL_ID} {
+        position: fixed;
+        left: ${EDGE_OFFSET};
+        bottom: calc(${BOTTOM_OFFSET} + 52px);
+        z-index: 5001;
+        width: 380px;
+        max-width: calc(100vw - 16px);
+        max-height: 70vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid ${theme_1.BORDER_GRAY};
+        background: rgba(18, 18, 19, 0.97);
+        box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
+        opacity: 0;
+        transform: translateY(8px);
+        pointer-events: none;
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+      #${PANEL_ID}[data-open="true"] {
+        opacity: 1;
+        transform: translateY(0);
+        pointer-events: auto;
+      }
+      #${PANEL_ID}::-webkit-scrollbar { width: 8px; }
+      #${PANEL_ID}::-webkit-scrollbar-thumb {
+        background: #3a3a3a;
+        border-radius: 4px;
+      }
+      #${PANEL_ID} .fh-briefing-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 6px;
+      }
+      #${PANEL_ID} .fh-briefing-refresh {
+        cursor: pointer;
+        color: ${theme_1.TEXT_GRAY};
+        font-size: 11px;
+      }
+      #${PANEL_ID} .fh-briefing-refresh:hover { color: ${theme_1.TEXT_WHITE}; }
+      @media (max-width: 480px) {
+        #${PANEL_ID} { width: calc(100vw - 16px); max-height: 60vh; }
+      }
+    </style>`);
+};
+// Inline so it always draws: the game mixes Font Awesome 4 and 6 and neither
+// set is guaranteed to carry a given glyph.
+const ICON = `
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+       stroke-linejoin="round" aria-hidden="true">
+    <path d="M3 6h11M3 12h8M3 18h11" />
+    <path d="M16 15l3 3 5-6" />
+  </svg>`;
+const setBadge = (count) => {
+    const button = document.querySelector(`#${BUTTON_ID}`);
+    if (!button) {
+        return;
+    }
+    const existing = button.querySelector(".fh-badge");
+    if (count <= 0) {
+        existing === null || existing === void 0 ? void 0 : existing.remove();
+        return;
+    }
+    const badge = existing !== null && existing !== void 0 ? existing : document.createElement("span");
+    badge.className = "fh-badge";
+    badge.textContent = String(count);
+    if (!existing) {
+        button.append(badge);
+    }
+};
+const makeHeading = (text) => {
+    const heading = document.createElement("div");
+    heading.textContent = text;
+    heading.style.color = theme_1.TEXT_WHITE;
+    heading.style.fontSize = "11px";
+    heading.style.fontWeight = "bold";
+    heading.style.letterSpacing = "0.4px";
+    heading.style.textTransform = "uppercase";
+    heading.style.margin = "12px 0 4px";
+    return heading;
+};
+const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
+const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const response = yield (0, requests_1.getHTML)(page_1.Page.QUESTS, new URLSearchParams());
+        return (0, quests_1.parseActiveQuests)(response.body);
+    }
+    catch (_a) {
+        return undefined;
+    }
+});
+const render = (body, force) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e;
+    body.textContent = "";
+    const loading = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Reading your farm…"]);
+    body.append(loading);
+    const [snapshot, craftworks, quests] = yield Promise.all([
+        (0, promise_1.orUndefined)(inventory_1.inventoryState.get({ ignoreCache: force })),
+        (0, promise_1.orUndefined)(craftworks_2.craftworksState.get({ ignoreCache: force })),
+        fetchActiveQuests(),
+    ]);
+    const inventory = (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _a !== void 0 ? _a : {};
+    const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
+    loading.remove();
+    let attention = 0;
+    const advice = craftworks ? (0, craftworks_1.adviseOnSlots)(craftworks.slots, cap) : undefined;
+    if (advice && craftworks) {
+        const free = craftworks.maxSlots
+            ? craftworks.maxSlots - craftworks.slots.length
+            : 0;
+        body.append(makeHeading("Craftworks"));
+        body.append((0, gameLinks_1.makeLinkedLine)(advice.working.length > 0 ? theme_1.TEXT_GRAY : theme_1.TEXT_WARNING, [
+            `${advice.working.length} of ${craftworks.slots.length} slots crafting`,
+            free > 0 ? `, ${free} free` : "",
+        ]));
+        attention += advice.dead.length + advice.ordering.length;
+        for (const slot of advice.dead.slice(0, MAX_LISTED)) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
+                "at cap: ",
+                (0, gameLinks_1.makeItemLink)(slot.name, Number(slot.id) || undefined, theme_1.TEXT_ERROR),
+                ` (${slot.inventory.toLocaleString()}${cap ? `/${cap.toLocaleString()}` : ""}) — dead slot`,
+            ]));
+        }
+        for (const { blocker, producer, slot } of advice.ordering) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
+                `move #${producer.position} ${producer.name} above #${slot.position} ${slot.name} (waits on ${blocker})`,
+            ]));
+        }
+    }
+    const questGoals = quests ? yield (0, quests_1.getQuestGoals)(quests) : undefined;
+    const goals = (_b = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _b !== void 0 ? _b : [];
+    const craftworkBlockers = (_c = advice === null || advice === void 0 ? void 0 : advice.roots.map((root) => root.name)) !== null && _c !== void 0 ? _c : [];
+    const graph = yield (0, recipes_1.gatherRecipeGraph)([
+        ...goals.flatMap((goal) => goal.needs.map((need) => need.name)),
+        ...craftworkBlockers,
+    ]);
+    const statuses = (0, focus_1.getGoalStatuses)(graph, goals, inventory);
+    const ready = statuses.filter((status) => status.isReady);
+    const nearlyDone = (0, focus_1.getNearlyDone)(statuses);
+    const bottlenecks = (0, focus_1.rankBottlenecks)(statuses);
+    attention += ready.length;
+    if (statuses.length > 0) {
+        body.append(makeHeading("Requests"));
+        for (const status of ready.slice(0, MAX_LISTED)) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
+                "ready: ",
+                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_SUCCESS),
+            ]));
+        }
+        for (const status of nearlyDone.slice(0, MAX_LISTED)) {
+            const [only] = status.missing;
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
+                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_WARNING),
+                ` — needs ${only.quantity.toLocaleString()} × `,
+                (0, gameLinks_1.makeItemLink)(only.name, (_d = graph.nodes.get(only.name)) === null || _d === void 0 ? void 0 : _d.id, theme_1.TEXT_WARNING),
+            ]));
+        }
+        if (ready.length === 0 && nearlyDone.length === 0) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+                `${statuses.length} open, none close to done`,
+            ]));
+        }
+    }
+    // Craftworks says what a slot is out of but never how many it is short by,
+    // so a blocker counts as one unit; a request's shortfall is exact. Both are
+    // the same trip, which is why they merge rather than being listed twice.
+    const sourcing = (0, craftPlanner_1.planSourcing)(graph, (0, focus_1.mergeMissing)(bottlenecks.map((entry) => ({
+        name: entry.name,
+        quantity: entry.maxNeeded,
+    })), craftworkBlockers.map((name) => ({ name, quantity: 1 }))));
+    if (sourcing.locations.length > 0) {
+        body.append(makeHeading("Where to go"));
+        const top = sourcing.locations.slice(0, MAX_LISTED);
+        const references = yield Promise.all(top.map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
+        for (const [index, entry] of top.entries()) {
+            const color = entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY;
+            const parts = [
+                (0, gameLinks_1.makeLocationLink)(entry.location, references[index], color),
+                ` ~${formatHits(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"} — `,
+            ];
+            for (const [itemIndex, item] of entry.items.slice(0, 4).entries()) {
+                if (itemIndex > 0) {
+                    parts.push(", ");
+                }
+                parts.push((0, gameLinks_1.makeItemLink)(item.name, (_e = graph.nodes.get(item.name)) === null || _e === void 0 ? void 0 : _e.id, color));
+            }
+            body.append((0, gameLinks_1.makeLinkedLine)(color, parts));
+        }
+    }
+    if (body.childNodes.length === 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, ["Nothing needs attention."]));
+    }
+    if (questGoals === null || questGoals === void 0 ? void 0 : questGoals.unmatched.length) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            `not on buddy.farm: ${questGoals.unmatched.join(", ")}`,
+        ]));
+    }
+    setBadge(attention);
+});
+// Show a count before the panel has ever been opened, using only what is
+// already in GM storage. `doNotFetch` means this cannot cost a request, so a
+// stale-but-free number beats no number at all; opening the panel corrects it.
+const primeBadge = () => __awaiter(void 0, void 0, void 0, function* () {
+    const [snapshot, craftworks] = yield Promise.all([
+        (0, promise_1.orUndefined)(inventory_1.inventoryState.get({ doNotFetch: true })),
+        (0, promise_1.orUndefined)(craftworks_2.craftworksState.get({ doNotFetch: true })),
+    ]);
+    if (!craftworks) {
+        return;
+    }
+    const advice = (0, craftworks_1.adviseOnSlots)(craftworks.slots, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap);
+    setBadge(advice.dead.length + advice.ordering.length);
+});
+// One button and one panel for the whole session, hung off document.body.
+//
+// Framework7 keeps the page you came from in the DOM, so anything appended
+// inside a page element gets duplicated as you navigate and the retained copy's
+// listeners point at a detached tree — which is exactly how the first attempt
+// at this ended up drawn twice with only one of them responding. Living on the
+// body sidesteps page swaps entirely, and the same trick is what keeps the cap
+// tracker single.
+const ensurePanel = () => {
+    if (document.querySelector(`#${BUTTON_ID}`)) {
+        return;
+    }
+    injectStyles();
+    const button = document.createElement("div");
+    button.id = BUTTON_ID;
+    button.title = "Farmhand briefing";
+    button.innerHTML = ICON;
+    const panel = document.createElement("div");
+    panel.id = PANEL_ID;
+    const head = document.createElement("div");
+    head.className = "fh-briefing-head";
+    const title = document.createElement("div");
+    title.textContent = "Briefing";
+    title.style.color = theme_1.TEXT_WHITE;
+    title.style.fontWeight = "bold";
+    const refresh = document.createElement("span");
+    refresh.className = "fh-briefing-refresh";
+    refresh.textContent = "refresh";
+    head.append(title, refresh);
+    const body = document.createElement("div");
+    panel.append(head, body);
+    document.body.append(button, panel);
+    // Nothing is fetched until it is opened. The panel costs three page fetches
+    // plus buddy.farm lookups, and the home page already refetches itself every
+    // minute while a meal cooks, so an eager panel would become a steady
+    // background load.
+    let hasRendered = false;
+    const setOpen = (open) => {
+        panel.dataset.open = String(open);
+        button.dataset.open = String(open);
+        if (open && !hasRendered) {
+            hasRendered = true;
+            render(body, false);
+        }
+    };
+    button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setOpen(panel.dataset.open !== "true");
+    });
+    refresh.addEventListener("click", (event) => {
+        event.stopPropagation();
+        render(body, true);
+    });
+    panel.addEventListener("click", (event) => {
+        // let links through, but don't let a stray click close the panel
+        const target = event.target;
+        if (target === null || target === void 0 ? void 0 : target.closest("a")) {
+            setOpen(false);
+            return;
+        }
+        event.stopPropagation();
+    });
+    document.addEventListener("click", () => setOpen(false));
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            setOpen(false);
+        }
+    });
+    setOpen(false);
+    primeBadge();
+};
+exports.briefingPanel = {
+    settings: [SETTING_BRIEFING_PANEL],
+    onInitialize: (settings) => {
+        if (!settings[settings_1.SettingId.BRIEFING_PANEL]) {
+            return;
+        }
+        ensurePanel();
+    },
+    onPageLoad: (settings) => {
+        var _a, _b;
+        if (!settings[settings_1.SettingId.BRIEFING_PANEL]) {
+            (_a = document.querySelector(`#${BUTTON_ID}`)) === null || _a === void 0 ? void 0 : _a.remove();
+            (_b = document.querySelector(`#${PANEL_ID}`)) === null || _b === void 0 ? void 0 : _b.remove();
+            return;
+        }
+        // cheap: returns immediately once the button exists. Covers the case where
+        // initialization ran before the game shell was ready.
+        ensurePanel();
+    },
+};
+
+
+/***/ }),
+
 /***/ 2273:
 /***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
@@ -5221,267 +5628,6 @@ exports.highlightSelfInChat = {
             message.style.backgroundColor = theme_1.ALERT_YELLOW_BACKGROUND;
             message.style.border = `1px solid ${theme_1.ALERT_YELLOW_BORDER}`;
         }
-    }),
-};
-
-
-/***/ }),
-
-/***/ 7818:
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
-
-
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.homeBriefing = void 0;
-const craftworks_1 = __webpack_require__(7831);
-const theme_1 = __webpack_require__(1178);
-const craftworks_2 = __webpack_require__(920);
-const recipes_1 = __webpack_require__(498);
-const craftPlanner_1 = __webpack_require__(5825);
-const page_1 = __webpack_require__(7952);
-const settings_1 = __webpack_require__(126);
-const focus_1 = __webpack_require__(7167);
-const requests_1 = __webpack_require__(3300);
-const quests_1 = __webpack_require__(303);
-const inventory_1 = __webpack_require__(4514);
-const api_1 = __webpack_require__(3413);
-const gameLinks_1 = __webpack_require__(1616);
-const promise_1 = __webpack_require__(6762);
-const SETTING_HOME_BRIEFING = {
-    id: settings_1.SettingId.HOME_BRIEFING,
-    title: "Home: Briefing panel",
-    description: `
-    A collapsible panel on the home page pulling the Craftworks queue, your
-    open requests and where to go into one place
-  `,
-    type: "boolean",
-    defaultValue: true,
-};
-const CONTAINER_ID = "fh-home-briefing";
-const MAX_LISTED = 5;
-const makeHeading = (text) => {
-    const heading = document.createElement("div");
-    heading.textContent = text;
-    heading.style.color = theme_1.TEXT_WHITE;
-    heading.style.fontSize = "12px";
-    heading.style.fontWeight = "bold";
-    heading.style.margin = "10px 0 4px";
-    return heading;
-};
-const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
-// Fetch the quests page in the background — the briefing lives on the home
-// page, so the active request list is not already in the DOM the way it is for
-// the quests-page dashboard.
-const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const response = yield (0, requests_1.getHTML)(page_1.Page.QUESTS, new URLSearchParams());
-        return (0, quests_1.parseActiveQuests)(response.body);
-    }
-    catch (_a) {
-        return null;
-    }
-});
-const render = (body) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e;
-    body.textContent = "";
-    const loading = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Reading your farm…"]);
-    body.append(loading);
-    const [snapshot, craftworks, quests] = yield Promise.all([
-        inventory_1.inventoryState.get(),
-        (0, promise_1.orUndefined)(craftworks_2.craftworksState.get()),
-        fetchActiveQuests(),
-    ]);
-    const inventory = (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _a !== void 0 ? _a : {};
-    const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
-    loading.remove();
-    // ---- Craftworks ------------------------------------------------------
-    const advice = craftworks ? (0, craftworks_1.adviseOnSlots)(craftworks.slots, cap) : undefined;
-    if (advice && craftworks) {
-        const free = craftworks.maxSlots
-            ? craftworks.maxSlots - craftworks.slots.length
-            : 0;
-        body.append(makeHeading("Craftworks"));
-        body.append((0, gameLinks_1.makeLinkedLine)(advice.working.length > 0 ? theme_1.TEXT_GRAY : theme_1.TEXT_WARNING, [
-            `${advice.working.length} of ${craftworks.slots.length} slots crafting`,
-            free > 0 ? `, ${free} free` : "",
-        ]));
-        for (const slot of advice.dead.slice(0, MAX_LISTED)) {
-            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
-                "at cap: ",
-                (0, gameLinks_1.makeItemLink)(slot.name, Number(slot.id) || undefined, theme_1.TEXT_ERROR),
-                ` (${slot.inventory.toLocaleString()}${cap ? `/${cap.toLocaleString()}` : ""}) — dead slot`,
-            ]));
-        }
-        for (const { blocker, producer, slot } of advice.ordering) {
-            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
-                `move #${producer.position} ${producer.name} above #${slot.position} ${slot.name} (waits on ${blocker})`,
-            ]));
-        }
-    }
-    // ---- Requests --------------------------------------------------------
-    const questGoals = quests ? yield (0, quests_1.getQuestGoals)(quests) : undefined;
-    const goals = (_b = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _b !== void 0 ? _b : [];
-    const questNeeds = goals.flatMap((goal) => goal.needs.map((need) => need.name));
-    const craftworkBlockers = (_c = advice === null || advice === void 0 ? void 0 : advice.roots.map((root) => root.name)) !== null && _c !== void 0 ? _c : [];
-    // one walk covering everything either half needs
-    const graph = yield (0, recipes_1.gatherRecipeGraph)([...questNeeds, ...craftworkBlockers]);
-    const statuses = (0, focus_1.getGoalStatuses)(graph, goals, inventory);
-    const ready = statuses.filter((status) => status.isReady);
-    const nearlyDone = (0, focus_1.getNearlyDone)(statuses);
-    const bottlenecks = (0, focus_1.rankBottlenecks)(statuses);
-    if (statuses.length > 0) {
-        body.append(makeHeading("Requests"));
-        if (ready.length > 0) {
-            for (const status of ready.slice(0, MAX_LISTED)) {
-                body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
-                    "ready: ",
-                    (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_SUCCESS),
-                ]));
-            }
-        }
-        for (const status of nearlyDone.slice(0, MAX_LISTED)) {
-            const [only] = status.missing;
-            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
-                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_WARNING),
-                " — needs ",
-                `${only.quantity.toLocaleString()} × `,
-                (0, gameLinks_1.makeItemLink)(only.name, (_d = graph.nodes.get(only.name)) === null || _d === void 0 ? void 0 : _d.id, theme_1.TEXT_WARNING),
-            ]));
-        }
-        if (ready.length === 0 && nearlyDone.length === 0) {
-            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
-                `${statuses.length} open, none close to done`,
-            ]));
-        }
-    }
-    // ---- Where to go -----------------------------------------------------
-    // Craftworks reports what a slot is out of but never how many it is short
-    // by, so a blocker counts as one unit; a request's shortfall is exact. Both
-    // reduce to the same trip, which is why they merge here instead of being
-    // listed twice.
-    const combined = (0, focus_1.mergeMissing)(bottlenecks.map((entry) => ({
-        name: entry.name,
-        quantity: entry.maxNeeded,
-    })), craftworkBlockers.map((name) => ({ name, quantity: 1 })));
-    const sourcing = (0, craftPlanner_1.planSourcing)(graph, combined);
-    if (sourcing.locations.length > 0) {
-        body.append(makeHeading("Where to go"));
-        const references = yield Promise.all(sourcing.locations
-            .slice(0, MAX_LISTED)
-            .map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
-        for (const [index, entry] of sourcing.locations
-            .slice(0, MAX_LISTED)
-            .entries()) {
-            const parts = [
-                (0, gameLinks_1.makeLocationLink)(entry.location, references[index], entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY),
-                ` ~${formatHits(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"} — `,
-            ];
-            for (const [itemIndex, item] of entry.items.slice(0, 4).entries()) {
-                if (itemIndex > 0) {
-                    parts.push(", ");
-                }
-                parts.push((0, gameLinks_1.makeItemLink)(item.name, (_e = graph.nodes.get(item.name)) === null || _e === void 0 ? void 0 : _e.id, entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY));
-            }
-            body.append((0, gameLinks_1.makeLinkedLine)(entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, parts));
-        }
-    }
-    if (body.childNodes.length === 0) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, ["Nothing needs attention."]));
-    }
-    // items with no drop location at all are worth naming once, since no amount
-    // of exploring will produce them
-    const unsourced = sourcing.unsourced.filter((name) => {
-        var _a;
-        const source = (0, craftPlanner_1.getBaselineSource)((0, craftPlanner_1.getDropSources)((_a = graph.nodes.get(name)) === null || _a === void 0 ? void 0 : _a.item));
-        return !source;
-    });
-    if (unsourced.length > 0) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`no drop location: ${unsourced.join(", ")}`]));
-    }
-    if (questGoals === null || questGoals === void 0 ? void 0 : questGoals.unmatched.length) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
-            `not on buddy.farm: ${questGoals.unmatched.join(", ")}`,
-        ]));
-    }
-});
-exports.homeBriefing = {
-    settings: [SETTING_HOME_BRIEFING],
-    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
-        if (page !== page_1.Page.HOME_PAGE && page !== page_1.Page.HOME_PATH) {
-            return;
-        }
-        if (!settings[settings_1.SettingId.HOME_BRIEFING]) {
-            return;
-        }
-        const currentPage = (0, page_1.getCurrentPage)();
-        if (!currentPage) {
-            return;
-        }
-        // the home page is re-rendered constantly (the meal timer refetches it
-        // every minute), so never stack a second panel
-        if (currentPage.querySelector(`#${CONTAINER_ID}`)) {
-            return;
-        }
-        const { isOpen } = yield (0, settings_1.getData)(SETTING_HOME_BRIEFING, {
-            isOpen: false,
-        });
-        const card = document.createElement("div");
-        card.id = CONTAINER_ID;
-        card.className = "card";
-        const content = document.createElement("div");
-        content.className = "card-content";
-        const inner = document.createElement("div");
-        inner.className = "card-content-inner";
-        inner.style.borderLeft = `3px solid ${theme_1.BORDER_GRAY}`;
-        inner.style.paddingLeft = "10px";
-        const header = document.createElement("div");
-        header.style.alignItems = "center";
-        header.style.cursor = "pointer";
-        header.style.display = "flex";
-        header.style.gap = "6px";
-        const chevron = document.createElement("i");
-        chevron.className = "fa fa-fw";
-        chevron.style.color = theme_1.TEXT_GRAY;
-        const label = document.createElement("span");
-        label.textContent = "Farmhand briefing";
-        label.style.color = theme_1.TEXT_WHITE;
-        label.style.fontWeight = "bold";
-        header.append(chevron, label);
-        const body = document.createElement("div");
-        // The panel costs three page fetches plus buddy.farm lookups, and the home
-        // page reloads on its own every minute while a meal is cooking. So nothing
-        // is fetched until it is actually opened, and closing it drops the content
-        // rather than leaving it to go stale behind a collapsed header.
-        let hasRendered = false;
-        const apply = (open) => {
-            chevron.classList.toggle("fa-chevron-down", open);
-            chevron.classList.toggle("fa-chevron-right", !open);
-            body.style.display = open ? "block" : "none";
-            if (open && !hasRendered) {
-                hasRendered = true;
-                render(body);
-            }
-        };
-        header.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
-            const next = body.style.display === "none";
-            apply(next);
-            yield (0, settings_1.setData)(SETTING_HOME_BRIEFING, { isOpen: next });
-        }));
-        inner.append(header, body);
-        content.append(inner);
-        card.append(content);
-        const pageContent = currentPage.querySelector(".page-content");
-        pageContent === null || pageContent === void 0 ? void 0 : pageContent.prepend(card);
-        apply(isOpen);
     }),
 };
 
@@ -8524,7 +8670,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.19" !== void 0 ? "1.1.19" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.20" !== void 0 ? "1.1.20" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -8602,6 +8748,7 @@ const autocomplete_1 = __webpack_require__(4067);
 const autocompleteItems_1 = __webpack_require__(8477);
 const autocompleteUsers_1 = __webpack_require__(5881);
 const banker_1 = __webpack_require__(8092);
+const briefingPanel_1 = __webpack_require__(5299);
 const buddyfarm_1 = __webpack_require__(2273);
 const mailboxInChat_1 = __webpack_require__(8124);
 const chatNav_1 = __webpack_require__(6922);
@@ -8624,7 +8771,6 @@ const focusDashboard_1 = __webpack_require__(8697);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const highlightSelfInChat_1 = __webpack_require__(5454);
-const homeBriefing_1 = __webpack_require__(7818);
 const improvedInputs_1 = __webpack_require__(1108);
 const inventoryCapWarnings_1 = __webpack_require__(6660);
 const kitchenNotifications_1 = __webpack_require__(9737);
@@ -8657,10 +8803,10 @@ const FEATURES = [
     versionManager_1.versionManager,
     // UI
     improvedInputs_1.improvedInputs,
+    briefingPanel_1.briefingPanel,
     // home
     cleanupHome_1.cleanupHome,
     moveUpdateToTop_1.moveUpdateToTop,
-    homeBriefing_1.homeBriefing,
     // kitchen
     kitchenNotifications_1.kitchenNotifications,
     mealNotifications_1.mealNotifications,
@@ -10457,6 +10603,7 @@ var SettingId;
     SettingId["AUTOCOMPLETE_ITEMS"] = "autocompleteItems";
     SettingId["AUTOCOMPLETE_USERS"] = "autocompleteUsers";
     SettingId["BANKER"] = "banker";
+    SettingId["BRIEFING_PANEL"] = "briefingPanel";
     SettingId["BUDDY_FARM"] = "buddyFarm";
     SettingId["CHAT_COMPRESS"] = "compressChat";
     SettingId["CHAT_DISMISSABLE_BANNERS"] = "dismissableChatBanners";
@@ -10475,7 +10622,6 @@ var SettingId;
     SettingId["FLEA_MARKET"] = "fleaMarket";
     SettingId["HARVEST_NOTIFICATIONS"] = "harvestNotifications";
     SettingId["HARVEST_POPUP"] = "harvestPopup";
-    SettingId["HOME_BRIEFING"] = "homeBriefing";
     SettingId["HOME_COMPRESS_SKILLS"] = "homeCompressSkills";
     SettingId["HOME_HIDE_FOOTER"] = "homeHideFooter";
     SettingId["HOME_HIDE_PLAYERS"] = "homeHidePlayers";
