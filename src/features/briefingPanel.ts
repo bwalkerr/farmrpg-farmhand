@@ -1,3 +1,11 @@
+import {
+  addGoal,
+  getDesiredQueue,
+  getGoalProgress,
+  getGoals,
+  removeGoal,
+  TrackedGoal,
+} from "~/utils/goals";
 import { Advice, adviseOnSlots, suggestQueueChanges } from "~/utils/craftworks";
 import {
   BORDER_GRAY,
@@ -14,12 +22,10 @@ import {
 import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import {
-  getDesiredQueue,
-  getGoalProgress,
-  getGoals,
-  removeGoal,
-  TrackedGoal,
-} from "~/utils/goals";
+  getFrozenMastery,
+  getMasterySuggestions,
+  getQuestSuggestions,
+} from "~/utils/suggestions";
 import {
   getGoalStatuses,
   getNearlyDone,
@@ -37,6 +43,7 @@ import {
   makeLocationLink,
   makeQuestLink,
 } from "~/utils/gameLinks";
+import { MasteryEntry, masteryState } from "~/api/farmrpg/apis/mastery";
 import { orUndefined } from "~/utils/promise";
 import { Page } from "~/utils/page";
 import { parseUnlimitedItems, UnlimitedItems } from "~/utils/unlimited";
@@ -284,6 +291,7 @@ interface Context {
   goals: TrackedGoal[];
   graph: RecipeGraph;
   inventory: Record<string, number>;
+  mastery: MasteryEntry[];
   questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
   statuses: ReturnType<typeof getGoalStatuses>;
   unlimited: UnlimitedItems;
@@ -296,11 +304,12 @@ const loadContext = async (force: boolean): Promise<Context> => {
   const unlimited = parseUnlimitedItems(
     String(settings[SettingId.UNLIMITED_ITEMS] ?? "")
   );
-  const [snapshot, craftworks, quests, goals] = await Promise.all([
+  const [snapshot, craftworks, quests, goals, mastery] = await Promise.all([
     orUndefined(inventoryState.get({ ignoreCache: force })),
     orUndefined(craftworksState.get({ ignoreCache: force })),
     fetchActiveQuests(),
     getGoals(),
+    orUndefined(masteryState.get({ ignoreCache: force })),
   ]);
   const inventory = snapshot?.quantities ?? {};
   const cap = snapshot?.cap;
@@ -322,6 +331,7 @@ const loadContext = async (force: boolean): Promise<Context> => {
     goals,
     graph,
     inventory,
+    mastery: mastery?.entries ?? [],
     questGoals,
     statuses: getGoalStatuses(
       graph,
@@ -459,10 +469,9 @@ const renderGoals = async (
   if (goals.length === 0) {
     body.append(
       makeLinkedLine(TEXT_GRAY, [
-        "No goals yet. Open any craftable item and use “Track as goal” to watch its progress here.",
+        "No goals yet — pick one below, or use “Track as goal” on any item page.",
       ])
     );
-    return;
   }
 
   const missingLists: { name: string; quantity: number }[][] = [];
@@ -533,11 +542,65 @@ const renderGoals = async (
   }
 
   await renderWhereToGo(body, context, mergeMissing(...missingLists));
+  renderSuggestions(body, context, rerender);
+};
+
+// Suggestions are offered, never auto-adopted. Mastery alone would add hundreds
+// of entries and the tab would stop being a place to look for what matters, so
+// the player promotes the few they actually intend to chase.
+const renderSuggestions = (
+  body: HTMLElement,
+  context: Context,
+  rerender: () => void
+): void => {
+  const { cap, goals, graph, inventory, mastery, questGoals } = context;
+  const suggestions = [
+    ...getMasterySuggestions(mastery, inventory, cap, goals, 4),
+    ...getQuestSuggestions(questGoals?.goals ?? [], inventory, goals, 3),
+  ];
+  if (suggestions.length === 0) {
+    return;
+  }
+  body.append(makeHeading("Suggested"));
+  for (const suggestion of suggestions) {
+    const row = document.createElement("div");
+    row.className = "fh-goal-top";
+    row.style.marginBottom = "4px";
+    const text = makeLinkedLine(suggestion.isFrozen ? TEXT_ERROR : TEXT_GRAY, [
+      makeItemLink(
+        suggestion.name,
+        suggestion.id ?? graph.nodes.get(suggestion.name)?.id,
+        suggestion.isFrozen ? TEXT_ERROR : TEXT_WHITE
+      ),
+      ` ${suggestion.quantity.toLocaleString()} more — ${suggestion.reason}`,
+    ]);
+    text.style.marginBottom = "0";
+    const add = document.createElement("span");
+    add.className = "fh-goal-remove";
+    add.style.color = TEXT_SUCCESS;
+    add.textContent = "+";
+    add.title = `Track ${suggestion.name}`;
+    add.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await addGoal(suggestion.name, suggestion.quantity);
+      rerender();
+    });
+    row.append(text, add);
+    body.append(row);
+  }
 };
 
 const renderCraftworks = (body: HTMLElement, context: Context): void => {
-  const { advice, cap, craftworks, goals, graph, inventory, unlimited } =
-    context;
+  const {
+    advice,
+    cap,
+    craftworks,
+    goals,
+    graph,
+    inventory,
+    mastery,
+    unlimited,
+  } = context;
   if (!advice || !craftworks) {
     body.append(
       makeLinkedLine(TEXT_GRAY, ["Could not read the Craftworks queue."])
@@ -578,6 +641,19 @@ const renderCraftworks = (body: HTMLElement, context: Context): void => {
       parts.push(" — crafting");
     }
     body.append(makeLinkedLine(color, parts));
+  }
+
+  const frozen = getFrozenMastery(mastery, inventory, cap);
+  if (frozen.length > 0) {
+    body.append(makeHeading("Mastery frozen at cap"));
+    for (const entry of frozen.slice(0, MAX_LISTED)) {
+      body.append(
+        makeLinkedLine(TEXT_ERROR, [
+          makeItemLink(entry.name, entry.id, TEXT_ERROR),
+          ` ${entry.value.toLocaleString()}/${entry.required.toLocaleString()} — ${entry.remaining.toLocaleString()} more, but you are at cap so none of it counts`,
+        ])
+      );
+    }
   }
 
   if (advice.supplied.length > 0) {
