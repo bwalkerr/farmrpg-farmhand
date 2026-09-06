@@ -1,5 +1,5 @@
 import { CachedState, StorageKey } from "~/utils/state";
-import { getHTML } from "../utils/requests";
+import { getHTML, toUrl } from "../utils/requests";
 import {
   getMaxSlots,
   parseSavedSets,
@@ -43,3 +43,92 @@ export const craftworksState = new CachedState<CraftworksSnapshot>(
     timeout: 5 * 60, // 5 minutes
   }
 );
+
+// worker.php answers these with a bare word ("success", "cannotadd"), not JSON
+// or HTML, so this goes through fetch directly. It still passes through the
+// patched window.fetch, so the usual interceptors observe it.
+const postWorker = async (query: URLSearchParams): Promise<string> => {
+  const response = await fetch(toUrl(Page.WORKER, query), {
+    credentials: "include",
+    method: "POST",
+    mode: "cors",
+  });
+  const text = await response.text();
+  return text.trim();
+};
+
+export interface ActivationResult {
+  // the queue as it was before, so a failure can be undone
+  previous: Slot[];
+  message: string;
+  ok: boolean;
+}
+
+// Load a saved set from anywhere, the way the perk manager loads a perk set.
+//
+// The game's own button fires `removeallcw` fire-and-forget, waits a fixed
+// 500ms, then activates — so a failed activation leaves the queue wiped with
+// nothing to restore it. This awaits the wipe, refuses to continue if it did
+// not come back, and hands the caller the previous queue either way so a
+// failure can be walked back. That is why it is worth reimplementing here
+// rather than forwarding a click: the copy is strictly safer than the original.
+export const activateSet = async (
+  setId: string,
+  previous: Slot[]
+): Promise<ActivationResult> => {
+  try {
+    await postWorker(new URLSearchParams({ go: "removeallcw" }));
+  } catch {
+    // nothing was wiped, so nothing is lost
+    return {
+      message: "Could not clear the queue; nothing was changed.",
+      ok: false,
+      previous,
+    };
+  }
+  try {
+    const result = await postWorker(
+      new URLSearchParams({ go: "activatecwset", id: setId })
+    );
+    if (result !== "success") {
+      return {
+        message: `The queue was cleared but the set did not load (${
+          result || "no response"
+        }).`,
+        ok: false,
+        previous,
+      };
+    }
+  } catch {
+    return {
+      message: "The queue was cleared but the set did not load.",
+      ok: false,
+      previous,
+    };
+  }
+  await craftworksState.get({ ignoreCache: true });
+  return { message: "Set loaded.", ok: true, previous };
+};
+
+// Put a queue back, in order. Appending each item to the bottom reproduces the
+// original order without needing the reorder endpoint.
+export const restoreQueue = async (slots: Slot[]): Promise<number> => {
+  let restored = 0;
+  for (const slot of slots) {
+    if (!slot.id) {
+      continue;
+    }
+    try {
+      const result = await postWorker(
+        new URLSearchParams({ go: "addcwitem", id: slot.id, pos: "bot" })
+      );
+      if (result === "success") {
+        restored += 1;
+      }
+    } catch {
+      break;
+    }
+  }
+  await craftworksState.get({ ignoreCache: true });
+  return restored;
+};

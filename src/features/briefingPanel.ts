@@ -1,4 +1,10 @@
 import {
+  activateSet,
+  CraftworksSnapshot,
+  craftworksState,
+  restoreQueue,
+} from "~/api/farmrpg/apis/craftworks";
+import {
   addGoal,
   getDesiredQueue,
   getGoalProgress,
@@ -16,10 +22,6 @@ import {
   TEXT_WARNING,
   TEXT_WHITE,
 } from "~/utils/theme";
-import {
-  CraftworksSnapshot,
-  craftworksState,
-} from "~/api/farmrpg/apis/craftworks";
 import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import { getBasicItems, locationDataState } from "~/api/buddyfarm/api";
@@ -27,6 +29,7 @@ import {
   getFrozenMastery,
   getMasterySuggestions,
   getQuestSuggestions,
+  getRecommendedSet,
   getSetSuggestions,
 } from "~/utils/suggestions";
 import {
@@ -43,6 +46,7 @@ import {
   makeItemLink,
   makeLinkedLine,
   makeLocationLink,
+  makeMutedText,
   makeQuestLink,
 } from "~/utils/gameLinks";
 import { MasteryEntry, masteryState } from "~/api/farmrpg/apis/mastery";
@@ -624,7 +628,11 @@ const renderSuggestions = (
   }
 };
 
-const renderCraftworks = (body: HTMLElement, context: Context): void => {
+const renderCraftworks = (
+  body: HTMLElement,
+  context: Context,
+  reload: () => void
+): void => {
   const {
     advice,
     cap,
@@ -681,6 +689,7 @@ const renderCraftworks = (body: HTMLElement, context: Context): void => {
   if (active) {
     body.append(makeLinkedLine(TEXT_GRAY, [`active set: ${active.name}`]));
   }
+  renderSetLoader(body, context, reload);
 
   const frozen = getFrozenMastery(mastery, inventory, cap);
   if (frozen.length > 0) {
@@ -747,6 +756,70 @@ const renderCraftworks = (body: HTMLElement, context: Context): void => {
   }
 };
 
+// Loading a set is destructive: it clears the queue first. So it takes two
+// presses -- the second one states exactly how many items it will clear -- and
+// on failure it offers to put the old queue back, which the game's own button
+// cannot do because it never knew what was there.
+const renderSetLoader = (
+  body: HTMLElement,
+  context: Context,
+  reload: () => void
+): void => {
+  const { craftworks, goals, itemNames } = context;
+  if (!craftworks) {
+    return;
+  }
+  const recommended = getRecommendedSet(goals, craftworks.sets, itemNames);
+  if (!recommended) {
+    return;
+  }
+  const line = makeLinkedLine(TEXT_SUCCESS, [
+    `“${recommended.name}” matches your ${recommended.goalName} goal — `,
+  ]);
+  const action = document.createElement("a");
+  action.href = "#";
+  action.style.color = TEXT_SUCCESS;
+  action.style.textDecoration = "underline";
+  action.textContent = "load it";
+  let armed = false;
+  action.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!armed) {
+      armed = true;
+      action.textContent = `confirm — clears ${craftworks.slots.length} item${
+        craftworks.slots.length === 1 ? "" : "s"
+      }`;
+      action.style.color = TEXT_WARNING;
+      return;
+    }
+    action.textContent = "loading…";
+    action.style.color = TEXT_GRAY;
+    const result = await activateSet(recommended.id, craftworks.slots);
+    if (result.ok) {
+      reload();
+      return;
+    }
+    line.append(makeMutedText(` ${result.message}`));
+    action.textContent = "put the old queue back";
+    action.style.color = TEXT_ERROR;
+    action.addEventListener(
+      "click",
+      async (undoEvent) => {
+        undoEvent.preventDefault();
+        undoEvent.stopPropagation();
+        action.textContent = "restoring…";
+        const restored = await restoreQueue(result.previous);
+        action.textContent = `restored ${restored} of ${result.previous.length}`;
+        reload();
+      },
+      { once: true }
+    );
+  });
+  line.append(action);
+  body.append(line);
+};
+
 // One button and one panel for the whole session, hung off document.body.
 //
 // Framework7 keeps the page you came from in the DOM, so anything appended
@@ -808,7 +881,7 @@ const ensurePanel = (): void => {
         load(false);
       });
     } else {
-      renderCraftworks(body, context);
+      renderCraftworks(body, context, () => load(true));
     }
   };
 
