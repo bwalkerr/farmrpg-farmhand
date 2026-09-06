@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.17
+// @version 1.1.18
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -39,7 +39,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
+exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(6747);
 exports.itemDataState = new state_1.CachedState(state_1.StorageKey.ITEM_DATA, (state, itemName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -141,6 +141,122 @@ exports.pageDataState = new state_1.CachedState(state_1.StorageKey.PAGE_DATA, ()
         pages: [],
     },
 });
+// Quest requirements, keyed by the quest's display name — the game's quest list
+// gives ids and titles, buddy.farm indexes by slug, and the title is the only
+// thing the two share. Cached for a week alongside item data; quest definitions
+// change about as often.
+exports.questDataState = new state_1.CachedState(state_1.StorageKey.QUEST_DATA, (state, questName) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d;
+    if (!questName) {
+        return;
+    }
+    const previous = state.state[questName];
+    if (previous) {
+        return previous;
+    }
+    const response = yield fetch(`https://buddy.farm/page-data/q/${(0, requests_1.nameToSlug)(questName)}/page-data.json`);
+    if (!response.ok) {
+        return previous;
+    }
+    const data = (yield response.json());
+    const quest = (_d = (_c = (_b = (_a = data === null || data === void 0 ? void 0 : data.result) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.farmrpg) === null || _c === void 0 ? void 0 : _c.quests) === null || _d === void 0 ? void 0 : _d[0];
+    if (!quest) {
+        console.error(`Quest ${questName} not found`);
+        return previous;
+    }
+    return quest;
+}), {
+    timeout: 60 * 60 * 24 * 7, // 1 week
+});
+
+
+/***/ }),
+
+/***/ 498:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.gatherRecipeGraph = void 0;
+const api_1 = __webpack_require__(3413);
+const craftPlanner_1 = __webpack_require__(5825);
+// Walking the graph is kept apart from planning against it on purpose: the
+// planner is pure arithmetic and unit-testable with no DOM and no network,
+// while this half is the only piece that talks to buddy.farm.
+const MAX_NODES = 250;
+const toNode = (item) => {
+    var _a;
+    return ({
+        canCraft: item.canCraft,
+        craftingLevel: item.craftingLevel,
+        id: item.id,
+        image: item.image,
+        ingredients: ((_a = item.recipeItems) !== null && _a !== void 0 ? _a : []).map((entry) => ({
+            name: entry.item.name,
+            quantity: entry.quantity,
+        })),
+        item,
+        name: item.name,
+    });
+};
+// Walk the recipe tree from `roots` down to items with no recipe, fetching each
+// item's buddy.farm page exactly once. Breadth-first and batched so a deep tree
+// costs one round of parallel requests per level rather than one per node. Item
+// data is cached in GM storage for a week, so this is nearly free after the
+// first walk.
+const gatherRecipeGraph = (roots) => __awaiter(void 0, void 0, void 0, function* () {
+    const nodes = new Map();
+    const unknown = new Set();
+    let truncated = false;
+    let frontier = [...new Set(roots)];
+    for (let depth = 0; depth < craftPlanner_1.MAX_DEPTH && frontier.length > 0; depth++) {
+        const batch = frontier.filter((name) => !nodes.has(name) && !unknown.has(name));
+        if (batch.length === 0) {
+            break;
+        }
+        if (nodes.size + batch.length > MAX_NODES) {
+            truncated = true;
+            break;
+        }
+        const items = yield Promise.all(batch.map((name) => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                return yield api_1.itemDataState.get({ query: name });
+            }
+            catch (_a) { }
+        })));
+        const next = [];
+        for (const [index, item] of items.entries()) {
+            const name = batch[index];
+            if (!item) {
+                unknown.add(name);
+                continue;
+            }
+            const node = toNode(item);
+            // key by the name we asked for as well as the canonical one, so lookups
+            // by either spelling hit (buddy.farm renames a few, see NAME_OVERRIDES)
+            nodes.set(name, node);
+            nodes.set(node.name, node);
+            if (node.canCraft) {
+                next.push(...node.ingredients.map((entry) => entry.name));
+            }
+        }
+        frontier = next;
+    }
+    if (frontier.length > 0) {
+        truncated = true;
+    }
+    return { nodes, unknown, truncated };
+});
+exports.gatherRecipeGraph = gatherRecipeGraph;
 
 
 /***/ }),
@@ -617,6 +733,120 @@ exports.chatState = new state_1.CachedState(state_1.StorageKey.IS_CHAT_ENABLED, 
     persist: false,
     defaultState: true,
 });
+
+
+/***/ }),
+
+/***/ 4514:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.publishInventoryPage = exports.inventoryState = exports.toInventorySnapshot = exports.parseInventoryPage = exports.getRowCount = void 0;
+const state_1 = __webpack_require__(4782);
+const requests_1 = __webpack_require__(3300);
+const page_1 = __webpack_require__(7952);
+// e.g. "you cannot store more than 200 of any one item"
+const INVENTORY_CAP_PATTERN = /more than ([\d,]+) of any/g;
+// count text of an inventory row, excluding any badge the cap warnings appended
+const getRowCount = (after) => {
+    const countText = [...after.childNodes]
+        .filter((node) => !(node instanceof HTMLElement && node.classList.contains("fh-cap-badge")))
+        .map((node) => { var _a; return (_a = node.textContent) !== null && _a !== void 0 ? _a : ""; })
+        .join("");
+    return Number(countText.replaceAll(",", "").trim());
+};
+exports.getRowCount = getRowCount;
+// Parse every item row out of an inventory page DOM, plus the storage cap.
+// This is the whole inventory, unfiltered — the cap tracker narrows it down to
+// the at/near-cap rows, the craft planner wants all of it. Returns undefined
+// when the page carries no cap text at all, which is how a fetch that landed
+// somewhere else (a login redirect, an error page) is told apart from a
+// genuinely empty inventory.
+const parseInventoryPage = (root) => {
+    var _a, _b, _c, _d, _e;
+    // the page can mention several caps (e.g. the wagon upgrade pitch quotes
+    // the next tier's number), so use the smallest match: that is always the
+    // player's current cap
+    const caps = [...((_a = root.textContent) !== null && _a !== void 0 ? _a : "").matchAll(INVENTORY_CAP_PATTERN)]
+        .map((match) => Number(match[1].replaceAll(",", "")))
+        .filter((value) => value > 0);
+    if (caps.length === 0) {
+        return undefined;
+    }
+    const cap = Math.min(...caps);
+    const rows = [];
+    for (const row of root.querySelectorAll(".list-group li")) {
+        if (row.classList.contains("item-divider")) {
+            continue;
+        }
+        const after = row.querySelector(".item-after");
+        const link = (_b = row.querySelector("a.item-link")) !== null && _b !== void 0 ? _b : row.querySelector("a");
+        if (!after || !link) {
+            continue;
+        }
+        const count = (0, exports.getRowCount)(after);
+        if (Number.isNaN(count)) {
+            continue;
+        }
+        const image = row.querySelector(".item-media img");
+        const title = row.querySelector(".item-title");
+        const name = (_c = title === null || title === void 0 ? void 0 : title.textContent) === null || _c === void 0 ? void 0 : _c.trim();
+        if (!name) {
+            continue;
+        }
+        rows.push({
+            count,
+            href: (_d = link.getAttribute("href")) !== null && _d !== void 0 ? _d : "inventory.php",
+            image: (_e = image === null || image === void 0 ? void 0 : image.getAttribute("src")) !== null && _e !== void 0 ? _e : undefined,
+            name,
+        });
+    }
+    return { cap, rows };
+};
+exports.parseInventoryPage = parseInventoryPage;
+const toInventorySnapshot = (page) => {
+    var _a;
+    const quantities = {};
+    for (const row of page.rows) {
+        // the page lists an item once, but sum defensively rather than let a
+        // duplicate row silently overwrite the real count
+        quantities[row.name] = ((_a = quantities[row.name]) !== null && _a !== void 0 ? _a : 0) + row.count;
+    }
+    return { cap: page.cap, quantities, updatedAt: Date.now() };
+};
+exports.toInventorySnapshot = toInventorySnapshot;
+// The player's current inventory, as a name -> count map.
+//
+// No `defaultState`: with an object default, `set` merges over the previous
+// value, which for a full snapshot is wrong — an item spent down to zero drops
+// off the page entirely and a merge would keep asserting the stale count. With
+// no default, a fresh snapshot replaces the old one wholesale, and `set(undefined)`
+// (a parse that produced nothing) keeps the last good one instead of asserting
+// an empty inventory.
+exports.inventoryState = new state_1.CachedState(state_1.StorageKey.INVENTORY, () => __awaiter(void 0, void 0, void 0, function* () {
+    const response = yield (0, requests_1.getHTML)(page_1.Page.INVENTORY, new URLSearchParams());
+    const page = (0, exports.parseInventoryPage)(response.body);
+    return page ? (0, exports.toInventorySnapshot)(page) : undefined;
+}), {
+    timeout: 10 * 60, // 10 minutes
+});
+// Publish an already-parsed page into the snapshot. Callers that fetched or
+// rendered the inventory for their own reasons use this so the planner rides
+// along on a request that already happened instead of issuing its own.
+const publishInventoryPage = (page) => {
+    exports.inventoryState.set((0, exports.toInventorySnapshot)(page));
+};
+exports.publishInventoryPage = publishInventoryPage;
 
 
 /***/ }),
@@ -1569,6 +1799,92 @@ const collectPets = () => __awaiter(void 0, void 0, void 0, function* () {
     yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COLLECT_ALL_PET_ITEMS }));
 });
 exports.collectPets = collectPets;
+
+
+/***/ }),
+
+/***/ 303:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getQuestGoals = exports.parseActiveQuests = void 0;
+const page_1 = __webpack_require__(7952);
+const api_1 = __webpack_require__(3413);
+// Read the player's open requests off the quests page. Same selectors the quest
+// tagging feature has used since upstream, so this is proven markup rather than
+// a fresh guess: each request is an `li` whose link carries the quest id and
+// whose `.item-title strong` is the title.
+const parseActiveQuests = () => {
+    var _a, _b, _c;
+    const list = (0, page_1.getListByTitle)(/Active Requests/);
+    if (!list) {
+        return [];
+    }
+    const quests = [];
+    for (const element of list.querySelectorAll("li")) {
+        const link = element.querySelector("a");
+        const href = (_a = link === null || link === void 0 ? void 0 : link.getAttribute("href")) !== null && _a !== void 0 ? _a : "";
+        const id = href.split("?id=")[1];
+        const title = (_c = (_b = element
+            .querySelector(".item-title strong")) === null || _b === void 0 ? void 0 : _b.textContent) === null || _c === void 0 ? void 0 : _c.trim();
+        if (!id || !title) {
+            continue;
+        }
+        quests.push({ href, id, title });
+    }
+    return quests;
+};
+exports.parseActiveQuests = parseActiveQuests;
+// Turn open requests into goals by looking their requirements up on buddy.farm.
+//
+// The game's quest list gives ids and titles but not requirements, and the
+// title is the only key the two sources share — so a quest buddy.farm has not
+// indexed (a brand new or event request) simply drops out rather than being
+// reported as needing nothing.
+const getQuestGoals = (quests) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const details = yield Promise.all(quests.map((quest) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            return yield api_1.questDataState.get({ query: quest.title });
+        }
+        catch (_a) { }
+    })));
+    const goals = [];
+    const unmatched = [];
+    for (const [index, detail] of details.entries()) {
+        const quest = quests[index];
+        if (!detail) {
+            unmatched.push(quest.title);
+            continue;
+        }
+        const needs = ((_a = detail.requiredItems) !== null && _a !== void 0 ? _a : []).map((entry) => ({
+            name: entry.item.name,
+            quantity: entry.quantity,
+        }));
+        if (needs.length === 0) {
+            // a request that wants only silver or a level has no item bottleneck
+            continue;
+        }
+        goals.push({
+            href: quest.href,
+            kind: "quest",
+            label: quest.title,
+            needs,
+        });
+    }
+    return { goals, unmatched };
+});
+exports.getQuestGoals = getQuestGoals;
 
 
 /***/ }),
@@ -3111,6 +3427,407 @@ exports.navigationStyle = {
 
 /***/ }),
 
+/***/ 3995:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.craftPlanner = void 0;
+const theme_1 = __webpack_require__(1178);
+const craftPlanner_1 = __webpack_require__(5825);
+const recipes_1 = __webpack_require__(498);
+const page_1 = __webpack_require__(7952);
+const inventory_1 = __webpack_require__(4514);
+const craftworks_1 = __webpack_require__(7831);
+const settings_1 = __webpack_require__(126);
+const SETTING_CRAFT_PLANNER = {
+    id: settings_1.SettingId.CRAFT_PLANNER,
+    title: "Item: Craft planner",
+    description: `
+    On craftable items, work the whole recipe tree out against your inventory:
+    how many you can make now, the sub-crafts, what you're short of, and where
+    to go get it
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+const CONTAINER_ID = "fh-craft-planner";
+const makeLine = (color, text) => {
+    const line = document.createElement("div");
+    line.style.color = color;
+    line.style.fontSize = "12px";
+    line.style.lineHeight = "1.5";
+    line.textContent = text;
+    return line;
+};
+const makeHeading = (text) => {
+    const heading = document.createElement("div");
+    heading.textContent = text;
+    heading.style.color = theme_1.TEXT_WHITE;
+    heading.style.fontSize = "12px";
+    heading.style.fontWeight = "bold";
+    heading.style.margin = "10px 0 4px";
+    return heading;
+};
+const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
+const renderPlan = (output, graph, plan, maxCraftable, inventory, cap) => {
+    output.textContent = "";
+    output.append(makeLine(maxCraftable > 0 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, maxCraftable > 0
+        ? `You can make ${maxCraftable.toLocaleString()} right now.`
+        : "You can't make any right now."));
+    // sub-crafts, deepest first — that order never needs a later step's output
+    const subSteps = plan.steps.filter((step) => step.name !== plan.target);
+    if (subSteps.length > 0) {
+        output.append(makeHeading("Craft in this order"));
+        for (const step of subSteps) {
+            output.append(makeLine(theme_1.TEXT_GRAY, `${step.quantity.toLocaleString()} × ${step.name}`));
+        }
+        output.append(makeLine(theme_1.TEXT_GRAY, `${plan.quantity.toLocaleString()} × ${plan.target}`));
+    }
+    if (plan.missing.length === 0) {
+        output.append(makeLine(theme_1.TEXT_SUCCESS, `You have everything for ${plan.quantity}.`));
+    }
+    else {
+        output.append(makeHeading("Short of"));
+        for (const entry of plan.missing) {
+            output.append(makeLine(theme_1.TEXT_WARNING, `${entry.quantity.toLocaleString()} × ${entry.name}`));
+        }
+        const sourcing = (0, craftPlanner_1.planSourcing)(graph, plan.missing);
+        if (sourcing.locations.length > 0) {
+            output.append(makeHeading("Where to go"));
+            for (const location of sourcing.locations) {
+                const detail = location.items
+                    .map((item) => `${item.quantity.toLocaleString()} ${item.name}`)
+                    .join(", ");
+                output.append(makeLine(theme_1.TEXT_SUCCESS, `${location.location} — ~${formatHits(location.hits)} ${location.type === "fishing" ? "casts" : "explores"} (${detail})`));
+            }
+        }
+        if (sourcing.unsourced.length > 0) {
+            output.append(makeLine(theme_1.TEXT_GRAY, `No drop location on buddy.farm for: ${sourcing.unsourced.join(", ")}`));
+        }
+    }
+    // Craftworks holds 8 for Reed (6 base + 2 Patreon); assume the common case
+    // rather than fetching the page just to read the number back
+    const queue = (0, craftworks_1.planCraftworksQueue)(plan, inventory, cap, 8);
+    if (queue.entries.length > 1) {
+        output.append(makeHeading("Craftworks queue for this"));
+        for (const entry of queue.entries) {
+            output.append(makeLine(theme_1.TEXT_GRAY, `${entry.position}. ${entry.name} (${entry.quantity.toLocaleString()} needed)`));
+        }
+        for (const entry of queue.dropped) {
+            output.append(makeLine(theme_1.TEXT_GRAY, `skip ${entry.name} — ${entry.reason}`));
+        }
+        if (queue.targetOmitted) {
+            output.append(makeLine(theme_1.TEXT_GRAY, `${plan.target} itself doesn't fit — craft it by hand once the chain fills.`));
+        }
+    }
+    if (plan.truncated) {
+        output.append(makeLine(theme_1.TEXT_GRAY, "Recipe tree was cut short; treat this as a floor."));
+    }
+    if (plan.unknown.length > 0) {
+        output.append(makeLine(theme_1.TEXT_GRAY, `No buddy.farm data for: ${plan.unknown.join(", ")}`));
+    }
+};
+exports.craftPlanner = {
+    settings: [SETTING_CRAFT_PLANNER],
+    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e;
+        if (page !== page_1.Page.ITEM) {
+            return;
+        }
+        if (!settings[settings_1.SettingId.CRAFT_PLANNER]) {
+            return;
+        }
+        const currentPage = (0, page_1.getCurrentPage)();
+        if (!currentPage) {
+            return;
+        }
+        const itemName = (_b = (_a = currentPage
+            .querySelector(".sharelink")) === null || _a === void 0 ? void 0 : _a.textContent) === null || _b === void 0 ? void 0 : _b.trim();
+        if (!itemName) {
+            return;
+        }
+        // the item page is re-rendered on navigation; never stack two cards
+        (_c = currentPage.querySelector(`#${CONTAINER_ID}`)) === null || _c === void 0 ? void 0 : _c.remove();
+        const graph = yield (0, recipes_1.gatherRecipeGraph)([itemName]);
+        const root = graph.nodes.get(itemName);
+        // nothing to plan for something that isn't crafted
+        if (!(root === null || root === void 0 ? void 0 : root.canCraft) || root.ingredients.length === 0) {
+            return;
+        }
+        const snapshot = yield inventory_1.inventoryState.get();
+        const inventory = (_d = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _d !== void 0 ? _d : {};
+        const card = document.createElement("div");
+        card.id = CONTAINER_ID;
+        card.className = "card";
+        const content = document.createElement("div");
+        content.className = "card-content";
+        const inner = document.createElement("div");
+        inner.className = "card-content-inner";
+        inner.style.borderLeft = `3px solid ${theme_1.BORDER_GRAY}`;
+        inner.style.paddingLeft = "10px";
+        const title = document.createElement("div");
+        title.textContent = "Craft plan";
+        title.style.color = theme_1.TEXT_WHITE;
+        title.style.fontWeight = "bold";
+        title.style.marginBottom = "6px";
+        inner.append(title);
+        const controls = document.createElement("div");
+        controls.style.alignItems = "center";
+        controls.style.display = "flex";
+        controls.style.gap = "8px";
+        controls.style.marginBottom = "6px";
+        const label = document.createElement("span");
+        label.textContent = "Quantity";
+        label.style.color = theme_1.TEXT_GRAY;
+        label.style.fontSize = "12px";
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "1";
+        input.value = "1";
+        (0, theme_1.applyStyles)(input, Object.assign(Object.assign({}, theme_1.INPUT_STYLES), { minWidth: "90px" }));
+        controls.append(label, input);
+        inner.append(controls);
+        const output = document.createElement("div");
+        inner.append(output);
+        content.append(inner);
+        card.append(content);
+        const details = (0, page_1.getCardByTitle)("Item Details");
+        if (details) {
+            details.after(card);
+        }
+        else {
+            (_e = currentPage.querySelector(".content-block")) === null || _e === void 0 ? void 0 : _e.append(card);
+        }
+        // the graph and the inventory are already in hand, so re-planning on every
+        // keystroke is pure arithmetic — no requests, no debounce needed
+        const maxCraftable = (0, craftPlanner_1.getMaxCraftable)(graph, itemName, inventory);
+        const update = () => {
+            const quantity = Math.max(1, Math.floor(Number(input.value) || 1));
+            renderPlan(output, graph, (0, craftPlanner_1.planCraft)(graph, itemName, quantity, inventory), maxCraftable, inventory, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap);
+        };
+        input.addEventListener("input", update);
+        if (maxCraftable > 1) {
+            input.value = String(maxCraftable);
+        }
+        update();
+    }),
+};
+
+
+/***/ }),
+
+/***/ 6969:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.craftworksAdvisor = void 0;
+const craftworks_1 = __webpack_require__(7831);
+const theme_1 = __webpack_require__(1178);
+const recipes_1 = __webpack_require__(498);
+const craftPlanner_1 = __webpack_require__(5825);
+const page_1 = __webpack_require__(7952);
+const inventory_1 = __webpack_require__(4514);
+const settings_1 = __webpack_require__(126);
+const SETTING_CRAFTWORKS_ADVISOR = {
+    id: settings_1.SettingId.CRAFTWORKS_ADVISOR,
+    title: "Craftworks: Queue advisor",
+    description: `
+    Summarize the Craftworks queue: slots that can't craft, what each stalled
+    slot is waiting on, ordering mistakes, and where to go get the blockers
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+const CONTAINER_ID = "fh-craftworks-advisor";
+const makeLine = (color, text) => {
+    const line = document.createElement("div");
+    line.style.color = color;
+    line.style.fontSize = "12px";
+    line.style.lineHeight = "1.5";
+    line.style.marginBottom = "3px";
+    line.textContent = text;
+    return line;
+};
+const makeHeading = (text) => {
+    const heading = document.createElement("div");
+    heading.textContent = text;
+    heading.style.color = theme_1.TEXT_WHITE;
+    heading.style.fontSize = "12px";
+    heading.style.fontWeight = "bold";
+    heading.style.margin = "10px 0 4px";
+    return heading;
+};
+const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
+const renderAdvice = (container, slots, maxSlots) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const snapshot = yield inventory_1.inventoryState.get();
+    const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
+    const advice = (0, craftworks_1.adviseOnSlots)(slots, cap);
+    const summary = document.createElement("div");
+    summary.style.color = theme_1.TEXT_GRAY;
+    summary.style.fontSize = "12px";
+    summary.style.marginBottom = "6px";
+    const freeSlots = maxSlots ? maxSlots - slots.length : 0;
+    summary.textContent = `${advice.working.length} of ${slots.length} slots are crafting${freeSlots > 0 ? `, ${freeSlots} slot${freeSlots === 1 ? "" : "s"} free` : ""}.`;
+    container.append(summary);
+    if (advice.dead.length > 0) {
+        container.append(makeHeading("At cap — these slots can't craft"));
+        for (const slot of advice.dead) {
+            container.append(makeLine(theme_1.TEXT_ERROR, `#${slot.position} ${slot.name} — ${slot.inventory.toLocaleString()}${cap ? ` / ${cap.toLocaleString()}` : ""}. Free the slot or spend some down.`));
+        }
+    }
+    if (advice.ordering.length > 0) {
+        container.append(makeHeading("Wrong order"));
+        for (const { blocker, producer, slot } of advice.ordering) {
+            container.append(makeLine(theme_1.TEXT_WARNING, `#${slot.position} ${slot.name} waits on ${blocker}, but #${producer.position} ${producer.name} makes it — the queue runs top-down, so move #${producer.position} above #${slot.position}.`));
+        }
+    }
+    if (advice.paused.length > 0) {
+        container.append(makeLine(theme_1.TEXT_GRAY, `Paused: ${advice.paused
+            .map((slot) => `#${slot.position} ${slot.name}`)
+            .join(", ")}`));
+    }
+    if (advice.blockers.size === 0) {
+        if (advice.dead.length === 0) {
+            container.append(makeLine(theme_1.TEXT_SUCCESS, "Nothing is stalled."));
+        }
+        return;
+    }
+    if (advice.upstream.length > 0) {
+        container.append(makeLine(theme_1.TEXT_GRAY, `Clears on its own: ${advice.upstream
+            .map((blocker) => { var _a; return `${blocker.name} (#${(_a = blocker.producer) === null || _a === void 0 ? void 0 : _a.position} makes it)`; })
+            .join(", ")}`));
+    }
+    if (advice.roots.length === 0) {
+        return;
+    }
+    // only the root blockers are worth looking up: the rest are already being
+    // made by a slot above the one waiting on them
+    const names = advice.roots.map((blocker) => blocker.name);
+    let graph;
+    try {
+        graph = yield (0, recipes_1.gatherRecipeGraph)(names);
+    }
+    catch (_b) {
+        container.append(makeLine(theme_1.TEXT_GRAY, "Could not reach buddy.farm for drop locations."));
+        return;
+    }
+    container.append(makeHeading("Stalled on"));
+    const byLocation = new Map();
+    const craftable = [];
+    const queued = new Set(slots.map((slot) => slot.name));
+    for (const blocker of advice.roots) {
+        const { name } = blocker;
+        const node = graph.nodes.get(name);
+        const consumers = blocker.slots
+            .map((slot) => `#${slot.position} ${slot.name}`)
+            .join(", ");
+        const source = (0, craftPlanner_1.getBaselineSource)((0, craftPlanner_1.getDropSources)(node === null || node === void 0 ? void 0 : node.item));
+        const details = [];
+        if (source) {
+            details.push(`${source.location} — 1 per ${formatHits(source.rate)} ${source.type === "fishing" ? "casts" : "explores"}`);
+            const existing = (_a = byLocation.get(source.location)) !== null && _a !== void 0 ? _a : {
+                blockers: [],
+                hits: 0,
+                type: source.type,
+            };
+            existing.blockers.push(name);
+            // one unit's worth, since the game never says how many it is short by
+            existing.hits += source.rate;
+            byLocation.set(source.location, existing);
+        }
+        if ((node === null || node === void 0 ? void 0 : node.canCraft) && !queued.has(name)) {
+            craftable.push(name);
+            details.push("craftable — could take the free slot");
+        }
+        container.append(makeLine(theme_1.TEXT_WARNING, `${name} → blocks ${consumers}${details.length > 0
+            ? ` · ${details.join(" · ")}`
+            : " · no known source"}`));
+    }
+    const locations = [...byLocation.entries()].sort((a, b) => b[1].blockers.length - a[1].blockers.length);
+    if (locations.length > 0) {
+        container.append(makeHeading("Where to go"));
+        for (const [location, entry] of locations) {
+            container.append(makeLine(entry.blockers.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, `${location} — ${entry.blockers.join(", ")} (${formatHits(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"} for one of each)`));
+        }
+    }
+    if (craftable.length > 0 && (maxSlots !== null && maxSlots !== void 0 ? maxSlots : 0) > slots.length) {
+        container.append(makeLine(theme_1.TEXT_SUCCESS, `Free slot: adding ${craftable[0]} above the slot that needs it would unstall it without exploring.`));
+    }
+});
+exports.craftworksAdvisor = {
+    settings: [SETTING_CRAFTWORKS_ADVISOR],
+    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c;
+        if (page !== page_1.Page.CRAFTWORKS) {
+            return;
+        }
+        if (!settings[settings_1.SettingId.CRAFTWORKS_ADVISOR]) {
+            return;
+        }
+        const currentPage = (0, page_1.getCurrentPage)();
+        if (!currentPage) {
+            return;
+        }
+        // the page re-renders on every add/remove/pause, so drop a stale card
+        // rather than stack a second one on top of it
+        (_a = currentPage.querySelector(`#${CONTAINER_ID}`)) === null || _a === void 0 ? void 0 : _a.remove();
+        const slots = (0, craftworks_1.parseSlots)(currentPage);
+        if (slots.length === 0) {
+            return;
+        }
+        const card = document.createElement("div");
+        card.id = CONTAINER_ID;
+        card.className = "card fh-craftworks-advisor";
+        const content = document.createElement("div");
+        content.className = "card-content";
+        const inner = document.createElement("div");
+        inner.className = "card-content-inner";
+        inner.style.borderLeft = `3px solid ${theme_1.BORDER_GRAY}`;
+        inner.style.paddingLeft = "10px";
+        const title = document.createElement("div");
+        title.textContent = "Queue advisor";
+        title.style.color = theme_1.TEXT_WHITE;
+        title.style.fontWeight = "bold";
+        title.style.marginBottom = "6px";
+        inner.append(title);
+        content.append(inner);
+        card.append(content);
+        // sit directly above the queue it is describing
+        const list = (_b = currentPage.querySelector(".cwitems")) === null || _b === void 0 ? void 0 : _b.closest(".card");
+        if (list === null || list === void 0 ? void 0 : list.parentElement) {
+            list.parentElement.insertBefore(card, list);
+        }
+        else {
+            (_c = currentPage.querySelector(".content-block")) === null || _c === void 0 ? void 0 : _c.append(card);
+        }
+        yield renderAdvice(inner, slots, (0, craftworks_1.getMaxSlots)(currentPage));
+    }),
+};
+
+
+/***/ }),
+
 /***/ 2224:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -4047,6 +4764,171 @@ exports.fleaMarket = {
 
 /***/ }),
 
+/***/ 8697:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.focusDashboard = void 0;
+const theme_1 = __webpack_require__(1178);
+const focus_1 = __webpack_require__(7167);
+const recipes_1 = __webpack_require__(498);
+const page_1 = __webpack_require__(7952);
+const quests_1 = __webpack_require__(303);
+const inventory_1 = __webpack_require__(4514);
+const settings_1 = __webpack_require__(126);
+const SETTING_FOCUS_DASHBOARD = {
+    id: settings_1.SettingId.FOCUS_DASHBOARD,
+    title: "Quests: Focus dashboard",
+    description: `
+    On the quests page, cross your open requests against your inventory: what
+    you can turn in now, what's one item away, and which materials are holding
+    up the most requests
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+const CONTAINER_ID = "fh-focus-dashboard";
+const MAX_LISTED = 6;
+const makeLine = (color, text) => {
+    const line = document.createElement("div");
+    line.style.color = color;
+    line.style.fontSize = "12px";
+    line.style.lineHeight = "1.5";
+    line.style.marginBottom = "3px";
+    line.textContent = text;
+    return line;
+};
+const makeHeading = (text) => {
+    const heading = document.createElement("div");
+    heading.textContent = text;
+    heading.style.color = theme_1.TEXT_WHITE;
+    heading.style.fontSize = "12px";
+    heading.style.fontWeight = "bold";
+    heading.style.margin = "10px 0 4px";
+    return heading;
+};
+const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
+const describeBottleneck = (entry) => {
+    const gated = entry.goalsGated > 1
+        ? `blocks ${entry.goalsGated} requests`
+        : `blocks ${entry.goals[0]}`;
+    return `${entry.name} — ${gated}, need up to ${entry.maxNeeded.toLocaleString()}`;
+};
+const render = (container, goals) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const snapshot = yield inventory_1.inventoryState.get();
+    const inventory = (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _a !== void 0 ? _a : {};
+    // one walk covering every item any open request wants, so the whole board is
+    // costed from a single batch of buddy.farm lookups
+    const graph = yield (0, recipes_1.gatherRecipeGraph)(goals.flatMap((goal) => goal.needs.map((need) => need.name)));
+    const statuses = (0, focus_1.getGoalStatuses)(graph, goals, inventory);
+    const ready = statuses.filter((status) => status.isReady);
+    const nearlyDone = (0, focus_1.getNearlyDone)(statuses);
+    const bottlenecks = (0, focus_1.rankBottlenecks)(statuses);
+    container.append(makeLine(theme_1.TEXT_GRAY, `${goals.length} open request${goals.length === 1 ? "" : "s"} costed against your inventory.`));
+    if (ready.length > 0) {
+        container.append(makeHeading("Ready to turn in"));
+        for (const status of ready) {
+            container.append(makeLine(theme_1.TEXT_SUCCESS, status.goal.label));
+        }
+    }
+    if (nearlyDone.length > 0) {
+        container.append(makeHeading("One item away"));
+        for (const status of nearlyDone.slice(0, MAX_LISTED)) {
+            const [only] = status.missing;
+            container.append(makeLine(theme_1.TEXT_WARNING, `${status.goal.label} — ${only.quantity.toLocaleString()} × ${only.name}`));
+        }
+    }
+    if (bottlenecks.length > 0) {
+        container.append(makeHeading("Holding up the most"));
+        for (const entry of bottlenecks.slice(0, MAX_LISTED)) {
+            container.append(makeLine(entry.goalsGated > 1 ? theme_1.TEXT_WARNING : theme_1.TEXT_GRAY, describeBottleneck(entry)));
+        }
+        const sourcing = (0, focus_1.getFocusSourcing)(graph, bottlenecks);
+        if (sourcing.locations.length > 0) {
+            container.append(makeHeading("Where to go"));
+            for (const location of sourcing.locations) {
+                container.append(makeLine(location.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, `${location.location} — ${location.items
+                    .map((item) => item.name)
+                    .join(", ")} (~${formatHits(location.hits)} ${location.type === "fishing" ? "casts" : "explores"})`));
+            }
+        }
+    }
+    else if (ready.length === statuses.length && statuses.length > 0) {
+        container.append(makeLine(theme_1.TEXT_SUCCESS, "Every open request is ready to hand in."));
+    }
+});
+exports.focusDashboard = {
+    settings: [SETTING_FOCUS_DASHBOARD],
+    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b;
+        if (page !== page_1.Page.QUESTS) {
+            return;
+        }
+        if (!settings[settings_1.SettingId.FOCUS_DASHBOARD]) {
+            return;
+        }
+        const currentPage = (0, page_1.getCurrentPage)();
+        if (!currentPage) {
+            return;
+        }
+        (_a = currentPage.querySelector(`#${CONTAINER_ID}`)) === null || _a === void 0 ? void 0 : _a.remove();
+        const quests = (0, quests_1.parseActiveQuests)();
+        if (quests.length === 0) {
+            return;
+        }
+        const card = document.createElement("div");
+        card.id = CONTAINER_ID;
+        card.className = "card";
+        const content = document.createElement("div");
+        content.className = "card-content";
+        const inner = document.createElement("div");
+        inner.className = "card-content-inner";
+        inner.style.borderLeft = `3px solid ${theme_1.BORDER_GRAY}`;
+        inner.style.paddingLeft = "10px";
+        const title = document.createElement("div");
+        title.textContent = "Focus";
+        title.style.color = theme_1.TEXT_WHITE;
+        title.style.fontWeight = "bold";
+        title.style.marginBottom = "6px";
+        inner.append(title);
+        const status = makeLine(theme_1.TEXT_GRAY, "Costing your open requests…");
+        inner.append(status);
+        content.append(inner);
+        card.append(content);
+        const heading = (0, page_1.getTitle)(/Active Requests/);
+        if (heading) {
+            heading.before(card);
+        }
+        else {
+            (_b = currentPage.querySelector(".content-block")) === null || _b === void 0 ? void 0 : _b.prepend(card);
+        }
+        const { goals, unmatched } = yield (0, quests_1.getQuestGoals)(quests);
+        status.remove();
+        if (goals.length === 0) {
+            inner.append(makeLine(theme_1.TEXT_GRAY, "No requirements found for your open requests."));
+            return;
+        }
+        yield render(inner, goals);
+        if (unmatched.length > 0) {
+            inner.append(makeLine(theme_1.TEXT_GRAY, `Not on buddy.farm, so not costed: ${unmatched.join(", ")}`));
+        }
+    }),
+};
+
+
+/***/ }),
+
 /***/ 4894:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -4393,6 +5275,7 @@ exports.inventoryCapWarnings = void 0;
 const theme_1 = __webpack_require__(1178);
 const page_1 = __webpack_require__(7952);
 const requests_1 = __webpack_require__(3300);
+const inventory_1 = __webpack_require__(4514);
 const settings_1 = __webpack_require__(126);
 const SETTING_INVENTORY_CAP_WARNINGS = {
     id: settings_1.SettingId.INVENTORY_CAP_WARNINGS,
@@ -4411,8 +5294,6 @@ const SETTING_INVENTORY_CAP_TRACKER = {
     type: "boolean",
     defaultValue: true,
 };
-// e.g. "you cannot store more than 200 of any one item"
-const INVENTORY_CAP_PATTERN = /more than ([\d,]+) of any/g;
 const NEAR_CAP_RATIO = 0.9;
 const MAX_TRACKER_ITEMS = 20;
 const PASSIVE_REFRESH_MS = 10 * 60 * 1000;
@@ -4425,49 +5306,29 @@ const capTrackerState = {
     updatedAt: 0,
 };
 const isInventoryPage = () => (window.location.hash || window.location.pathname).includes("inventory.php");
-// count text of an inventory row, excluding any badge we appended
-const getRowCount = (after) => {
-    const countText = [...after.childNodes]
-        .filter((node) => !(node instanceof HTMLElement && node.classList.contains("fh-cap-badge")))
-        .map((node) => { var _a; return (_a = node.textContent) !== null && _a !== void 0 ? _a : ""; })
-        .join("");
-    return Number(countText.replaceAll(",", "").trim());
-};
-// parse cap and at/near-cap items out of an inventory page DOM
+// narrow a parsed inventory page down to the at/near-cap rows. The parse
+// itself is shared with the craft planner (api/farmrpg/apis/inventory), which
+// wants every row; this is the only consumer that filters.
 const collectCapItems = (root) => {
-    var _a, _b, _c, _d, _e, _f;
-    // the page can mention several caps (e.g. the wagon upgrade pitch quotes
-    // the next tier's number), so use the smallest match: that is always the
-    // player's current cap
-    const caps = [...((_a = root.textContent) !== null && _a !== void 0 ? _a : "").matchAll(INVENTORY_CAP_PATTERN)]
-        .map((match) => Number(match[1].replaceAll(",", "")))
-        .filter((value) => value > 0);
-    if (caps.length === 0) {
+    const page = (0, inventory_1.parseInventoryPage)(root);
+    if (!page) {
         return undefined;
     }
-    const cap = Math.min(...caps);
+    // the planner rides along on whatever fetch or page render got us here
+    // rather than issuing an inventory request of its own
+    (0, inventory_1.publishInventoryPage)(page);
+    const { cap, rows } = page;
     const items = [];
-    for (const row of root.querySelectorAll(".list-group li")) {
-        if (row.classList.contains("item-divider")) {
+    for (const row of rows) {
+        if (row.count === 0 || row.count < cap * NEAR_CAP_RATIO) {
             continue;
         }
-        const after = row.querySelector(".item-after");
-        const link = (_b = row.querySelector("a.item-link")) !== null && _b !== void 0 ? _b : row.querySelector("a");
-        if (!after || !link) {
-            continue;
-        }
-        const count = getRowCount(after);
-        if (Number.isNaN(count) || count === 0 || count < cap * NEAR_CAP_RATIO) {
-            continue;
-        }
-        const image = row.querySelector(".item-media img");
-        const title = row.querySelector(".item-title");
         items.push({
-            count,
-            href: (_c = link.getAttribute("href")) !== null && _c !== void 0 ? _c : "inventory.php",
-            image: (_d = image === null || image === void 0 ? void 0 : image.getAttribute("src")) !== null && _d !== void 0 ? _d : undefined,
-            isAtCap: count >= cap,
-            name: (_f = (_e = title === null || title === void 0 ? void 0 : title.textContent) === null || _e === void 0 ? void 0 : _e.trim()) !== null && _f !== void 0 ? _f : "Item",
+            count: row.count,
+            href: row.href,
+            image: row.image,
+            isAtCap: row.count >= cap,
+            name: row.name,
         });
     }
     return { cap, items };
@@ -4899,7 +5760,7 @@ const renderInventoryCapWarnings = () => {
         if (!after) {
             continue;
         }
-        const count = getRowCount(after);
+        const count = (0, inventory_1.getRowCount)(after);
         if (Number.isNaN(count) || count === 0) {
             continue;
         }
@@ -7259,7 +8120,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.17" !== void 0 ? "1.1.17" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.18" !== void 0 ? "1.1.18" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -7346,6 +8207,8 @@ const collapseItemImage_1 = __webpack_require__(4056);
 const compactSilver_1 = __webpack_require__(8181);
 const compressChat_1 = __webpack_require__(223);
 const confirmation_1 = __webpack_require__(3906);
+const craftPlanner_1 = __webpack_require__(3995);
+const craftworksAdvisor_1 = __webpack_require__(6969);
 const customNavigation_1 = __webpack_require__(2224);
 const dismissableChatBanners_1 = __webpack_require__(5164);
 const exploreFirst_1 = __webpack_require__(6030);
@@ -7353,6 +8216,7 @@ const farmhandSettings_1 = __webpack_require__(8973);
 const harvestNotifications_1 = __webpack_require__(4894);
 const fishInBarrel_1 = __webpack_require__(2100);
 const fleaMarket_1 = __webpack_require__(9361);
+const focusDashboard_1 = __webpack_require__(8697);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const highlightSelfInChat_1 = __webpack_require__(5454);
@@ -7406,10 +8270,14 @@ const FEATURES = [
     quickSellSafely_1.quicksellSafely,
     linkifyQuickCraft_1.linkifyQuickCraft,
     exploreFirst_1.exploreFirst,
+    craftPlanner_1.craftPlanner,
+    // craftworks
+    craftworksAdvisor_1.craftworksAdvisor,
     // inventory
     inventoryCapWarnings_1.inventoryCapWarnings,
     // quests
     quests_1.quests,
+    focusDashboard_1.focusDashboard,
     questCollapse_1.questCollapse,
     questTagging_1.questTagging,
     compactSilver_1.compactSilver,
@@ -7855,6 +8723,385 @@ exports.confirmations = {
 
 /***/ }),
 
+/***/ 5825:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.planSourcing = exports.getBaselineSource = exports.getDropSources = exports.getMaxCraftable = exports.planCraft = exports.MAX_DEPTH = void 0;
+// A recipe tree deep enough to reach raw drops from anything in the game, with
+// room to spare. The limit exists to stop a malformed or cyclic recipe graph
+// from hanging the page, not because real recipes come close to it.
+exports.MAX_DEPTH = 12;
+// Expand `quantity` of `target` into the sub-crafts and raw materials it needs,
+// spending `inventory` as it goes.
+//
+// The inventory is a single shared pool consumed depth-first, so an ingredient
+// needed by two different branches is never counted twice — the first branch to
+// ask for it gets it. The target itself is always crafted in full: holding 3
+// already does not reduce a request to craft 5 more.
+const planCraft = (graph, target, quantity, inventory) => {
+    const pool = Object.assign({}, inventory);
+    const spend = {};
+    const missing = {};
+    const stepsByName = new Map();
+    const unknown = new Set();
+    const { nodes } = graph;
+    let { truncated } = graph;
+    const addMissing = (name, amount) => {
+        var _a;
+        missing[name] = ((_a = missing[name]) !== null && _a !== void 0 ? _a : 0) + amount;
+    };
+    const addStep = (name, amount, depth) => {
+        const existing = stepsByName.get(name);
+        if (existing) {
+            existing.quantity += amount;
+            // an item needed at two depths has to be crafted before the deeper of
+            // its consumers, so the larger depth is the one that orders it
+            existing.depth = Math.max(existing.depth, depth);
+            return;
+        }
+        stepsByName.set(name, { depth, name, quantity: amount });
+    };
+    const expand = (name, want, depth, chain) => {
+        var _a, _b;
+        if (want <= 0) {
+            return;
+        }
+        // spend what's on hand before making more
+        const onHand = Math.min((_a = pool[name]) !== null && _a !== void 0 ? _a : 0, want);
+        if (onHand > 0) {
+            pool[name] -= onHand;
+            spend[name] = ((_b = spend[name]) !== null && _b !== void 0 ? _b : 0) + onHand;
+        }
+        const remaining = want - onHand;
+        if (remaining <= 0) {
+            return;
+        }
+        const node = nodes.get(name);
+        if (!node) {
+            unknown.add(name);
+            addMissing(name, remaining);
+            return;
+        }
+        // a recipe that reaches itself would recurse forever; stop and report the
+        // rest as raw rather than guessing which way round the cycle goes
+        if (chain.has(name)) {
+            truncated = true;
+            addMissing(name, remaining);
+            return;
+        }
+        if (!node.canCraft || node.ingredients.length === 0 || depth >= exports.MAX_DEPTH) {
+            if (depth >= exports.MAX_DEPTH) {
+                truncated = true;
+            }
+            addMissing(name, remaining);
+            return;
+        }
+        addStep(name, remaining, depth);
+        const nextChain = new Set(chain).add(name);
+        for (const ingredient of node.ingredients) {
+            expand(ingredient.name, ingredient.quantity * remaining, depth + 1, nextChain);
+        }
+    };
+    const root = nodes.get(target);
+    if (root && root.canCraft && root.ingredients.length > 0) {
+        addStep(root.name, quantity, 0);
+        const chain = new Set([target, root.name]);
+        for (const ingredient of root.ingredients) {
+            expand(ingredient.name, ingredient.quantity * quantity, 1, chain);
+        }
+    }
+    else if (root) {
+        addMissing(root.name, quantity);
+    }
+    else {
+        unknown.add(target);
+        addMissing(target, quantity);
+    }
+    return {
+        missing: Object.entries(missing)
+            .map(([name, amount]) => ({ name, quantity: amount }))
+            .sort((a, b) => b.quantity - a.quantity),
+        spend,
+        // deepest first is a valid crafting order: nothing at depth N needs
+        // anything produced at a depth shallower than N
+        steps: [...stepsByName.values()].sort((a, b) => b.depth - a.depth),
+        target,
+        quantity,
+        truncated,
+        unknown: [...unknown],
+    };
+};
+exports.planCraft = planCraft;
+// Largest quantity of `target` the inventory covers outright. Doubling search
+// for an upper bound, then a bisect — `planCraft` is pure and cheap once the
+// graph is in hand, so this costs no requests.
+const getMaxCraftable = (graph, target, inventory, limit = 10000) => {
+    const fits = (quantity) => (0, exports.planCraft)(graph, target, quantity, inventory).missing.length === 0;
+    if (!fits(1)) {
+        return 0;
+    }
+    let low = 1;
+    let high = 2;
+    while (high <= limit && fits(high)) {
+        low = high;
+        high *= 2;
+    }
+    high = Math.min(high, limit);
+    while (low + 1 < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (fits(middle)) {
+            low = middle;
+        }
+        else {
+            high = middle;
+        }
+    }
+    return low;
+};
+exports.getMaxCraftable = getMaxCraftable;
+// Every place an item drops, best rate first. Entries whose location is null
+// (farm and seed yields, which buddy.farm records without a location) are
+// skipped — they are not somewhere you can go.
+const getDropSources = (item) => {
+    var _a;
+    if (!item) {
+        return [];
+    }
+    const sources = [];
+    for (const entry of (_a = item.dropRatesItems) !== null && _a !== void 0 ? _a : []) {
+        const rates = entry.dropRates;
+        const location = rates === null || rates === void 0 ? void 0 : rates.location;
+        if (!(location === null || location === void 0 ? void 0 : location.name) || !entry.rate) {
+            continue;
+        }
+        sources.push({
+            ironDepot: rates.ironDepot === true,
+            location: location.name,
+            manualFishing: rates.manualFishing === true,
+            rate: entry.rate,
+            runecube: rates.runecube === true,
+            seed: rates.seed === true,
+            type: location.type === "fishing" ? "fishing" : "explore",
+        });
+    }
+    return sources.sort((a, b) => a.rate - b.rate);
+};
+exports.getDropSources = getDropSources;
+// The best rate available without assuming a perk the player may not have,
+// falling back to the overall best when every profile needs one.
+const getBaselineSource = (sources) => { var _a; return (_a = sources.find((source) => !source.ironDepot && !source.runecube)) !== null && _a !== void 0 ? _a : sources[0]; };
+exports.getBaselineSource = getBaselineSource;
+// Roll a list of missing items up into the places to go get them, so a plan
+// that needs eight different raws turns into two or three explore targets with
+// a hit count each.
+const planSourcing = (graph, missing) => {
+    var _a;
+    const byLocation = new Map();
+    const unsourced = [];
+    for (const entry of missing) {
+        const node = graph.nodes.get(entry.name);
+        const source = (0, exports.getBaselineSource)((0, exports.getDropSources)(node === null || node === void 0 ? void 0 : node.item));
+        if (!source) {
+            unsourced.push(entry.name);
+            continue;
+        }
+        const existing = (_a = byLocation.get(source.location)) !== null && _a !== void 0 ? _a : {
+            hits: 0,
+            items: [],
+            location: source.location,
+            type: source.type,
+        };
+        existing.hits += entry.quantity * source.rate;
+        existing.items.push({
+            name: entry.name,
+            quantity: entry.quantity,
+            rate: source.rate,
+        });
+        byLocation.set(source.location, existing);
+    }
+    return {
+        locations: [...byLocation.values()].sort((a, b) => b.hits - a.hits),
+        unsourced,
+    };
+};
+exports.planSourcing = planSourcing;
+
+
+/***/ }),
+
+/***/ 7831:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+// Reading the Craftworks queue and reasoning about it, kept free of rendering
+// and of any import that needs a browser so it can be unit-tested directly.
+//
+// The queue crafts top-down and only when every ingredient is in stock, so the
+// two things that quietly waste a slot are an item sitting at the inventory cap
+// (it can never craft) and a producer placed below the slot that consumes it.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.planCraftworksQueue = exports.adviseOnSlots = exports.getMaxSlots = exports.parseMaxSlots = exports.parseSlots = void 0;
+// "You can add up to <strong>8</strong> items total to the Craftworks."
+const MAX_SLOTS_PATTERN = /add up to\s*(?:<strong>)?\s*(\d+)\s*(?:<\/strong>)?\s*items total/i;
+const parseSlots = (root) => {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
+    const slots = [];
+    const rows = root.querySelectorAll(".cwitems li[data-name], li.close-panel[data-name]");
+    for (const [index, row] of [...rows].entries()) {
+        const name = (_a = row.dataset.name) === null || _a === void 0 ? void 0 : _a.trim();
+        if (!name) {
+            continue;
+        }
+        const status = row.querySelector(".item-title .disable-select");
+        const statusText = (_b = status === null || status === void 0 ? void 0 : status.textContent) !== null && _b !== void 0 ? _b : "";
+        const inventoryMatch = /Inventory:\s*([\d,]+)/.exec(statusText);
+        const positionText = (_d = (_c = row
+            .querySelector(".item-media span")) === null || _c === void 0 ? void 0 : _c.textContent) === null || _d === void 0 ? void 0 : _d.trim();
+        const blockedOn = [];
+        // the "Out of:" list is the game telling us exactly what stalled the slot,
+        // which is far more reliable than re-deriving it from the recipe
+        if (/out of:/i.test(statusText)) {
+            for (const link of (_e = status === null || status === void 0 ? void 0 : status.querySelectorAll("a")) !== null && _e !== void 0 ? _e : []) {
+                const blockerName = (_f = link.textContent) === null || _f === void 0 ? void 0 : _f.trim();
+                if (!blockerName) {
+                    continue;
+                }
+                blockedOn.push({
+                    id: (_j = (_h = /id=(\d+)/.exec((_g = link.getAttribute("href")) !== null && _g !== void 0 ? _g : "")) === null || _h === void 0 ? void 0 : _h[1]) !== null && _j !== void 0 ? _j : "",
+                    name: blockerName,
+                });
+            }
+        }
+        slots.push({
+            blockedOn,
+            id: (_k = row.dataset.id) !== null && _k !== void 0 ? _k : "",
+            inventory: Number((_m = (_l = inventoryMatch === null || inventoryMatch === void 0 ? void 0 : inventoryMatch[1]) === null || _l === void 0 ? void 0 : _l.replaceAll(",", "")) !== null && _m !== void 0 ? _m : "0"),
+            // red is the game's own "you are at the cap" marker on this row
+            isCapRed: /color:\s*red/i.test((_o = status === null || status === void 0 ? void 0 : status.getAttribute("style")) !== null && _o !== void 0 ? _o : ""),
+            isPaused: row.querySelector(".playcwbtn") !== null ||
+                /\(paused\)/i.test((_p = row.textContent) !== null && _p !== void 0 ? _p : ""),
+            name,
+            position: Number(positionText) || index + 1,
+        });
+    }
+    return slots;
+};
+exports.parseSlots = parseSlots;
+// "items total" is load-bearing: the Upgrade Craftworks card further down the
+// same page says "You can add up to 6 items to the Craftworks (Excluding
+// Patreon extra slots)", which is the base allowance, not the real cap. Only
+// the top card says "items total", and that is the number that matters.
+const parseMaxSlots = (text) => {
+    const match = MAX_SLOTS_PATTERN.exec(text);
+    return match ? Number(match[1]) : undefined;
+};
+exports.parseMaxSlots = parseMaxSlots;
+const getMaxSlots = (root) => { var _a; return (0, exports.parseMaxSlots)((_a = root.textContent) !== null && _a !== void 0 ? _a : ""); };
+exports.getMaxSlots = getMaxSlots;
+// Read the queue and work out which slots are actually producing, which are
+// stalled and on what, and which are stalled on something a *lower* slot makes
+// (the queue runs top-down, so a producer below its consumer never unblocks it).
+//
+// Blockers are then split in two, because they call for opposite responses: one
+// an earlier slot already produces will clear itself once that slot runs, while
+// one nothing in the queue makes is the actual reason the queue is stalled and
+// the only kind worth spending explores on.
+const adviseOnSlots = (slots, cap) => {
+    var _a;
+    const positionByName = new Map(slots.map((slot) => [slot.name, slot]));
+    const advice = {
+        blockers: new Map(),
+        dead: [],
+        ordering: [],
+        paused: [],
+        roots: [],
+        upstream: [],
+        working: [],
+    };
+    for (const slot of slots) {
+        const isAtCap = cap ? slot.inventory >= cap : slot.isCapRed;
+        if (isAtCap) {
+            advice.dead.push(slot);
+            continue;
+        }
+        if (slot.isPaused) {
+            advice.paused.push(slot);
+            continue;
+        }
+        if (slot.blockedOn.length === 0) {
+            advice.working.push(slot);
+            continue;
+        }
+        for (const blocker of slot.blockedOn) {
+            const producer = positionByName.get(blocker.name);
+            const existing = (_a = advice.blockers.get(blocker.name)) !== null && _a !== void 0 ? _a : {
+                name: blocker.name,
+                producer,
+                slots: [],
+            };
+            existing.slots.push(slot);
+            advice.blockers.set(blocker.name, existing);
+            if (producer && producer.position > slot.position) {
+                advice.ordering.push({ blocker: blocker.name, producer, slot });
+            }
+        }
+    }
+    for (const blocker of advice.blockers.values()) {
+        // a producer that is itself dead (at cap) or paused will not actually
+        // deliver, so its consumers are still stalled on something real
+        const isLive = blocker.producer &&
+            !advice.dead.includes(blocker.producer) &&
+            !advice.paused.includes(blocker.producer);
+        if (isLive) {
+            advice.upstream.push(blocker);
+        }
+        else {
+            advice.roots.push(blocker);
+        }
+    }
+    return advice;
+};
+exports.adviseOnSlots = adviseOnSlots;
+// Turn a craft plan into an ordered Craftworks queue.
+//
+// `plan.steps` already comes out deepest-first, which is exactly the order the
+// queue needs: every producer sits above the slot that consumes it, so one pass
+// down the queue carries the chain as far as the materials allow. Anything
+// already at the inventory cap is left out — it would occupy a slot and never
+// craft — and if there are more steps than slots the shallow end is dropped,
+// because the deep items are the ones that unblock everything above them.
+const planCraftworksQueue = (plan, inventory, cap, maxSlots) => {
+    var _a;
+    const dropped = [];
+    const eligible = [];
+    for (const step of plan.steps) {
+        if (cap !== undefined && ((_a = inventory[step.name]) !== null && _a !== void 0 ? _a : 0) >= cap) {
+            dropped.push({ name: step.name, reason: "already at cap" });
+            continue;
+        }
+        eligible.push({ name: step.name, quantity: step.quantity });
+    }
+    const kept = eligible.slice(0, Math.max(0, maxSlots));
+    for (const step of eligible.slice(Math.max(0, maxSlots))) {
+        dropped.push({ name: step.name, reason: "no free slot" });
+    }
+    return {
+        dropped,
+        entries: kept.map((step, index) => ({
+            name: step.name,
+            position: index + 1,
+            quantity: step.quantity,
+        })),
+        targetOmitted: !kept.some((step) => step.name === plan.target),
+    };
+};
+exports.planCraftworksQueue = planCraftworksQueue;
+
+
+/***/ }),
+
 /***/ 4276:
 /***/ (function(__unused_webpack_module, exports) {
 
@@ -7958,6 +9205,102 @@ const replaceSelect = (proxySelect, options) => {
 exports.replaceSelect = replaceSelect;
 const clearDropdown = () => { var _a; return (_a = document === null || document === void 0 ? void 0 : document.querySelector(".fh-item-selector-menu")) === null || _a === void 0 ? void 0 : _a.remove(); };
 exports.clearDropdown = clearDropdown;
+
+
+/***/ }),
+
+/***/ 7167:
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getFocusSourcing = exports.getNearlyDone = exports.rankBottlenecks = exports.getGoalStatuses = void 0;
+const craftPlanner_1 = __webpack_require__(5825);
+// Work out what each goal is still short of.
+//
+// Every goal is measured against the *full* inventory rather than a pool shared
+// between them. Goals are alternatives competing for the same materials, not a
+// batch to be completed at once, so "what would it take to finish this one" is
+// the question worth answering; a shared pool would make the second goal in an
+// arbitrary order look worse than the first for no real reason.
+const getGoalStatuses = (graph, goals, inventory) => {
+    var _a, _b, _c;
+    const statuses = [];
+    for (const goal of goals) {
+        const missing = new Map();
+        for (const need of goal.needs) {
+            // a quest wants the item itself, so spend inventory first and only then
+            // fall back to crafting — planCraft always builds its target in full,
+            // which is right for "make me N more" and wrong for "hand over N"
+            const held = (_a = inventory[need.name]) !== null && _a !== void 0 ? _a : 0;
+            const shortfall = need.quantity - held;
+            if (shortfall <= 0) {
+                continue;
+            }
+            const node = graph.nodes.get(need.name);
+            if ((node === null || node === void 0 ? void 0 : node.canCraft) && node.ingredients.length > 0) {
+                // craft the shortfall, spending everything except what this need
+                // already took off the shelf
+                const pool = Object.assign(Object.assign({}, inventory), { [need.name]: 0 });
+                const plan = (0, craftPlanner_1.planCraft)(graph, need.name, shortfall, pool);
+                for (const entry of plan.missing) {
+                    missing.set(entry.name, ((_b = missing.get(entry.name)) !== null && _b !== void 0 ? _b : 0) + entry.quantity);
+                }
+                continue;
+            }
+            missing.set(need.name, ((_c = missing.get(need.name)) !== null && _c !== void 0 ? _c : 0) + shortfall);
+        }
+        const missingList = [...missing.entries()]
+            .map(([name, quantity]) => ({ name, quantity }))
+            .sort((a, b) => b.quantity - a.quantity);
+        statuses.push({
+            goal,
+            isReady: missingList.length === 0,
+            missing: missingList,
+        });
+    }
+    return statuses;
+};
+exports.getGoalStatuses = getGoalStatuses;
+// Rank raw materials by how much of the backlog they unblock. This is the
+// "what should I go get" answer: one item gating five goals beats one gating a
+// single goal even when the single goal needs far more of it.
+const rankBottlenecks = (statuses) => {
+    var _a;
+    const byName = new Map();
+    for (const status of statuses) {
+        if (status.isReady) {
+            continue;
+        }
+        for (const entry of status.missing) {
+            const existing = (_a = byName.get(entry.name)) !== null && _a !== void 0 ? _a : {
+                goals: [],
+                goalsGated: 0,
+                maxNeeded: 0,
+                name: entry.name,
+                totalNeeded: 0,
+            };
+            existing.goalsGated += 1;
+            existing.goals.push(status.goal.label);
+            existing.maxNeeded = Math.max(existing.maxNeeded, entry.quantity);
+            existing.totalNeeded += entry.quantity;
+            byName.set(entry.name, existing);
+        }
+    }
+    return [...byName.values()].sort((a, b) => b.goalsGated - a.goalsGated || b.maxNeeded - a.maxNeeded);
+};
+exports.rankBottlenecks = rankBottlenecks;
+// Goals that are one item short. These are the highest-leverage thing on the
+// board: a single trip finishes them outright.
+const getNearlyDone = (statuses) => statuses.filter((status) => !status.isReady && status.missing.length === 1);
+exports.getNearlyDone = getNearlyDone;
+// Where to go for the top bottlenecks, reusing the item-page roll-up so both
+// surfaces quote the same numbers.
+const getFocusSourcing = (graph, bottlenecks, limit = 6) => (0, craftPlanner_1.planSourcing)(graph, bottlenecks.slice(0, limit).map((entry) => ({
+    name: entry.name,
+    quantity: entry.maxNeeded,
+})));
+exports.getFocusSourcing = getFocusSourcing;
 
 
 /***/ }),
@@ -8264,6 +9607,7 @@ var Page;
 (function (Page) {
     Page["AREA"] = "area";
     Page["BANK"] = "bank";
+    Page["CRAFTWORKS"] = "craftworks";
     Page["BIO"] = "settings_bio";
     Page["FARM"] = "xfarm";
     Page["FARMERS_MARKET"] = "market";
@@ -8583,7 +9927,10 @@ var SettingId;
     SettingId["CHAT_MAILBOX_STATS"] = "chatMailboxStats";
     SettingId["COLLAPSE_ITEM"] = "collapseItem";
     SettingId["COMPACT_SILVER"] = "compactSilver";
+    SettingId["CRAFT_PLANNER"] = "craftPlanner";
+    SettingId["CRAFTWORKS_ADVISOR"] = "craftworksAdvisor";
     SettingId["EXPLORE_FIRST"] = "exploreFirst";
+    SettingId["FOCUS_DASHBOARD"] = "focusDashboard";
     SettingId["EXPLORE_IMPROVED"] = "exploreImproved";
     SettingId["EXPORT"] = "export";
     SettingId["FIELD_EMPTY_NOTIFICATIONS"] = "fieldEmptyNotifications";
@@ -8724,6 +10071,7 @@ var StorageKey;
     StorageKey["FARM_ID"] = "farmId";
     StorageKey["FARM_STATE"] = "farmState";
     StorageKey["FARM_STATUS"] = "farmStatus";
+    StorageKey["INVENTORY"] = "inventory";
     StorageKey["IS_BETA"] = "isBeta";
     StorageKey["IS_CHAT_ENABLED"] = "isChatEnabled";
     StorageKey["IS_DARK_MODE"] = "isDarkMode";
@@ -8739,6 +10087,7 @@ var StorageKey;
     StorageKey["PETS"] = "pets";
     StorageKey["PLAYER_MAILBOXES"] = "playerMailboxes";
     StorageKey["PLAYERS"] = "players";
+    StorageKey["QUEST_DATA"] = "questData";
     StorageKey["RECENT_UPDATE"] = "recentUpdate";
     StorageKey["STATS"] = "stats";
     StorageKey["USERNAME"] = "username";
