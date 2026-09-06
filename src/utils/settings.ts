@@ -35,6 +35,7 @@ export enum SettingId {
   INVENTORY_CAP_WARNINGS = "inventoryCapWarnings",
   KITCHEN_COMPLETE_NOTIFICATIONS = "readyNotifications",
   KITCHEN_EMPTY_NOTIFICATIONS = "kitchenEmptyNotifications",
+  LOCATION_ADVISOR = "locationAdvisor",
   MAX_ANIMALS = "maxAnimals",
   MAX_CONTAINERS = "maxContainers",
   MEAL_NOTIFICATIONS = "mealNotifications",

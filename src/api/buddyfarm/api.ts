@@ -176,18 +176,37 @@ export const questDataState = new CachedState<QuestDetail, string>(
   }
 );
 
+interface LocationDropProfile {
+  ironDepot: boolean | null;
+  items: { item: { id: number; name: string }; rate: number }[];
+  runecube: boolean | null;
+}
+
 interface LocationPageDataResponse {
   result: {
     data: {
       farmrpg: {
-        locations: { name: string; type: "explore" | "fishing" }[];
+        locations: {
+          dropRates: LocationDropProfile[];
+          name: string;
+          type: "explore" | "fishing";
+        }[];
       };
     };
     pageContext: { id: number; name: string };
   };
 }
 
+export interface LocationDrop {
+  id: number;
+  name: string;
+  // expected attempts for one unit, buddy.farm's "1 in N"
+  rate: number;
+}
+
 export interface LocationRef {
+  // everything that drops here, best rate first
+  drops: LocationDrop[];
   id: number;
   name: string;
   type: "explore" | "fishing";
@@ -223,9 +242,53 @@ export const locationDataState = new CachedState<LocationRef, string>(
     if (!location || !id) {
       return previous;
     }
-    return { id, name: location.name, type: location.type };
+    // Prefer the profile that assumes no perks, so a quoted rate is one the
+    // player can definitely hit; fall back to whatever exists if every profile
+    // needs one. Rates are per item, so the best across profiles is kept.
+    const profiles = location.dropRates ?? [];
+    const plain = profiles.filter(
+      (profile) => !profile.ironDepot && !profile.runecube
+    );
+    const best = new Map<string, LocationDrop>();
+    for (const profile of plain.length > 0 ? plain : profiles) {
+      for (const entry of profile.items ?? []) {
+        if (!entry.item?.name || !entry.rate) {
+          continue;
+        }
+        const existing = best.get(entry.item.name);
+        if (!existing || entry.rate < existing.rate) {
+          best.set(entry.item.name, {
+            id: entry.item.id,
+            name: entry.item.name,
+            rate: entry.rate,
+          });
+        }
+      }
+    }
+    return {
+      drops: [...best.values()].sort((a, b) => a.rate - b.rate),
+      id,
+      name: location.name,
+      type: location.type,
+    };
   },
   {
     timeout: 60 * 60 * 24 * 7, // 1 week
   }
 );
+
+// Every location buddy.farm knows, for matching a page title against. They land
+// in the catch-all `pages` bucket, identified by their /l/ href.
+export const getLocationEntries = async (): Promise<
+  { image: string; name: string }[]
+> => {
+  const { pages } = (await pageDataState.get()) ?? {};
+  return (pages ?? [])
+    .filter((page) => page.href.startsWith("/l/"))
+    .map((page) => ({ image: page.image, name: page.name }));
+};
+
+export const getLocationNames = async (): Promise<string[]> => {
+  const entries = await getLocationEntries();
+  return entries.map((entry) => entry.name);
+};

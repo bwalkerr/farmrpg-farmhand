@@ -6,6 +6,12 @@ import {
   suggestQueueChanges,
 } from "./craftworks";
 import {
+  findLocationSet,
+  getLocationAdvice,
+  matchLocationByImage,
+  parseStamina,
+} from "./locationAdvice";
+import {
   getFrozenMastery,
   getMasterySuggestions,
   getQuestSuggestions,
@@ -785,6 +791,105 @@ console.info("getRecommendedSet");
   check(
     "no goal, no recommendation",
     getRecommendedSet([], sets, items),
+    undefined
+  );
+}
+
+console.info("location advisor: Mount Banon, cap 1044");
+{
+  const locations = [
+    { image: "/img/items/mountain.png", name: "Mount Banon" },
+    { image: "/img/items/desert.png", name: "Jundland Desert" },
+    // pond.png belongs to two places, so it identifies neither
+    { image: "/img/items/pond.png", name: "Small Pond" },
+    { image: "/img/items/pond.png", name: "Farm Pond" },
+  ];
+  check(
+    "identified from the header picture",
+    matchLocationByImage("/img/items/mountain.png", locations),
+    "Mount Banon"
+  );
+  check(
+    "an ambiguous picture identifies nothing",
+    matchLocationByImage("/img/items/pond.png", locations),
+    undefined
+  );
+  check(
+    "an unknown picture identifies nothing",
+    matchLocationByImage("/img/items/tractor.png", locations),
+    undefined
+  );
+
+  // the left figure is banked stamina and runs well past the natural maximum
+  check(
+    "stamina is the left figure",
+    parseStamina("23,034 / 85 Stamina"),
+    23_034
+  );
+  check("no stamina text, no number", parseStamina("644 left"), undefined);
+
+  const drops = [
+    { id: 144, name: "Carbon Sphere", rate: 47.7 },
+    { id: 76, name: "Unpolished Shimmer Stone", rate: 13.8 },
+    { id: 163, name: "Twine", rate: 30 },
+    { id: 21, name: "Board", rate: 5 },
+  ];
+  const advice = getLocationAdvice(
+    drops,
+    [
+      { name: "Carbon Sphere", quantity: 2 },
+      { name: "Unpolished Shimmer Stone", quantity: 4 },
+      // does not drop here, so it is not this location's business
+      { name: "Mushroom", quantity: 9 },
+    ],
+    new Map([["Carbon Sphere", ["blocks Steel Wire"]]]),
+    { Twine: 1044, Board: 10 },
+    1044,
+    [
+      {
+        name: "Twine",
+        remaining: 6907,
+        required: 100_000,
+        tier: "t4",
+        value: 93_093,
+      },
+    ]
+  );
+  // 4 x 13.8 = 55.2 beats 2 x 47.7 = 95.4, so the cheaper finish leads
+  check(
+    "needs sorted by what it costs to finish them",
+    advice.needed.map((entry) => entry.name),
+    ["Unpolished Shimmer Stone", "Carbon Sphere"]
+  );
+  check("reasons carried through", advice.needed[1].reasons, [
+    "blocks Steel Wire",
+  ]);
+  // Twine is at cap and drops here, so every Twine drop is discarded -- and
+  // its mastery is stalled as a result
+  check(
+    "at-cap drops here are flagged as waste",
+    advice.wasted.map((entry) => [entry.name, entry.masteryRemaining]),
+    [["Twine", 6907]]
+  );
+  check(
+    "Board is below cap, so not waste",
+    advice.wasted.some((entry) => entry.name === "Board"),
+    false
+  );
+
+  const sets = [
+    { isActive: false, name: "Explore - Mount Banon" },
+    { isActive: false, name: "Misty Forest" },
+  ];
+  const allNames = ["Mount Banon", "Misty Forest", "Forest", "Ember Lagoon"];
+  check(
+    "the location's own set is found by name",
+    findLocationSet("Mount Banon", sets, allNames)?.name,
+    "Explore - Mount Banon"
+  );
+  check(
+    "no set for a location without one",
+    findLocationSet("Forest", sets, allNames),
     undefined
   );
 }

@@ -29,6 +29,7 @@ import { improvedInputs } from "./features/improvedInputs";
 import { inventoryCapWarnings } from "./features/inventoryCapWarnings";
 import { kitchenNotifications } from "./features/kitchenNotifications";
 import { linkifyQuickCraft } from "./features/linkifyQuickCraft";
+import { locationAdvisor } from "./features/locationAdvisor";
 import { mailboxNotifications } from "./features/mailboxNotifications";
 import { maxContainers } from "./features/maxContainers";
 import { maxCows } from "./features/maxCows";
@@ -126,6 +127,7 @@ const FEATURES = [
   // explore
   perkManagment,
   cleanupExplore,
+  locationAdvisor,
 
   // chat
   chatNav,
