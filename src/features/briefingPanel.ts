@@ -3,6 +3,7 @@ import {
   getDesiredQueue,
   getGoalProgress,
   getGoals,
+  GoalProgress,
   removeGoal,
   TrackedGoal,
 } from "~/utils/goals";
@@ -288,6 +289,7 @@ interface Context {
   advice?: Advice;
   cap?: number;
   craftworks?: CraftworksSnapshot;
+  goalProgress: GoalProgress[];
   goals: TrackedGoal[];
   graph: RecipeGraph;
   inventory: Record<string, number>;
@@ -328,6 +330,9 @@ const loadContext = async (force: boolean): Promise<Context> => {
     advice,
     cap,
     craftworks,
+    goalProgress: goals.map((goal) =>
+      getGoalProgress(graph, goal, inventory, unlimited)
+    ),
     goals,
     graph,
     inventory,
@@ -343,23 +348,16 @@ const loadContext = async (force: boolean): Promise<Context> => {
   };
 };
 
+// Takes exactly what to source. It used to fold in quest bottlenecks itself
+// regardless of caller, which meant the Goals tab quoted trips for items no
+// tracked goal wanted — each tab now decides what its own list means.
 const renderWhereToGo = async (
   body: HTMLElement,
   context: Context,
-  extra: { name: string; quantity: number }[]
+  missing: { name: string; quantity: number }[]
 ): Promise<void> => {
-  const { graph, statuses } = context;
-  const bottlenecks = rankBottlenecks(statuses);
-  const sourcing = planSourcing(
-    graph,
-    mergeMissing(
-      bottlenecks.map((entry) => ({
-        name: entry.name,
-        quantity: entry.maxNeeded,
-      })),
-      extra
-    )
-  );
+  const { graph } = context;
+  const sourcing = planSourcing(graph, missing);
   if (sourcing.locations.length === 0) {
     return;
   }
@@ -394,7 +392,7 @@ const renderNow = async (
   body: HTMLElement,
   context: Context
 ): Promise<void> => {
-  const { advice, graph, questGoals, statuses } = context;
+  const { advice, goalProgress, graph, questGoals, statuses } = context;
   const ready = statuses.filter((status) => status.isReady);
   const nearlyDone = getNearlyDone(statuses);
 
@@ -446,7 +444,16 @@ const renderNow = async (
   await renderWhereToGo(
     body,
     context,
-    (advice?.roots ?? []).map((root) => ({ name: root.name, quantity: 1 }))
+    mergeMissing(
+      rankBottlenecks(statuses).map((entry) => ({
+        name: entry.name,
+        quantity: entry.maxNeeded,
+      })),
+      (advice?.roots ?? []).map((root) => ({ name: root.name, quantity: 1 })),
+      // tracked goals steer this list too, so setting a goal changes where the
+      // panel sends you rather than only what the Goals tab says
+      ...goalProgress.map((entry) => entry.missing)
+    )
   );
 
   if (body.childNodes.length === 0) {
@@ -465,7 +472,7 @@ const renderGoals = async (
   context: Context,
   rerender: () => void
 ): Promise<void> => {
-  const { goals, graph, inventory, unlimited } = context;
+  const { goalProgress, goals, graph } = context;
   if (goals.length === 0) {
     body.append(
       makeLinkedLine(TEXT_GRAY, [
@@ -474,11 +481,8 @@ const renderGoals = async (
     );
   }
 
-  const missingLists: { name: string; quantity: number }[][] = [];
-  for (const goal of goals) {
-    const progress = getGoalProgress(graph, goal, inventory, unlimited);
-    missingLists.push(progress.missing);
-
+  for (const progress of goalProgress) {
+    const { canMakeNow, goal, have, missing, ratio } = progress;
     const row = document.createElement("div");
     row.className = "fh-goal";
 
@@ -490,7 +494,7 @@ const renderGoals = async (
       makeItemLink(
         goal.name,
         graph.nodes.get(goal.name)?.id,
-        progress.ratio >= 1 ? TEXT_SUCCESS : TEXT_WHITE
+        ratio >= 1 ? TEXT_SUCCESS : TEXT_WHITE
       )
     );
     const remove = document.createElement("span");
@@ -507,23 +511,23 @@ const renderGoals = async (
     const bar = document.createElement("div");
     bar.className = "fh-bar";
     const fill = document.createElement("div");
-    fill.style.width = `${Math.round(progress.ratio * 100)}%`;
-    if (progress.ratio < 1) {
+    fill.style.width = `${Math.round(ratio * 100)}%`;
+    if (ratio < 1) {
       fill.style.background = TEXT_WARNING;
     }
     bar.append(fill);
 
     const detail =
-      progress.ratio >= 1
-        ? `ready — ${progress.have} on hand${
-            progress.canMakeNow > 0 ? `, ${progress.canMakeNow} craftable` : ""
+      ratio >= 1
+        ? `ready — ${have} on hand${
+            canMakeNow > 0 ? `, ${canMakeNow} craftable` : ""
           }`
-        : `${progress.have}/${goal.quantity} made · ${progress.canMakeNow} craftable now`;
+        : `${have}/${goal.quantity} made · ${canMakeNow} craftable now`;
     row.append(top, bar, makeLinkedLine(TEXT_GRAY, [detail]));
 
-    if (progress.missing.length > 0) {
+    if (missing.length > 0) {
       const parts: (string | Node)[] = ["short: "];
-      for (const [index, entry] of progress.missing.slice(0, 4).entries()) {
+      for (const [index, entry] of missing.slice(0, 4).entries()) {
         if (index > 0) {
           parts.push(", ");
         }
@@ -541,7 +545,14 @@ const renderGoals = async (
     body.append(row);
   }
 
-  await renderWhereToGo(body, context, mergeMissing(...missingLists));
+  // only what the tracked goals themselves need
+  if (goalProgress.length > 0) {
+    await renderWhereToGo(
+      body,
+      context,
+      mergeMissing(...goalProgress.map((entry) => entry.missing))
+    );
+  }
   renderSuggestions(body, context, rerender);
 };
 
