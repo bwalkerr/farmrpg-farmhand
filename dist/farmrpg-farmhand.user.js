@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.26
+// @version 1.1.27
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -4575,9 +4575,11 @@ const craftworks_1 = __webpack_require__(7831);
 const theme_1 = __webpack_require__(1178);
 const recipes_1 = __webpack_require__(498);
 const craftPlanner_1 = __webpack_require__(5825);
-const page_1 = __webpack_require__(7952);
-const inventory_1 = __webpack_require__(4514);
 const api_1 = __webpack_require__(3413);
+const page_1 = __webpack_require__(7952);
+const goals_1 = __webpack_require__(1267);
+const suggestions_1 = __webpack_require__(9262);
+const inventory_1 = __webpack_require__(4514);
 const gameLinks_1 = __webpack_require__(1616);
 const promise_1 = __webpack_require__(6762);
 const unlimited_1 = __webpack_require__(4808);
@@ -4612,11 +4614,59 @@ const makeHeading = (text) => {
     return heading;
 };
 const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
+// Recommend the saved set that matches a tracked goal, and offer to load it by
+// clicking the game's own button.
+//
+// The activation is deliberately NOT reimplemented. The game fires
+// `worker.php?go=removeallcw` -- which wipes the whole queue -- then activates
+// the set 500ms later, and the wipe has no failure handler: if the second call
+// never lands, the queue is simply gone. Driving the real button runs the
+// game's own sequence, timing and refresh instead of a copy that could drift.
+const renderSetRecommendation = (container) => __awaiter(void 0, void 0, void 0, function* () {
+    const currentPage = (0, page_1.getCurrentPage)();
+    if (!currentPage) {
+        return;
+    }
+    const sets = (0, craftworks_1.parseSavedSets)(currentPage);
+    if (sets.length === 0) {
+        return;
+    }
+    const [goals, items] = yield Promise.all([(0, goals_1.getGoals)(), (0, api_1.getBasicItems)()]);
+    const recommended = (0, suggestions_1.getRecommendedSet)(goals, sets, items.map((item) => item.name));
+    if (!recommended) {
+        return;
+    }
+    const button = currentPage.querySelector(`.activatecwsetbtn[data-id="${recommended.id}"]`);
+    const line = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
+        `Your “${recommended.name}” set matches your ${recommended.goalName} goal.`,
+    ]);
+    container.append(line);
+    if (!button) {
+        return;
+    }
+    const load = document.createElement("a");
+    load.href = "#";
+    load.textContent = "Load that set";
+    load.style.color = theme_1.TEXT_SUCCESS;
+    load.style.fontSize = "12px";
+    load.style.textDecoration = "underline";
+    load.addEventListener("click", (event) => {
+        event.preventDefault();
+        // one deliberate press, forwarded to the game's own control
+        button.click();
+    });
+    const warning = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+        "— loading a set clears the current queue first ",
+    ]);
+    warning.append(load);
+    container.append(warning);
+});
 const renderAdvice = (container, slots, maxSlots, unlimited) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const snapshot = yield inventory_1.inventoryState.get();
     const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
     const advice = (0, craftworks_1.adviseOnSlots)(slots, cap, unlimited);
+    yield renderSetRecommendation(container);
     const summary = document.createElement("div");
     summary.style.color = theme_1.TEXT_GRAY;
     summary.style.fontSize = "12px";
@@ -9102,7 +9152,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.26" !== void 0 ? "1.1.26" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.27" !== void 0 ? "1.1.27" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -11547,7 +11597,7 @@ exports.CachedState = CachedState;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getSetSuggestions = exports.matchSetNameToItem = exports.getQuestSuggestions = exports.getMasterySuggestions = exports.getFrozenMastery = void 0;
+exports.getRecommendedSet = exports.getSetSuggestions = exports.matchSetNameToItem = exports.getQuestSuggestions = exports.getMasterySuggestions = exports.getFrozenMastery = void 0;
 // Mastery is earned by acquiring an item, and an item sitting at the inventory
 // cap cannot be acquired — crafting stalls and drops are discarded. So a capped
 // item with mastery in progress is not merely a wasted Craftworks slot, it is
@@ -11697,6 +11747,27 @@ const getSetSuggestions = (sets, itemNames, tracked, inventory, limit = 4) => {
         .slice(0, limit);
 };
 exports.getSetSuggestions = getSetSuggestions;
+// The saved set that matches a tracked goal and is not already loaded.
+//
+// Matching runs the same name inference as getSetSuggestions, in reverse: the
+// player named a set after the thing it builds, so a goal for that thing means
+// that set is the one to load. The active set is excluded because recommending
+// it would be advice to re-run a destructive activation for no change.
+const getRecommendedSet = (goals, sets, itemNames) => {
+    const names = [...itemNames];
+    const wanted = new Set(goals.map((goal) => goal.name.toLowerCase()));
+    for (const set of sets) {
+        if (set.isActive) {
+            continue;
+        }
+        const item = (0, exports.matchSetNameToItem)(set.name, names);
+        if (item && wanted.has(item.toLowerCase())) {
+            return { goalName: item, id: set.id, name: set.name };
+        }
+    }
+    return undefined;
+};
+exports.getRecommendedSet = getRecommendedSet;
 
 
 /***/ }),
