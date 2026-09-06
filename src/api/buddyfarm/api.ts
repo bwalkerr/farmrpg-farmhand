@@ -4,6 +4,7 @@ import {
   BuddyFarmPage,
   Item,
   BuddyFarmPageData as PageData,
+  QuestDetail,
 } from "./types";
 import { CachedState, StorageKey } from "../../utils/state";
 import { NAME_OVERRIDES, nameToSlug } from "./requests";
@@ -129,5 +130,48 @@ export const pageDataState = new CachedState<PageData>(
       items: [],
       pages: [],
     },
+  }
+);
+
+interface QuestPageDataResponse {
+  result: {
+    data: {
+      farmrpg: {
+        quests: QuestDetail[];
+      };
+    };
+  };
+}
+
+// Quest requirements, keyed by the quest's display name — the game's quest list
+// gives ids and titles, buddy.farm indexes by slug, and the title is the only
+// thing the two share. Cached for a week alongside item data; quest definitions
+// change about as often.
+export const questDataState = new CachedState<QuestDetail, string>(
+  StorageKey.QUEST_DATA,
+  async (state, questName) => {
+    if (!questName) {
+      return;
+    }
+    const previous = state.state[questName];
+    if (previous) {
+      return previous;
+    }
+    const response = await fetch(
+      `https://buddy.farm/page-data/q/${nameToSlug(questName)}/page-data.json`
+    );
+    if (!response.ok) {
+      return previous;
+    }
+    const data = (await response.json()) as QuestPageDataResponse;
+    const quest = data?.result?.data?.farmrpg?.quests?.[0];
+    if (!quest) {
+      console.error(`Quest ${questName} not found`);
+      return previous;
+    }
+    return quest;
+  },
+  {
+    timeout: 60 * 60 * 24 * 7, // 1 week
   }
 );

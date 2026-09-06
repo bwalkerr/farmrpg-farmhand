@@ -140,6 +140,27 @@ export interface Item {
 
 export type AbridgedItem = Pick<Item, "id" | "image" | "name" | "__typename">;
 
+export interface QuestDetail {
+  __typename: "FarmRPG_Quest";
+  cleanDescription: string;
+  endDate: string | null;
+  image: string;
+  isHidden: boolean;
+  name: string;
+  npc: string | null;
+  requiredCookingLevel: number;
+  requiredCraftingLevel: number;
+  requiredExploringLevel: number;
+  requiredFarmingLevel: number;
+  requiredFishingLevel: number;
+  requiredItems: { item: BasicEntity; quantity: number }[];
+  requiredSilver: number;
+  requiredTowerLevel: number;
+  rewardGold: number;
+  rewardItems: { item: BasicEntity; quantity: number }[];
+  rewardSilver: number;
+}
+
 interface Quest {
   __typename: "FarmRPG_Quest";
   id: number;
