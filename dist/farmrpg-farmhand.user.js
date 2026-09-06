@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.31
+// @version 1.1.32
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -39,7 +39,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getLocationNames = exports.locationDataState = exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
+exports.getLocationNames = exports.getLocationEntries = exports.locationDataState = exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(6747);
 exports.itemDataState = new state_1.CachedState(state_1.StorageKey.ITEM_DATA, (state, itemName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -225,12 +225,17 @@ exports.locationDataState = new state_1.CachedState(state_1.StorageKey.LOCATION_
 });
 // Every location buddy.farm knows, for matching a page title against. They land
 // in the catch-all `pages` bucket, identified by their /l/ href.
-const getLocationNames = () => __awaiter(void 0, void 0, void 0, function* () {
+const getLocationEntries = () => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     const { pages } = (_a = (yield exports.pageDataState.get())) !== null && _a !== void 0 ? _a : {};
     return (pages !== null && pages !== void 0 ? pages : [])
         .filter((page) => page.href.startsWith("/l/"))
-        .map((page) => page.name);
+        .map((page) => ({ image: page.image, name: page.name }));
+});
+exports.getLocationEntries = getLocationEntries;
+const getLocationNames = () => __awaiter(void 0, void 0, void 0, function* () {
+    const entries = yield (0, exports.getLocationEntries)();
+    return entries.map((entry) => entry.name);
 });
 exports.getLocationNames = getLocationNames;
 
@@ -975,6 +980,34 @@ const getRowCount = (after) => {
     return Number(countText.replaceAll(",", "").trim());
 };
 exports.getRowCount = getRowCount;
+// An inventory row's title is the item name followed by a description and
+// sometimes a status flag:
+//
+//   <div class="item-title">Iron<br><span>A pressing need</span>MAX ON HAND</div>
+//
+// so reading its textContent yields "Iron\n A pressing needMAX ON HAND". That
+// was cosmetic while only the cap tracker used it, but these names are the keys
+// of the inventory snapshot the planner looks items up by, and a mangled key
+// matches nothing — every lookup for such an item silently reported zero on
+// hand. The name is the leading text node, before any markup.
+const getRowName = (title) => {
+    var _a, _b;
+    if (!title) {
+        return undefined;
+    }
+    for (const node of title.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = (_a = node.textContent) === null || _a === void 0 ? void 0 : _a.trim();
+            if (text) {
+                return text;
+            }
+            continue;
+        }
+        // stop at the first element: anything past it is description or status
+        break;
+    }
+    return (_b = title.textContent) === null || _b === void 0 ? void 0 : _b.trim().split("\n")[0].trim();
+};
 // Parse every item row out of an inventory page DOM, plus the storage cap.
 // This is the whole inventory, unfiltered — the cap tracker narrows it down to
 // the at/near-cap rows, the craft planner wants all of it. Returns undefined
@@ -982,7 +1015,7 @@ exports.getRowCount = getRowCount;
 // somewhere else (a login redirect, an error page) is told apart from a
 // genuinely empty inventory.
 const parseInventoryPage = (root) => {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d;
     // the page can mention several caps (e.g. the wagon upgrade pitch quotes
     // the next tier's number), so use the smallest match: that is always the
     // player's current cap
@@ -1008,15 +1041,14 @@ const parseInventoryPage = (root) => {
             continue;
         }
         const image = row.querySelector(".item-media img");
-        const title = row.querySelector(".item-title");
-        const name = (_c = title === null || title === void 0 ? void 0 : title.textContent) === null || _c === void 0 ? void 0 : _c.trim();
+        const name = getRowName(row.querySelector(".item-title"));
         if (!name) {
             continue;
         }
         rows.push({
             count,
-            href: (_d = link.getAttribute("href")) !== null && _d !== void 0 ? _d : "inventory.php",
-            image: (_e = image === null || image === void 0 ? void 0 : image.getAttribute("src")) !== null && _e !== void 0 ? _e : undefined,
+            href: (_c = link.getAttribute("href")) !== null && _c !== void 0 ? _c : "inventory.php",
+            image: (_d = image === null || image === void 0 ? void 0 : image.getAttribute("src")) !== null && _d !== void 0 ? _d : undefined,
             name,
         });
     }
@@ -7464,6 +7496,215 @@ exports.linkifyQuickCraft = {
 
 /***/ }),
 
+/***/ 1028:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.locationAdvisor = void 0;
+const craftworks_1 = __webpack_require__(7831);
+const craftworks_2 = __webpack_require__(920);
+const locationAdvice_1 = __webpack_require__(4764);
+const recipes_1 = __webpack_require__(498);
+const page_1 = __webpack_require__(7952);
+const goals_1 = __webpack_require__(1267);
+const api_1 = __webpack_require__(3413);
+const inventory_1 = __webpack_require__(4514);
+const mastery_1 = __webpack_require__(283);
+const focus_1 = __webpack_require__(7167);
+const promise_1 = __webpack_require__(6762);
+const unlimited_1 = __webpack_require__(4808);
+const settings_1 = __webpack_require__(126);
+const theme_1 = __webpack_require__(1178);
+const SETTING_LOCATION_ADVISOR = {
+    id: settings_1.SettingId.LOCATION_ADVISOR,
+    title: "Explore: What's here for you",
+    description: `
+    On explore and fishing pages, show which of your needs drop here and which
+    items you are at cap on, whose drops are being discarded
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+const CONTAINER_ID = "fh-location-advisor";
+const MAX_ROWS = 5;
+const formatRate = (rate) => rate >= 100 ? Math.round(rate).toLocaleString() : rate.toFixed(1);
+// Built in the game's own list idiom -- media icon, title, right-aligned value
+// -- so it reads as part of the page rather than as something bolted on.
+const makeRow = (image, title, detail, after, color) => {
+    const row = document.createElement("li");
+    const content = document.createElement("div");
+    content.className = "item-content";
+    const media = document.createElement("div");
+    media.className = "item-media";
+    if (image) {
+        const icon = document.createElement("img");
+        icon.src = image;
+        icon.style.width = "32px";
+        media.append(icon);
+    }
+    const inner = document.createElement("div");
+    inner.className = "item-inner";
+    const titleElement = document.createElement("div");
+    titleElement.className = "item-title";
+    titleElement.style.color = color;
+    titleElement.textContent = title;
+    if (detail) {
+        const sub = document.createElement("div");
+        sub.style.color = theme_1.TEXT_GRAY;
+        sub.style.fontSize = "11px";
+        sub.textContent = detail;
+        titleElement.append(sub);
+    }
+    const afterElement = document.createElement("div");
+    afterElement.className = "item-after";
+    afterElement.textContent = after;
+    inner.append(titleElement, afterElement);
+    content.append(media, inner);
+    row.append(content);
+    return row;
+};
+const render = (currentPage, settings) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
+    // the page prints no location name; the header picture is the only identifier
+    const header = currentPage.querySelector("img[src*='/img/items/']");
+    if (!header) {
+        return;
+    }
+    const locations = yield (0, api_1.getLocationEntries)();
+    const name = (0, locationAdvice_1.matchLocationByImage)((_a = header.getAttribute("src")) !== null && _a !== void 0 ? _a : "", locations);
+    if (!name) {
+        return;
+    }
+    const location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name }));
+    if (!location || location.drops.length === 0) {
+        return;
+    }
+    const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_b = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _b !== void 0 ? _b : ""));
+    // Everything here is cached or local. Quests are deliberately left out: this
+    // page is clicked over and over, and costing them means fetching quests.php
+    // each time, which the briefing panel already does on demand.
+    const [snapshot, craftworks, mastery, goals] = yield Promise.all([
+        (0, promise_1.orUndefined)(inventory_1.inventoryState.get()),
+        (0, promise_1.orUndefined)(craftworks_2.craftworksState.get({ doNotFetch: true })),
+        (0, promise_1.orUndefined)(mastery_1.masteryState.get({ doNotFetch: true })),
+        (0, goals_1.getGoals)(),
+    ]);
+    const inventory = (_c = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _c !== void 0 ? _c : {};
+    const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
+    const advice = craftworks
+        ? (0, craftworks_1.adviseOnSlots)(craftworks.slots, cap, unlimited)
+        : undefined;
+    const blockers = (_d = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _d !== void 0 ? _d : [];
+    const graph = yield (0, recipes_1.gatherRecipeGraph)([
+        ...goals.map((goal) => goal.name),
+        ...blockers.map((blocker) => blocker.name),
+    ]);
+    const reasons = new Map();
+    const goalMissing = goals.map((goal) => {
+        var _a;
+        const progress = (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited);
+        for (const entry of progress.missing) {
+            reasons.set(entry.name, [
+                ...((_a = reasons.get(entry.name)) !== null && _a !== void 0 ? _a : []),
+                `for ${goal.name}`,
+            ]);
+        }
+        return progress.missing;
+    });
+    for (const blocker of blockers) {
+        reasons.set(blocker.name, [
+            ...((_e = reasons.get(blocker.name)) !== null && _e !== void 0 ? _e : []),
+            `blocks ${blocker.slots.map((slot) => slot.name).join(", ")}`,
+        ]);
+    }
+    const { needed, wasted } = (0, locationAdvice_1.getLocationAdvice)(location.drops, (0, focus_1.mergeMissing)(...goalMissing, blockers.map((blocker) => ({ name: blocker.name, quantity: 1 }))), reasons, inventory, cap, (_f = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _f !== void 0 ? _f : []);
+    if (needed.length === 0 && wasted.length === 0) {
+        return;
+    }
+    // the page gives the banked figure its own element; the text form is the
+    // fallback for anywhere that does not
+    const staminaText = (_h = (_g = currentPage.querySelector("#stamina")) === null || _g === void 0 ? void 0 : _g.textContent) !== null && _h !== void 0 ? _h : "";
+    const stamina = Number(staminaText.replaceAll(",", "").trim()) ||
+        (0, locationAdvice_1.parseStamina)((_j = currentPage.textContent) !== null && _j !== void 0 ? _j : "");
+    // mirror the page's own card > card-content > list-block > ul nesting so this
+    // sits in the layout rather than on top of it
+    const block = document.createElement("div");
+    block.className = "card";
+    block.id = CONTAINER_ID;
+    const cardContent = document.createElement("div");
+    cardContent.className = "card-content";
+    const listBlock = document.createElement("div");
+    listBlock.className = "list-block disable-select";
+    const list = document.createElement("ul");
+    listBlock.append(list);
+    cardContent.append(listBlock);
+    block.append(cardContent);
+    for (const entry of needed.slice(0, MAX_ROWS)) {
+        // an estimate you cannot afford today is worth saying out loud
+        const affordable = stamina === undefined || entry.attempts <= stamina;
+        list.append(makeRow(undefined, entry.name, entry.reasons.join(" · "), `1 per ${formatRate(entry.rate)}${entry.quantity > 1
+            ? ` · ${Math.round(entry.attempts).toLocaleString()} for ${entry.quantity.toLocaleString()}`
+            : ""}`, affordable ? theme_1.TEXT_SUCCESS : theme_1.TEXT_WARNING));
+    }
+    for (const entry of wasted.slice(0, MAX_ROWS)) {
+        list.append(makeRow(undefined, `${entry.name} — at cap, drops discarded`, entry.masteryRemaining
+            ? `mastery frozen at ${(_k = entry.masteryValue) === null || _k === void 0 ? void 0 : _k.toLocaleString()}/${(_l = entry.masteryRequired) === null || _l === void 0 ? void 0 : _l.toLocaleString()}`
+            : "", entry.count.toLocaleString(), theme_1.TEXT_ERROR));
+    }
+    const heading = document.createElement("div");
+    heading.className = "content-block-title";
+    heading.id = `${CONTAINER_ID}-title`;
+    heading.textContent = stamina
+        ? `Here for you (${stamina.toLocaleString()} stamina)`
+        : "Here for you";
+    const set = (0, locationAdvice_1.findLocationSet)(name, (_m = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _m !== void 0 ? _m : [], locations.map((entry) => entry.name));
+    if (set && !set.isActive) {
+        list.append(makeRow(undefined, `Your “${set.name}” set isn't loaded`, "open the briefing panel's Sets tab to switch", "", theme_1.TEXT_GRAY));
+    }
+    // sit directly under the Continue / Eat / Drink card
+    const actions = (_o = currentPage
+        .querySelector("#exploreoptions")) === null || _o === void 0 ? void 0 : _o.closest(".card");
+    if (actions) {
+        actions.after(heading, block);
+    }
+    else {
+        (_p = currentPage.querySelector(".content-block")) === null || _p === void 0 ? void 0 : _p.append(heading, block);
+    }
+});
+exports.locationAdvisor = {
+    settings: [SETTING_LOCATION_ADVISOR],
+    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b;
+        if (page !== page_1.Page.AREA && page !== page_1.Page.FISHING) {
+            return;
+        }
+        if (!settings[settings_1.SettingId.LOCATION_ADVISOR]) {
+            return;
+        }
+        const currentPage = (0, page_1.getCurrentPage)();
+        if (!currentPage) {
+            return;
+        }
+        // the explore page rerenders on every click; never stack a second block
+        (_a = currentPage.querySelector(`#${CONTAINER_ID}`)) === null || _a === void 0 ? void 0 : _a.remove();
+        (_b = currentPage.querySelector(`#${CONTAINER_ID}-title`)) === null || _b === void 0 ? void 0 : _b.remove();
+        yield render(currentPage, settings);
+    }),
+};
+
+
+/***/ }),
+
 /***/ 8124:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -9543,7 +9784,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.31" !== void 0 ? "1.1.31" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.32" !== void 0 ? "1.1.32" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -9648,6 +9889,7 @@ const improvedInputs_1 = __webpack_require__(1108);
 const inventoryCapWarnings_1 = __webpack_require__(6660);
 const kitchenNotifications_1 = __webpack_require__(9737);
 const linkifyQuickCraft_1 = __webpack_require__(7092);
+const locationAdvisor_1 = __webpack_require__(1028);
 const mailboxNotifications_1 = __webpack_require__(6297);
 const maxContainers_1 = __webpack_require__(9735);
 const maxCows_1 = __webpack_require__(1103);
@@ -9723,6 +9965,7 @@ const FEATURES = [
     // explore
     perkManagement_1.perkManagment,
     cleanupExplore_1.cleanupExplore,
+    locationAdvisor_1.locationAdvisor,
     // chat
     chatNav_1.chatNav,
     compressChat_1.compressChat,
@@ -11037,6 +11280,162 @@ exports.getDesiredQueue = getDesiredQueue;
 
 /***/ }),
 
+/***/ 4764:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseStamina = exports.matchLocationByImage = exports.imageBasename = exports.matchLocationName = exports.findLocationSet = exports.getLocationAdvice = void 0;
+// What this location is worth to you right now.
+//
+// Two halves that the game never puts together. `needed` is the intersection of
+// what drops here with what your plans are short of, so a location is judged by
+// your backlog rather than by its raw table. `wasted` is the opposite and the
+// more useful half: items you are already at the cap on that drop here, whose
+// every drop is discarded — and where mastery is still in progress, that is
+// also mastery progress being thrown away, since mastery counts acquisition.
+const getLocationAdvice = (drops, missing, reasonsByItem, inventory, cap, mastery) => {
+    var _a, _b;
+    const dropByName = new Map(drops.map((drop) => [drop.name, drop]));
+    const needed = [];
+    for (const entry of missing) {
+        const drop = dropByName.get(entry.name);
+        if (!drop) {
+            continue;
+        }
+        needed.push({
+            attempts: entry.quantity * drop.rate,
+            id: drop.id,
+            name: entry.name,
+            quantity: entry.quantity,
+            rate: drop.rate,
+            reasons: (_a = reasonsByItem.get(entry.name)) !== null && _a !== void 0 ? _a : [],
+        });
+    }
+    // cheapest to finish first: this is a list of what to do while standing here
+    needed.sort((a, b) => a.attempts - b.attempts);
+    const wasted = [];
+    if (cap !== undefined) {
+        const masteryByName = new Map(mastery.map((entry) => [entry.name, entry]));
+        for (const drop of drops) {
+            const count = (_b = inventory[drop.name]) !== null && _b !== void 0 ? _b : 0;
+            if (count < cap) {
+                continue;
+            }
+            const progress = masteryByName.get(drop.name);
+            wasted.push({
+                count,
+                id: drop.id,
+                masteryRemaining: progress && progress.remaining > 0 ? progress.remaining : undefined,
+                masteryRequired: progress === null || progress === void 0 ? void 0 : progress.required,
+                masteryValue: progress === null || progress === void 0 ? void 0 : progress.value,
+                name: drop.name,
+            });
+        }
+        // the ones with mastery still owed are the expensive mistakes
+        wasted.sort((a, b) => {
+            var _a, _b;
+            return Number(b.masteryRemaining !== undefined) -
+                Number(a.masteryRemaining !== undefined) ||
+                ((_a = a.masteryRemaining) !== null && _a !== void 0 ? _a : 0) - ((_b = b.masteryRemaining) !== null && _b !== void 0 ? _b : 0);
+        });
+    }
+    return { needed, wasted };
+};
+exports.getLocationAdvice = getLocationAdvice;
+// Find the saved set that belongs to this location.
+//
+// Players name these loosely — "Explore - Mount Banon", "Misty Forest",
+// "explore - highland hills" — so the location name appearing anywhere in the
+// set name is the signal.
+//
+// Containment alone is not enough, though: "Misty Forest" contains "Forest", so
+// standing in Forest would claim the Misty Forest set, and a word-boundary test
+// does not help because it genuinely contains that word. A set therefore belongs
+// to the *most specific* location it names — the longest of every known location
+// name found in it — which gives "Misty Forest" to Misty Forest and leaves
+// Forest with nothing.
+const findLocationSet = (locationName, sets, allLocationNames) => {
+    var _a;
+    const needle = locationName.trim().toLowerCase();
+    if (!needle) {
+        return undefined;
+    }
+    const names = [...allLocationNames].map((name) => name.toLowerCase());
+    const matches = sets.filter((set) => {
+        const label = set.name.trim().toLowerCase();
+        if (!label.includes(needle)) {
+            return false;
+        }
+        const mostSpecific = names
+            .filter((name) => label.includes(name))
+            .sort((a, b) => b.length - a.length)[0];
+        return mostSpecific === needle;
+    });
+    if (matches.length === 0) {
+        return undefined;
+    }
+    // an already-loaded match is the answer regardless of length: there is
+    // nothing to suggest changing
+    return ((_a = matches.find((set) => set.isActive)) !== null && _a !== void 0 ? _a : matches.sort((a, b) => b.name.length - a.name.length)[0]);
+};
+exports.findLocationSet = findLocationSet;
+// Match a page title against the known location names. Exact first, then a
+// containment test, because the navbar sometimes decorates the name.
+const matchLocationName = (title, locationNames) => {
+    const cleaned = title.trim().toLowerCase();
+    if (!cleaned) {
+        return undefined;
+    }
+    const names = [...locationNames];
+    const exact = names.find((name) => name.toLowerCase() === cleaned);
+    if (exact) {
+        return exact;
+    }
+    // longest wins, so "Gary's Crushroom Expanded" is not shadowed by "Gary's
+    // Crushroom"
+    return names
+        .filter((name) => cleaned.includes(name.toLowerCase()))
+        .sort((a, b) => b.length - a.length)[0];
+};
+exports.matchLocationName = matchLocationName;
+const imageBasename = (source) => { var _a, _b; return (_b = (_a = source.split("/").pop()) === null || _a === void 0 ? void 0 : _a.split("?")[0].toLowerCase()) !== null && _b !== void 0 ? _b : ""; };
+exports.imageBasename = imageBasename;
+// Identify a location from the picture at the top of its page.
+//
+// The explore page prints no name anywhere in its body — the header image is
+// the only identifier — and buddy.farm's search index already carries an image
+// per location, so this costs nothing extra. A basename shared by more than one
+// location (pond.png belongs to both Small Pond and Farm Pond) is treated as
+// unknown rather than guessed at.
+const matchLocationByImage = (source, locations) => {
+    const needle = (0, exports.imageBasename)(source);
+    if (!needle) {
+        return undefined;
+    }
+    const matches = locations.filter((location) => (0, exports.imageBasename)(location.image) === needle);
+    return matches.length === 1 ? matches[0].name : undefined;
+};
+exports.matchLocationByImage = matchLocationByImage;
+// "23,034 / 85 Stamina" -> 23034.
+//
+// The left figure is the stamina actually banked, which runs far above the
+// right one because consumables stack past it; the right is only the natural
+// maximum. So the left is the number that says how much exploring is affordable
+// right now, and the right is ignored.
+const parseStamina = (text) => {
+    const match = /([\d,]+)\s*\/\s*[\d,]+\s*stamina/i.exec(text);
+    if (!match) {
+        return undefined;
+    }
+    const value = Number(match[1].replaceAll(",", ""));
+    return Number.isNaN(value) ? undefined : value;
+};
+exports.parseStamina = parseStamina;
+
+
+/***/ }),
+
 /***/ 6783:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -11703,6 +12102,7 @@ var SettingId;
     SettingId["INVENTORY_CAP_WARNINGS"] = "inventoryCapWarnings";
     SettingId["KITCHEN_COMPLETE_NOTIFICATIONS"] = "readyNotifications";
     SettingId["KITCHEN_EMPTY_NOTIFICATIONS"] = "kitchenEmptyNotifications";
+    SettingId["LOCATION_ADVISOR"] = "locationAdvisor";
     SettingId["MAX_ANIMALS"] = "maxAnimals";
     SettingId["MAX_CONTAINERS"] = "maxContainers";
     SettingId["MEAL_NOTIFICATIONS"] = "mealNotifications";
