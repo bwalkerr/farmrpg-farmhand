@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.18
+// @version 1.1.19
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -39,7 +39,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
+exports.locationDataState = exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(6747);
 exports.itemDataState = new state_1.CachedState(state_1.StorageKey.ITEM_DATA, (state, itemName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -165,6 +165,35 @@ exports.questDataState = new state_1.CachedState(state_1.StorageKey.QUEST_DATA, 
         return previous;
     }
     return quest;
+}), {
+    timeout: 60 * 60 * 24 * 7, // 1 week
+});
+// A location's in-game id, so drop advice can link straight to the place
+// rather than just naming it.
+//
+// buddy.farm mirrors the game's own database ids -- verified against ten items
+// whose ids Reed's Craftworks page reported independently, all exact -- and the
+// id lives on the page's `pageContext`, not on the location record itself.
+exports.locationDataState = new state_1.CachedState(state_1.StorageKey.LOCATION_DATA, (state, locationName) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e, _f;
+    if (!locationName) {
+        return;
+    }
+    const previous = state.state[locationName];
+    if (previous) {
+        return previous;
+    }
+    const response = yield fetch(`https://buddy.farm/page-data/l/${(0, requests_1.nameToSlug)(locationName)}/page-data.json`);
+    if (!response.ok) {
+        return previous;
+    }
+    const data = (yield response.json());
+    const location = (_d = (_c = (_b = (_a = data === null || data === void 0 ? void 0 : data.result) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.farmrpg) === null || _c === void 0 ? void 0 : _c.locations) === null || _d === void 0 ? void 0 : _d[0];
+    const id = (_f = (_e = data === null || data === void 0 ? void 0 : data.result) === null || _e === void 0 ? void 0 : _e.pageContext) === null || _f === void 0 ? void 0 : _f.id;
+    if (!location || !id) {
+        return previous;
+    }
+    return { id, name: location.name, type: location.type };
 }), {
     timeout: 60 * 60 * 24 * 7, // 1 week
 });
@@ -381,6 +410,50 @@ const withdrawSilver = (amount) => __awaiter(void 0, void 0, void 0, function* (
     }));
 });
 exports.withdrawSilver = withdrawSilver;
+
+
+/***/ }),
+
+/***/ 920:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.craftworksState = void 0;
+const state_1 = __webpack_require__(4782);
+const requests_1 = __webpack_require__(3300);
+const craftworks_1 = __webpack_require__(7831);
+const page_1 = __webpack_require__(7952);
+// The Craftworks queue, fetched rather than read off the page in view, so the
+// home panel can report on it from anywhere.
+//
+// No `defaultState`, for the same reason as the inventory snapshot: `set()`
+// merges over an object default, and a queue whose slots were removed must
+// replace the old list outright rather than keep asserting stale slots. A
+// parse that finds no slots returns undefined and keeps the last good read.
+exports.craftworksState = new state_1.CachedState(state_1.StorageKey.CRAFTWORKS, () => __awaiter(void 0, void 0, void 0, function* () {
+    const response = yield (0, requests_1.getHTML)(page_1.Page.CRAFTWORKS, new URLSearchParams());
+    const slots = (0, craftworks_1.parseSlots)(response.body);
+    if (slots.length === 0) {
+        return;
+    }
+    return {
+        maxSlots: (0, craftworks_1.getMaxSlots)(response.body),
+        slots,
+        updatedAt: Date.now(),
+    };
+}), {
+    timeout: 5 * 60, // 5 minutes
+});
 
 
 /***/ }),
@@ -1824,9 +1897,9 @@ const api_1 = __webpack_require__(3413);
 // tagging feature has used since upstream, so this is proven markup rather than
 // a fresh guess: each request is an `li` whose link carries the quest id and
 // whose `.item-title strong` is the title.
-const parseActiveQuests = () => {
+const parseActiveQuests = (root) => {
     var _a, _b, _c;
-    const list = (0, page_1.getListByTitle)(/Active Requests/);
+    const list = (0, page_1.getListByTitle)(/Active Requests/, root);
     if (!list) {
         return [];
     }
@@ -3447,6 +3520,9 @@ const craftPlanner_1 = __webpack_require__(5825);
 const recipes_1 = __webpack_require__(498);
 const page_1 = __webpack_require__(7952);
 const inventory_1 = __webpack_require__(4514);
+const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
+const promise_1 = __webpack_require__(6762);
 const craftworks_1 = __webpack_require__(7831);
 const settings_1 = __webpack_require__(126);
 const SETTING_CRAFT_PLANNER = {
@@ -3479,7 +3555,8 @@ const makeHeading = (text) => {
     return heading;
 };
 const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
-const renderPlan = (output, graph, plan, maxCraftable, inventory, cap) => {
+const renderPlan = (output, graph, plan, maxCraftable, inventory, cap, locations) => {
+    var _a, _b, _c, _d;
     output.textContent = "";
     output.append(makeLine(maxCraftable > 0 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, maxCraftable > 0
         ? `You can make ${maxCraftable.toLocaleString()} right now.`
@@ -3489,7 +3566,10 @@ const renderPlan = (output, graph, plan, maxCraftable, inventory, cap) => {
     if (subSteps.length > 0) {
         output.append(makeHeading("Craft in this order"));
         for (const step of subSteps) {
-            output.append(makeLine(theme_1.TEXT_GRAY, `${step.quantity.toLocaleString()} × ${step.name}`));
+            output.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+                `${step.quantity.toLocaleString()} × `,
+                (0, gameLinks_1.makeItemLink)(step.name, (_a = graph.nodes.get(step.name)) === null || _a === void 0 ? void 0 : _a.id, theme_1.TEXT_GRAY),
+            ]));
         }
         output.append(makeLine(theme_1.TEXT_GRAY, `${plan.quantity.toLocaleString()} × ${plan.target}`));
     }
@@ -3499,16 +3579,27 @@ const renderPlan = (output, graph, plan, maxCraftable, inventory, cap) => {
     else {
         output.append(makeHeading("Short of"));
         for (const entry of plan.missing) {
-            output.append(makeLine(theme_1.TEXT_WARNING, `${entry.quantity.toLocaleString()} × ${entry.name}`));
+            output.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
+                `${entry.quantity.toLocaleString()} × `,
+                (0, gameLinks_1.makeItemLink)(entry.name, (_b = graph.nodes.get(entry.name)) === null || _b === void 0 ? void 0 : _b.id, theme_1.TEXT_WARNING),
+            ]));
         }
         const sourcing = (0, craftPlanner_1.planSourcing)(graph, plan.missing);
         if (sourcing.locations.length > 0) {
             output.append(makeHeading("Where to go"));
             for (const location of sourcing.locations) {
-                const detail = location.items
-                    .map((item) => `${item.quantity.toLocaleString()} ${item.name}`)
-                    .join(", ");
-                output.append(makeLine(theme_1.TEXT_SUCCESS, `${location.location} — ~${formatHits(location.hits)} ${location.type === "fishing" ? "casts" : "explores"} (${detail})`));
+                const parts = [
+                    (0, gameLinks_1.makeLocationLink)(location.location, locations.get(location.location), theme_1.TEXT_SUCCESS),
+                    ` — ~${formatHits(location.hits)} ${location.type === "fishing" ? "casts" : "explores"} (`,
+                ];
+                for (const [index, item] of location.items.entries()) {
+                    if (index > 0) {
+                        parts.push(", ");
+                    }
+                    parts.push(`${item.quantity.toLocaleString()} `, (0, gameLinks_1.makeItemLink)(item.name, (_c = graph.nodes.get(item.name)) === null || _c === void 0 ? void 0 : _c.id, theme_1.TEXT_SUCCESS));
+                }
+                parts.push(")");
+                output.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, parts));
             }
         }
         if (sourcing.unsourced.length > 0) {
@@ -3521,7 +3612,11 @@ const renderPlan = (output, graph, plan, maxCraftable, inventory, cap) => {
     if (queue.entries.length > 1) {
         output.append(makeHeading("Craftworks queue for this"));
         for (const entry of queue.entries) {
-            output.append(makeLine(theme_1.TEXT_GRAY, `${entry.position}. ${entry.name} (${entry.quantity.toLocaleString()} needed)`));
+            output.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+                `${entry.position}. `,
+                (0, gameLinks_1.makeItemLink)(entry.name, (_d = graph.nodes.get(entry.name)) === null || _d === void 0 ? void 0 : _d.id, theme_1.TEXT_GRAY),
+                ` (${entry.quantity.toLocaleString()} needed)`,
+            ]));
         }
         for (const entry of queue.dropped) {
             output.append(makeLine(theme_1.TEXT_GRAY, `skip ${entry.name} — ${entry.reason}`));
@@ -3611,9 +3706,19 @@ exports.craftPlanner = {
         // the graph and the inventory are already in hand, so re-planning on every
         // keystroke is pure arithmetic — no requests, no debounce needed
         const maxCraftable = (0, craftPlanner_1.getMaxCraftable)(graph, itemName, inventory);
+        // resolve every location the plan could name, once, so re-planning on each
+        // keystroke stays synchronous
+        const locations = new Map();
+        const names = new Set((0, craftPlanner_1.planSourcing)(graph, (0, craftPlanner_1.planCraft)(graph, itemName, 1, inventory).missing).locations.map((entry) => entry.location));
+        yield Promise.all([...names].map((name) => __awaiter(void 0, void 0, void 0, function* () {
+            const ref = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name }));
+            if (ref) {
+                locations.set(name, ref);
+            }
+        })));
         const update = () => {
             const quantity = Math.max(1, Math.floor(Number(input.value) || 1));
-            renderPlan(output, graph, (0, craftPlanner_1.planCraft)(graph, itemName, quantity, inventory), maxCraftable, inventory, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap);
+            renderPlan(output, graph, (0, craftPlanner_1.planCraft)(graph, itemName, quantity, inventory), maxCraftable, inventory, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap, locations);
         };
         input.addEventListener("input", update);
         if (maxCraftable > 1) {
@@ -3647,6 +3752,9 @@ const recipes_1 = __webpack_require__(498);
 const craftPlanner_1 = __webpack_require__(5825);
 const page_1 = __webpack_require__(7952);
 const inventory_1 = __webpack_require__(4514);
+const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
+const promise_1 = __webpack_require__(6762);
 const settings_1 = __webpack_require__(126);
 const SETTING_CRAFTWORKS_ADVISOR = {
     id: settings_1.SettingId.CRAFTWORKS_ADVISOR,
@@ -3679,7 +3787,7 @@ const makeHeading = (text) => {
 };
 const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
 const renderAdvice = (container, slots, maxSlots) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
+    var _a, _b;
     const snapshot = yield inventory_1.inventoryState.get();
     const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
     const advice = (0, craftworks_1.adviseOnSlots)(slots, cap);
@@ -3728,7 +3836,7 @@ const renderAdvice = (container, slots, maxSlots) => __awaiter(void 0, void 0, v
     try {
         graph = yield (0, recipes_1.gatherRecipeGraph)(names);
     }
-    catch (_b) {
+    catch (_c) {
         container.append(makeLine(theme_1.TEXT_GRAY, "Could not reach buddy.farm for drop locations."));
         return;
     }
@@ -3760,15 +3868,30 @@ const renderAdvice = (container, slots, maxSlots) => __awaiter(void 0, void 0, v
             craftable.push(name);
             details.push("craftable — could take the free slot");
         }
-        container.append(makeLine(theme_1.TEXT_WARNING, `${name} → blocks ${consumers}${details.length > 0
-            ? ` · ${details.join(" · ")}`
-            : " · no known source"}`));
+        container.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
+            (0, gameLinks_1.makeItemLink)(name, node === null || node === void 0 ? void 0 : node.id, theme_1.TEXT_WARNING),
+            ` → blocks ${consumers}`,
+            details.length > 0 ? ` · ${details.join(" · ")}` : " · no known source",
+        ]));
     }
     const locations = [...byLocation.entries()].sort((a, b) => b[1].blockers.length - a[1].blockers.length);
     if (locations.length > 0) {
         container.append(makeHeading("Where to go"));
-        for (const [location, entry] of locations) {
-            container.append(makeLine(entry.blockers.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, `${location} — ${entry.blockers.join(", ")} (${formatHits(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"} for one of each)`));
+        const references = yield Promise.all(locations.map(([location]) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: location }))));
+        for (const [index, [location, entry]] of locations.entries()) {
+            const color = entry.blockers.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY;
+            const parts = [
+                (0, gameLinks_1.makeLocationLink)(location, references[index], color),
+                " — ",
+            ];
+            for (const [blockerIndex, blocker] of entry.blockers.entries()) {
+                if (blockerIndex > 0) {
+                    parts.push(", ");
+                }
+                parts.push((0, gameLinks_1.makeItemLink)(blocker, (_b = graph.nodes.get(blocker)) === null || _b === void 0 ? void 0 : _b.id, color));
+            }
+            parts.push(` (${formatHits(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"} for one of each)`);
+            container.append((0, gameLinks_1.makeLinkedLine)(color, parts));
         }
     }
     if (craftable.length > 0 && (maxSlots !== null && maxSlots !== void 0 ? maxSlots : 0) > slots.length) {
@@ -4780,11 +4903,14 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.focusDashboard = void 0;
 const theme_1 = __webpack_require__(1178);
-const focus_1 = __webpack_require__(7167);
 const recipes_1 = __webpack_require__(498);
 const page_1 = __webpack_require__(7952);
+const focus_1 = __webpack_require__(7167);
 const quests_1 = __webpack_require__(303);
 const inventory_1 = __webpack_require__(4514);
+const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
+const promise_1 = __webpack_require__(6762);
 const settings_1 = __webpack_require__(126);
 const SETTING_FOCUS_DASHBOARD = {
     id: settings_1.SettingId.FOCUS_DASHBOARD,
@@ -4818,14 +4944,8 @@ const makeHeading = (text) => {
     return heading;
 };
 const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
-const describeBottleneck = (entry) => {
-    const gated = entry.goalsGated > 1
-        ? `blocks ${entry.goalsGated} requests`
-        : `blocks ${entry.goals[0]}`;
-    return `${entry.name} — ${gated}, need up to ${entry.maxNeeded.toLocaleString()}`;
-};
 const render = (container, goals) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
+    var _a, _b, _c, _d;
     const snapshot = yield inventory_1.inventoryState.get();
     const inventory = (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _a !== void 0 ? _a : {};
     // one walk covering every item any open request wants, so the whole board is
@@ -4839,28 +4959,51 @@ const render = (container, goals) => __awaiter(void 0, void 0, void 0, function*
     if (ready.length > 0) {
         container.append(makeHeading("Ready to turn in"));
         for (const status of ready) {
-            container.append(makeLine(theme_1.TEXT_SUCCESS, status.goal.label));
+            container.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
+                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_SUCCESS),
+            ]));
         }
     }
     if (nearlyDone.length > 0) {
         container.append(makeHeading("One item away"));
         for (const status of nearlyDone.slice(0, MAX_LISTED)) {
             const [only] = status.missing;
-            container.append(makeLine(theme_1.TEXT_WARNING, `${status.goal.label} — ${only.quantity.toLocaleString()} × ${only.name}`));
+            container.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
+                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_WARNING),
+                ` — ${only.quantity.toLocaleString()} × `,
+                (0, gameLinks_1.makeItemLink)(only.name, (_b = graph.nodes.get(only.name)) === null || _b === void 0 ? void 0 : _b.id, theme_1.TEXT_WARNING),
+            ]));
         }
     }
     if (bottlenecks.length > 0) {
         container.append(makeHeading("Holding up the most"));
         for (const entry of bottlenecks.slice(0, MAX_LISTED)) {
-            container.append(makeLine(entry.goalsGated > 1 ? theme_1.TEXT_WARNING : theme_1.TEXT_GRAY, describeBottleneck(entry)));
+            const color = entry.goalsGated > 1 ? theme_1.TEXT_WARNING : theme_1.TEXT_GRAY;
+            container.append((0, gameLinks_1.makeLinkedLine)(color, [
+                (0, gameLinks_1.makeItemLink)(entry.name, (_c = graph.nodes.get(entry.name)) === null || _c === void 0 ? void 0 : _c.id, color),
+                ` — ${entry.goalsGated > 1
+                    ? `blocks ${entry.goalsGated} requests`
+                    : `blocks ${entry.goals[0]}`}, need up to ${entry.maxNeeded.toLocaleString()}`,
+            ]));
         }
         const sourcing = (0, focus_1.getFocusSourcing)(graph, bottlenecks);
         if (sourcing.locations.length > 0) {
             container.append(makeHeading("Where to go"));
-            for (const location of sourcing.locations) {
-                container.append(makeLine(location.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, `${location.location} — ${location.items
-                    .map((item) => item.name)
-                    .join(", ")} (~${formatHits(location.hits)} ${location.type === "fishing" ? "casts" : "explores"})`));
+            const references = yield Promise.all(sourcing.locations.map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
+            for (const [index, location] of sourcing.locations.entries()) {
+                const color = location.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY;
+                const parts = [
+                    (0, gameLinks_1.makeLocationLink)(location.location, references[index], color),
+                    " — ",
+                ];
+                for (const [itemIndex, item] of location.items.entries()) {
+                    if (itemIndex > 0) {
+                        parts.push(", ");
+                    }
+                    parts.push((0, gameLinks_1.makeItemLink)(item.name, (_d = graph.nodes.get(item.name)) === null || _d === void 0 ? void 0 : _d.id, color));
+                }
+                parts.push(` (~${formatHits(location.hits)} ${location.type === "fishing" ? "casts" : "explores"})`);
+                container.append((0, gameLinks_1.makeLinkedLine)(color, parts));
             }
         }
     }
@@ -5078,6 +5221,267 @@ exports.highlightSelfInChat = {
             message.style.backgroundColor = theme_1.ALERT_YELLOW_BACKGROUND;
             message.style.border = `1px solid ${theme_1.ALERT_YELLOW_BORDER}`;
         }
+    }),
+};
+
+
+/***/ }),
+
+/***/ 7818:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.homeBriefing = void 0;
+const craftworks_1 = __webpack_require__(7831);
+const theme_1 = __webpack_require__(1178);
+const craftworks_2 = __webpack_require__(920);
+const recipes_1 = __webpack_require__(498);
+const craftPlanner_1 = __webpack_require__(5825);
+const page_1 = __webpack_require__(7952);
+const settings_1 = __webpack_require__(126);
+const focus_1 = __webpack_require__(7167);
+const requests_1 = __webpack_require__(3300);
+const quests_1 = __webpack_require__(303);
+const inventory_1 = __webpack_require__(4514);
+const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
+const promise_1 = __webpack_require__(6762);
+const SETTING_HOME_BRIEFING = {
+    id: settings_1.SettingId.HOME_BRIEFING,
+    title: "Home: Briefing panel",
+    description: `
+    A collapsible panel on the home page pulling the Craftworks queue, your
+    open requests and where to go into one place
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+const CONTAINER_ID = "fh-home-briefing";
+const MAX_LISTED = 5;
+const makeHeading = (text) => {
+    const heading = document.createElement("div");
+    heading.textContent = text;
+    heading.style.color = theme_1.TEXT_WHITE;
+    heading.style.fontSize = "12px";
+    heading.style.fontWeight = "bold";
+    heading.style.margin = "10px 0 4px";
+    return heading;
+};
+const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
+// Fetch the quests page in the background — the briefing lives on the home
+// page, so the active request list is not already in the DOM the way it is for
+// the quests-page dashboard.
+const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const response = yield (0, requests_1.getHTML)(page_1.Page.QUESTS, new URLSearchParams());
+        return (0, quests_1.parseActiveQuests)(response.body);
+    }
+    catch (_a) {
+        return null;
+    }
+});
+const render = (body) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e;
+    body.textContent = "";
+    const loading = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Reading your farm…"]);
+    body.append(loading);
+    const [snapshot, craftworks, quests] = yield Promise.all([
+        inventory_1.inventoryState.get(),
+        (0, promise_1.orUndefined)(craftworks_2.craftworksState.get()),
+        fetchActiveQuests(),
+    ]);
+    const inventory = (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _a !== void 0 ? _a : {};
+    const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
+    loading.remove();
+    // ---- Craftworks ------------------------------------------------------
+    const advice = craftworks ? (0, craftworks_1.adviseOnSlots)(craftworks.slots, cap) : undefined;
+    if (advice && craftworks) {
+        const free = craftworks.maxSlots
+            ? craftworks.maxSlots - craftworks.slots.length
+            : 0;
+        body.append(makeHeading("Craftworks"));
+        body.append((0, gameLinks_1.makeLinkedLine)(advice.working.length > 0 ? theme_1.TEXT_GRAY : theme_1.TEXT_WARNING, [
+            `${advice.working.length} of ${craftworks.slots.length} slots crafting`,
+            free > 0 ? `, ${free} free` : "",
+        ]));
+        for (const slot of advice.dead.slice(0, MAX_LISTED)) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
+                "at cap: ",
+                (0, gameLinks_1.makeItemLink)(slot.name, Number(slot.id) || undefined, theme_1.TEXT_ERROR),
+                ` (${slot.inventory.toLocaleString()}${cap ? `/${cap.toLocaleString()}` : ""}) — dead slot`,
+            ]));
+        }
+        for (const { blocker, producer, slot } of advice.ordering) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
+                `move #${producer.position} ${producer.name} above #${slot.position} ${slot.name} (waits on ${blocker})`,
+            ]));
+        }
+    }
+    // ---- Requests --------------------------------------------------------
+    const questGoals = quests ? yield (0, quests_1.getQuestGoals)(quests) : undefined;
+    const goals = (_b = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _b !== void 0 ? _b : [];
+    const questNeeds = goals.flatMap((goal) => goal.needs.map((need) => need.name));
+    const craftworkBlockers = (_c = advice === null || advice === void 0 ? void 0 : advice.roots.map((root) => root.name)) !== null && _c !== void 0 ? _c : [];
+    // one walk covering everything either half needs
+    const graph = yield (0, recipes_1.gatherRecipeGraph)([...questNeeds, ...craftworkBlockers]);
+    const statuses = (0, focus_1.getGoalStatuses)(graph, goals, inventory);
+    const ready = statuses.filter((status) => status.isReady);
+    const nearlyDone = (0, focus_1.getNearlyDone)(statuses);
+    const bottlenecks = (0, focus_1.rankBottlenecks)(statuses);
+    if (statuses.length > 0) {
+        body.append(makeHeading("Requests"));
+        if (ready.length > 0) {
+            for (const status of ready.slice(0, MAX_LISTED)) {
+                body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
+                    "ready: ",
+                    (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_SUCCESS),
+                ]));
+            }
+        }
+        for (const status of nearlyDone.slice(0, MAX_LISTED)) {
+            const [only] = status.missing;
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
+                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_WARNING),
+                " — needs ",
+                `${only.quantity.toLocaleString()} × `,
+                (0, gameLinks_1.makeItemLink)(only.name, (_d = graph.nodes.get(only.name)) === null || _d === void 0 ? void 0 : _d.id, theme_1.TEXT_WARNING),
+            ]));
+        }
+        if (ready.length === 0 && nearlyDone.length === 0) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+                `${statuses.length} open, none close to done`,
+            ]));
+        }
+    }
+    // ---- Where to go -----------------------------------------------------
+    // Craftworks reports what a slot is out of but never how many it is short
+    // by, so a blocker counts as one unit; a request's shortfall is exact. Both
+    // reduce to the same trip, which is why they merge here instead of being
+    // listed twice.
+    const combined = (0, focus_1.mergeMissing)(bottlenecks.map((entry) => ({
+        name: entry.name,
+        quantity: entry.maxNeeded,
+    })), craftworkBlockers.map((name) => ({ name, quantity: 1 })));
+    const sourcing = (0, craftPlanner_1.planSourcing)(graph, combined);
+    if (sourcing.locations.length > 0) {
+        body.append(makeHeading("Where to go"));
+        const references = yield Promise.all(sourcing.locations
+            .slice(0, MAX_LISTED)
+            .map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
+        for (const [index, entry] of sourcing.locations
+            .slice(0, MAX_LISTED)
+            .entries()) {
+            const parts = [
+                (0, gameLinks_1.makeLocationLink)(entry.location, references[index], entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY),
+                ` ~${formatHits(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"} — `,
+            ];
+            for (const [itemIndex, item] of entry.items.slice(0, 4).entries()) {
+                if (itemIndex > 0) {
+                    parts.push(", ");
+                }
+                parts.push((0, gameLinks_1.makeItemLink)(item.name, (_e = graph.nodes.get(item.name)) === null || _e === void 0 ? void 0 : _e.id, entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY));
+            }
+            body.append((0, gameLinks_1.makeLinkedLine)(entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, parts));
+        }
+    }
+    if (body.childNodes.length === 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, ["Nothing needs attention."]));
+    }
+    // items with no drop location at all are worth naming once, since no amount
+    // of exploring will produce them
+    const unsourced = sourcing.unsourced.filter((name) => {
+        var _a;
+        const source = (0, craftPlanner_1.getBaselineSource)((0, craftPlanner_1.getDropSources)((_a = graph.nodes.get(name)) === null || _a === void 0 ? void 0 : _a.item));
+        return !source;
+    });
+    if (unsourced.length > 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`no drop location: ${unsourced.join(", ")}`]));
+    }
+    if (questGoals === null || questGoals === void 0 ? void 0 : questGoals.unmatched.length) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            `not on buddy.farm: ${questGoals.unmatched.join(", ")}`,
+        ]));
+    }
+});
+exports.homeBriefing = {
+    settings: [SETTING_HOME_BRIEFING],
+    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
+        if (page !== page_1.Page.HOME_PAGE && page !== page_1.Page.HOME_PATH) {
+            return;
+        }
+        if (!settings[settings_1.SettingId.HOME_BRIEFING]) {
+            return;
+        }
+        const currentPage = (0, page_1.getCurrentPage)();
+        if (!currentPage) {
+            return;
+        }
+        // the home page is re-rendered constantly (the meal timer refetches it
+        // every minute), so never stack a second panel
+        if (currentPage.querySelector(`#${CONTAINER_ID}`)) {
+            return;
+        }
+        const { isOpen } = yield (0, settings_1.getData)(SETTING_HOME_BRIEFING, {
+            isOpen: false,
+        });
+        const card = document.createElement("div");
+        card.id = CONTAINER_ID;
+        card.className = "card";
+        const content = document.createElement("div");
+        content.className = "card-content";
+        const inner = document.createElement("div");
+        inner.className = "card-content-inner";
+        inner.style.borderLeft = `3px solid ${theme_1.BORDER_GRAY}`;
+        inner.style.paddingLeft = "10px";
+        const header = document.createElement("div");
+        header.style.alignItems = "center";
+        header.style.cursor = "pointer";
+        header.style.display = "flex";
+        header.style.gap = "6px";
+        const chevron = document.createElement("i");
+        chevron.className = "fa fa-fw";
+        chevron.style.color = theme_1.TEXT_GRAY;
+        const label = document.createElement("span");
+        label.textContent = "Farmhand briefing";
+        label.style.color = theme_1.TEXT_WHITE;
+        label.style.fontWeight = "bold";
+        header.append(chevron, label);
+        const body = document.createElement("div");
+        // The panel costs three page fetches plus buddy.farm lookups, and the home
+        // page reloads on its own every minute while a meal is cooking. So nothing
+        // is fetched until it is actually opened, and closing it drops the content
+        // rather than leaving it to go stale behind a collapsed header.
+        let hasRendered = false;
+        const apply = (open) => {
+            chevron.classList.toggle("fa-chevron-down", open);
+            chevron.classList.toggle("fa-chevron-right", !open);
+            body.style.display = open ? "block" : "none";
+            if (open && !hasRendered) {
+                hasRendered = true;
+                render(body);
+            }
+        };
+        header.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
+            const next = body.style.display === "none";
+            apply(next);
+            yield (0, settings_1.setData)(SETTING_HOME_BRIEFING, { isOpen: next });
+        }));
+        inner.append(header, body);
+        content.append(inner);
+        card.append(content);
+        const pageContent = currentPage.querySelector(".page-content");
+        pageContent === null || pageContent === void 0 ? void 0 : pageContent.prepend(card);
+        apply(isOpen);
     }),
 };
 
@@ -8120,7 +8524,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.18" !== void 0 ? "1.1.18" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.19" !== void 0 ? "1.1.19" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -8220,6 +8624,7 @@ const focusDashboard_1 = __webpack_require__(8697);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const highlightSelfInChat_1 = __webpack_require__(5454);
+const homeBriefing_1 = __webpack_require__(7818);
 const improvedInputs_1 = __webpack_require__(1108);
 const inventoryCapWarnings_1 = __webpack_require__(6660);
 const kitchenNotifications_1 = __webpack_require__(9737);
@@ -8255,6 +8660,7 @@ const FEATURES = [
     // home
     cleanupHome_1.cleanupHome,
     moveUpdateToTop_1.moveUpdateToTop,
+    homeBriefing_1.homeBriefing,
     // kitchen
     kitchenNotifications_1.kitchenNotifications,
     mealNotifications_1.mealNotifications,
@@ -9214,7 +9620,7 @@ exports.clearDropdown = clearDropdown;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getFocusSourcing = exports.getNearlyDone = exports.rankBottlenecks = exports.getGoalStatuses = void 0;
+exports.mergeMissing = exports.getFocusSourcing = exports.getNearlyDone = exports.rankBottlenecks = exports.getGoalStatuses = void 0;
 const craftPlanner_1 = __webpack_require__(5825);
 // Work out what each goal is still short of.
 //
@@ -9301,6 +9707,116 @@ const getFocusSourcing = (graph, bottlenecks, limit = 6) => (0, craftPlanner_1.p
     quantity: entry.maxNeeded,
 })));
 exports.getFocusSourcing = getFocusSourcing;
+// Fold several shortfall lists into one, taking the largest ask for any item
+// rather than the sum.
+//
+// The lists come from sources that overlap: a request short of 40 Steel and a
+// Craftworks slot stalled on Steel are the same trip, not two. Summing would
+// inflate the hit count for exactly the materials that matter most, which is
+// the opposite of useful when the point is deciding where to spend an hour.
+const mergeMissing = (...lists) => {
+    var _a;
+    const byName = new Map();
+    for (const list of lists) {
+        for (const entry of list) {
+            byName.set(entry.name, Math.max((_a = byName.get(entry.name)) !== null && _a !== void 0 ? _a : 0, entry.quantity));
+        }
+    }
+    return [...byName.entries()]
+        .map(([name, quantity]) => ({ name, quantity }))
+        .sort((a, b) => b.quantity - a.quantity);
+};
+exports.mergeMissing = mergeMissing;
+
+
+/***/ }),
+
+/***/ 1616:
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.makeMutedText = exports.makeLinkedLine = exports.makeQuestLink = exports.makeLocationLink = exports.toLocationHref = exports.makeItemLink = exports.makeLink = exports.applyLinkStyle = void 0;
+const theme_1 = __webpack_require__(1178);
+// Framework7 only routes a click through its own navigation when the anchor
+// declares which view to load into. Without this the link does a full page
+// load, which drops the SPA state and takes seconds — the same attribute the
+// quick-craft linkifier sets.
+const VIEW = ".view-main";
+const applyLinkStyle = (link, color) => {
+    link.dataset.view = VIEW;
+    link.style.color = color;
+    link.style.textDecoration = "underline";
+    link.style.textDecorationStyle = "dotted";
+    link.style.textUnderlineOffset = "2px";
+};
+exports.applyLinkStyle = applyLinkStyle;
+const makeLink = (href, text, color) => {
+    const link = document.createElement("a");
+    link.href = href;
+    link.textContent = text;
+    (0, exports.applyLinkStyle)(link, color);
+    return link;
+};
+exports.makeLink = makeLink;
+// An item's own page. buddy.farm's item ids are the game's item ids, so an id
+// from a recipe lookup addresses the game page directly.
+const makeItemLink = (name, id, color) => {
+    if (!id) {
+        const span = document.createElement("span");
+        span.textContent = name;
+        span.style.color = color;
+        return span;
+    }
+    return (0, exports.makeLink)(`item.php?id=${id}`, name, color);
+};
+exports.makeItemLink = makeItemLink;
+// Explore areas and fishing spots are different pages in the game.
+const toLocationHref = (location) => location.type === "fishing"
+    ? `fishing.php?id=${location.id}`
+    : `area.php?id=${location.id}`;
+exports.toLocationHref = toLocationHref;
+const makeLocationLink = (name, location, color) => {
+    if (!location) {
+        const span = document.createElement("span");
+        span.textContent = name;
+        span.style.color = color;
+        return span;
+    }
+    return (0, exports.makeLink)((0, exports.toLocationHref)(location), name, color);
+};
+exports.makeLocationLink = makeLocationLink;
+const makeQuestLink = (title, href, color) => {
+    if (!href) {
+        const span = document.createElement("span");
+        span.textContent = title;
+        span.style.color = color;
+        return span;
+    }
+    return (0, exports.makeLink)(href, title, color);
+};
+exports.makeQuestLink = makeQuestLink;
+// A line of mixed text and links. Plain strings become text nodes, so callers
+// build "4 x Emberstone — Mount Banon" without hand-assembling spans.
+const makeLinkedLine = (color, parts) => {
+    const line = document.createElement("div");
+    line.style.color = color;
+    line.style.fontSize = "12px";
+    line.style.lineHeight = "1.5";
+    line.style.marginBottom = "3px";
+    for (const part of parts) {
+        line.append(part);
+    }
+    return line;
+};
+exports.makeLinkedLine = makeLinkedLine;
+const makeMutedText = (text) => {
+    const span = document.createElement("span");
+    span.textContent = text;
+    span.style.color = theme_1.TEXT_GRAY;
+    return span;
+};
+exports.makeMutedText = makeMutedText;
 
 
 /***/ }),
@@ -9851,6 +10367,27 @@ exports.popups = {
 
 /***/ }),
 
+/***/ 6762:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.orUndefined = void 0;
+// Resolve to undefined instead of rejecting.
+//
+// Every caller here is decorating the page with extra detail — a drop location,
+// a queue read — so a failed lookup should leave that detail out, not take the
+// whole panel down with it. Written once because the lint rule against a bare
+// `undefined` return and TypeScript's refusal to accept `void` in its place
+// cannot both be satisfied inline.
+const orUndefined = (promise) => 
+// eslint-disable-next-line unicorn/no-useless-undefined
+promise.catch(() => undefined);
+exports.orUndefined = orUndefined;
+
+
+/***/ }),
+
 /***/ 3813:
 /***/ (function(__unused_webpack_module, exports) {
 
@@ -9938,6 +10475,7 @@ var SettingId;
     SettingId["FLEA_MARKET"] = "fleaMarket";
     SettingId["HARVEST_NOTIFICATIONS"] = "harvestNotifications";
     SettingId["HARVEST_POPUP"] = "harvestPopup";
+    SettingId["HOME_BRIEFING"] = "homeBriefing";
     SettingId["HOME_COMPRESS_SKILLS"] = "homeCompressSkills";
     SettingId["HOME_HIDE_FOOTER"] = "homeHideFooter";
     SettingId["HOME_HIDE_PLAYERS"] = "homeHidePlayers";
@@ -10067,6 +10605,7 @@ const requests_1 = __webpack_require__(3300);
 var StorageKey;
 (function (StorageKey) {
     StorageKey["CHAT_BANNERS"] = "chatBanners";
+    StorageKey["CRAFTWORKS"] = "craftworks";
     StorageKey["CURRENT_PERKS_SET_ID"] = "currentPerksSetId";
     StorageKey["FARM_ID"] = "farmId";
     StorageKey["FARM_STATE"] = "farmState";
@@ -10079,6 +10618,7 @@ var StorageKey;
     StorageKey["ITEM_DATA"] = "items";
     StorageKey["KITHCEN_STATUS"] = "kitchenStatus";
     StorageKey["LATEST_VERSION"] = "latestVersion";
+    StorageKey["LOCATION_DATA"] = "locationData";
     StorageKey["MAILBOX"] = "mailbox";
     StorageKey["MEALS_STATUS"] = "mealsStatus";
     StorageKey["NOTES"] = "notes";
