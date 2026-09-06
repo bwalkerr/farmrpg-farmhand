@@ -13,6 +13,11 @@ import {
   parseUrl,
   registerQueryInterceptor,
 } from "~/api/farmrpg/utils/requests";
+import {
+  getRowCount,
+  parseInventoryPage,
+  publishInventoryPage,
+} from "~/api/farmrpg/apis/inventory";
 import { Responselike } from "~/utils/requests";
 import { SettingId } from "~/utils/settings";
 
@@ -36,8 +41,6 @@ const SETTING_INVENTORY_CAP_TRACKER: FeatureSetting = {
   defaultValue: true,
 };
 
-// e.g. "you cannot store more than 200 of any one item"
-const INVENTORY_CAP_PATTERN = /more than ([\d,]+) of any/g;
 const NEAR_CAP_RATIO = 0.9;
 const MAX_TRACKER_ITEMS = 20;
 const PASSIVE_REFRESH_MS = 10 * 60 * 1000;
@@ -69,58 +72,31 @@ const capTrackerState: CapTrackerState = {
 const isInventoryPage = (): boolean =>
   (window.location.hash || window.location.pathname).includes("inventory.php");
 
-// count text of an inventory row, excluding any badge we appended
-const getRowCount = (after: HTMLElement): number => {
-  const countText = [...after.childNodes]
-    .filter(
-      (node) =>
-        !(
-          node instanceof HTMLElement && node.classList.contains("fh-cap-badge")
-        )
-    )
-    .map((node) => node.textContent ?? "")
-    .join("");
-  return Number(countText.replaceAll(",", "").trim());
-};
-
-// parse cap and at/near-cap items out of an inventory page DOM
+// narrow a parsed inventory page down to the at/near-cap rows. The parse
+// itself is shared with the craft planner (api/farmrpg/apis/inventory), which
+// wants every row; this is the only consumer that filters.
 const collectCapItems = (
   root: HTMLElement
 ): { cap: number; items: CapItem[] } | undefined => {
-  // the page can mention several caps (e.g. the wagon upgrade pitch quotes
-  // the next tier's number), so use the smallest match: that is always the
-  // player's current cap
-  const caps = [...(root.textContent ?? "").matchAll(INVENTORY_CAP_PATTERN)]
-    .map((match) => Number(match[1].replaceAll(",", "")))
-    .filter((value) => value > 0);
-  if (caps.length === 0) {
+  const page = parseInventoryPage(root);
+  if (!page) {
     return undefined;
   }
-  const cap = Math.min(...caps);
+  // the planner rides along on whatever fetch or page render got us here
+  // rather than issuing an inventory request of its own
+  publishInventoryPage(page);
+  const { cap, rows } = page;
   const items: CapItem[] = [];
-  for (const row of root.querySelectorAll<HTMLLIElement>(".list-group li")) {
-    if (row.classList.contains("item-divider")) {
+  for (const row of rows) {
+    if (row.count === 0 || row.count < cap * NEAR_CAP_RATIO) {
       continue;
     }
-    const after = row.querySelector<HTMLElement>(".item-after");
-    const link =
-      row.querySelector<HTMLAnchorElement>("a.item-link") ??
-      row.querySelector<HTMLAnchorElement>("a");
-    if (!after || !link) {
-      continue;
-    }
-    const count = getRowCount(after);
-    if (Number.isNaN(count) || count === 0 || count < cap * NEAR_CAP_RATIO) {
-      continue;
-    }
-    const image = row.querySelector<HTMLImageElement>(".item-media img");
-    const title = row.querySelector<HTMLElement>(".item-title");
     items.push({
-      count,
-      href: link.getAttribute("href") ?? "inventory.php",
-      image: image?.getAttribute("src") ?? undefined,
-      isAtCap: count >= cap,
-      name: title?.textContent?.trim() ?? "Item",
+      count: row.count,
+      href: row.href,
+      image: row.image,
+      isAtCap: row.count >= cap,
+      name: row.name,
     });
   }
   return { cap, items };
