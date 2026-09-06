@@ -1,10 +1,18 @@
 import { CachedState, StorageKey } from "~/utils/state";
 import { getHTML } from "../utils/requests";
-import { getMaxSlots, parseSlots, Slot } from "~/utils/craftworks";
+import {
+  getMaxSlots,
+  parseSavedSets,
+  parseSlots,
+  SavedSet,
+  Slot,
+} from "~/utils/craftworks";
 import { Page } from "~/utils/page";
 
 export interface CraftworksSnapshot {
   maxSlots?: number;
+  // saved sets, by name only — see parseSavedSets for why contents are absent
+  sets: SavedSet[];
   slots: Slot[];
   updatedAt: number;
 }
@@ -26,6 +34,7 @@ export const craftworksState = new CachedState<CraftworksSnapshot>(
     }
     return {
       maxSlots: getMaxSlots(response.body),
+      sets: parseSavedSets(response.body),
       slots,
       updatedAt: Date.now(),
     };

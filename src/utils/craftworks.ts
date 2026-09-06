@@ -288,3 +288,39 @@ export const suggestQueueChanges = (
   }
   return suggestions;
 };
+
+export interface SavedSet {
+  id: string;
+  isActive: boolean;
+  name: string;
+}
+
+// The saved Craftworks sets listed under "My Item Sets".
+//
+// Only names, ids and which one is active are readable. Each row does carry a
+// `data-items` attribute, but it holds the *current* queue rather than that
+// set's contents — identical across every row — and it sits inside an HTML
+// comment. Reading a set's real contents would mean activating it, which
+// overwrites the live queue, so everything here works from the name alone.
+export const parseSavedSets = (root: HTMLElement): SavedSet[] => {
+  const sets: SavedSet[] = [];
+  for (const link of root.querySelectorAll<HTMLAnchorElement>(
+    "a.activatecwsetbtn[data-id]"
+  )) {
+    const name = link.textContent?.trim();
+    const { id } = link.dataset;
+    if (!name || !id || sets.some((set) => set.id === id)) {
+      continue;
+    }
+    const title = link.closest(".item-title");
+    sets.push({
+      id,
+      // the game paints the active set teal and prefixes a check icon
+      isActive:
+        /color:\s*teal/i.test(title?.getAttribute("style") ?? "") ||
+        link.querySelector(".fa-check") !== null,
+      name,
+    });
+  }
+  return sets;
+};

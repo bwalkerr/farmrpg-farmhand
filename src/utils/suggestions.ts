@@ -10,7 +10,7 @@ export interface GoalSuggestion {
   isFrozen?: boolean;
   name: string;
   reason: string;
-  source: "mastery" | "quest";
+  source: "mastery" | "quest" | "set";
 }
 
 // Mastery is earned by acquiring an item, and an item sitting at the inventory
@@ -102,5 +102,89 @@ export const getQuestSuggestions = (
   }
   return [...byName.values()]
     .sort((a, b) => a.quantity - b.quantity)
+    .slice(0, limit);
+};
+
+// Words players append to a set name that is otherwise just the thing they are
+// building — "Lantern prereqs" is a Lantern goal.
+const SET_NAME_SUFFIXES = [
+  "prereqs",
+  "prereq",
+  "prereqs.",
+  "parts",
+  "mats",
+  "materials",
+  "chain",
+  "line",
+];
+
+// Work out which item a saved Craftworks set is aiming at, from its name alone.
+//
+// Set contents are unreadable without activating the set, so the name is all
+// there is. Matching is case-insensitive because players are casual about it
+// ("Fancy table"), and a trailing qualifier is stripped so "Lantern prereqs"
+// still resolves. Anything that does not resolve to a real item — a location
+// loadout like "Explore - Mount Banon" — simply returns undefined.
+export const matchSetNameToItem = (
+  setName: string,
+  itemNames: Iterable<string>
+): string | undefined => {
+  const byLower = new Map<string, string>();
+  for (const name of itemNames) {
+    byLower.set(name.toLowerCase(), name);
+  }
+  const cleaned = setName.trim().toLowerCase();
+  const direct = byLower.get(cleaned);
+  if (direct) {
+    return direct;
+  }
+  for (const suffix of SET_NAME_SUFFIXES) {
+    if (cleaned.endsWith(` ${suffix}`)) {
+      const trimmed = cleaned.slice(0, -suffix.length - 1).trim();
+      const match = byLower.get(trimmed);
+      if (match) {
+        return match;
+      }
+    }
+  }
+  return undefined;
+};
+
+// Saved sets named after an item are goals the player has already been keeping
+// by hand; surface them as suggestions so the tool can see what they are
+// building. Inference from a name, so it is offered rather than adopted.
+export const getSetSuggestions = (
+  sets: { isActive: boolean; name: string }[],
+  itemNames: Iterable<string>,
+  tracked: TrackedGoal[],
+  inventory: Record<string, number>,
+  limit = 4
+): GoalSuggestion[] => {
+  const already = new Set(tracked.map((goal) => goal.name));
+  const names = [...itemNames];
+  const seen = new Set<string>();
+  const suggestions: GoalSuggestion[] = [];
+  for (const set of sets) {
+    const item = matchSetNameToItem(set.name, names);
+    if (!item || already.has(item) || seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    suggestions.push({
+      name: item,
+      quantity: Math.max(1, 1 - (inventory[item] ?? 0)),
+      reason: set.isActive
+        ? `your active set “${set.name}”`
+        : `your saved set “${set.name}”`,
+      source: "set",
+    });
+  }
+  // the set currently loaded is the one being worked on right now
+  return suggestions
+    .sort(
+      (a, b) =>
+        Number(b.reason.includes("active")) -
+        Number(a.reason.includes("active"))
+    )
     .slice(0, limit);
 };

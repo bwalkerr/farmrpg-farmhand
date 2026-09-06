@@ -22,10 +22,12 @@ import {
 } from "~/api/farmrpg/apis/craftworks";
 import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
+import { getBasicItems, locationDataState } from "~/api/buddyfarm/api";
 import {
   getFrozenMastery,
   getMasterySuggestions,
   getQuestSuggestions,
+  getSetSuggestions,
 } from "~/utils/suggestions";
 import {
   getGoalStatuses,
@@ -37,7 +39,6 @@ import { getHTML } from "~/api/farmrpg/utils/requests";
 import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
 import { getSettingValues, SettingId } from "~/utils/settings";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
-import { locationDataState } from "~/api/buddyfarm/api";
 import {
   makeItemLink,
   makeLinkedLine,
@@ -293,6 +294,7 @@ interface Context {
   goals: TrackedGoal[];
   graph: RecipeGraph;
   inventory: Record<string, number>;
+  itemNames: string[];
   mastery: MasteryEntry[];
   questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
   statuses: ReturnType<typeof getGoalStatuses>;
@@ -306,13 +308,15 @@ const loadContext = async (force: boolean): Promise<Context> => {
   const unlimited = parseUnlimitedItems(
     String(settings[SettingId.UNLIMITED_ITEMS] ?? "")
   );
-  const [snapshot, craftworks, quests, goals, mastery] = await Promise.all([
-    orUndefined(inventoryState.get({ ignoreCache: force })),
-    orUndefined(craftworksState.get({ ignoreCache: force })),
-    fetchActiveQuests(),
-    getGoals(),
-    orUndefined(masteryState.get({ ignoreCache: force })),
-  ]);
+  const [snapshot, craftworks, quests, goals, mastery, basicItems] =
+    await Promise.all([
+      orUndefined(inventoryState.get({ ignoreCache: force })),
+      orUndefined(craftworksState.get({ ignoreCache: force })),
+      fetchActiveQuests(),
+      getGoals(),
+      orUndefined(masteryState.get({ ignoreCache: force })),
+      orUndefined(getBasicItems()),
+    ]);
   const inventory = snapshot?.quantities ?? {};
   const cap = snapshot?.cap;
   const advice = craftworks
@@ -336,6 +340,7 @@ const loadContext = async (force: boolean): Promise<Context> => {
     goals,
     graph,
     inventory,
+    itemNames: (basicItems ?? []).map((item) => item.name),
     mastery: mastery?.entries ?? [],
     questGoals,
     statuses: getGoalStatuses(
@@ -564,8 +569,26 @@ const renderSuggestions = (
   context: Context,
   rerender: () => void
 ): void => {
-  const { cap, goals, graph, inventory, mastery, questGoals } = context;
+  const {
+    cap,
+    craftworks,
+    goals,
+    graph,
+    inventory,
+    itemNames,
+    mastery,
+    questGoals,
+  } = context;
   const suggestions = [
+    // the player's own saved sets come first: a set named after an item is a
+    // goal they have already been keeping by hand
+    ...getSetSuggestions(
+      craftworks?.sets ?? [],
+      itemNames,
+      goals,
+      inventory,
+      4
+    ),
     ...getMasterySuggestions(mastery, inventory, cap, goals, 4),
     ...getQuestSuggestions(questGoals?.goals ?? [], inventory, goals, 3),
   ];
@@ -652,6 +675,11 @@ const renderCraftworks = (body: HTMLElement, context: Context): void => {
       parts.push(" — crafting");
     }
     body.append(makeLinkedLine(color, parts));
+  }
+
+  const active = craftworks.sets.find((set) => set.isActive);
+  if (active) {
+    body.append(makeLinkedLine(TEXT_GRAY, [`active set: ${active.name}`]));
   }
 
   const frozen = getFrozenMastery(mastery, inventory, cap);

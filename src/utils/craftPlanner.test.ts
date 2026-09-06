@@ -9,6 +9,8 @@ import {
   getFrozenMastery,
   getMasterySuggestions,
   getQuestSuggestions,
+  getSetSuggestions,
+  matchSetNameToItem,
 } from "./suggestions";
 import {
   getGoalStatuses,
@@ -677,6 +679,77 @@ console.info("quest suggestions ask for the shortfall, not the requirement");
     "covered requests drop out, and the larger ask wins",
     suggestions.map((entry) => [entry.name, entry.quantity]),
     [["Emerald", 700]]
+  );
+}
+
+console.info("saved set names: Reed's real 12 sets");
+{
+  // every item name the sets could plausibly refer to
+  const items = [
+    "Explosive",
+    "Fancy Guitar",
+    "Fancy Pipe",
+    "Fancy Table",
+    "Pickaxe",
+    "Lantern",
+    "Glass Orb",
+  ];
+  check(
+    "exact match",
+    matchSetNameToItem("Fancy Guitar", items),
+    "Fancy Guitar"
+  );
+  // players are casual about capitalisation
+  check(
+    "case-insensitive",
+    matchSetNameToItem("Fancy table", items),
+    "Fancy Table"
+  );
+  // a trailing qualifier still resolves to the thing being built
+  check(
+    "trailing qualifier stripped",
+    matchSetNameToItem("Lantern prereqs", items),
+    "Lantern"
+  );
+  // location loadouts are not goals
+  check(
+    "location sets do not resolve",
+    matchSetNameToItem("Explore - Mount Banon", items),
+    undefined
+  );
+  check(
+    "nor do descriptive ones",
+    matchSetNameToItem("Exploration - Misty Forest - Dyes", items),
+    undefined
+  );
+
+  const sets = [
+    { isActive: false, name: "Explore - Mount Banon" },
+    { isActive: false, name: "Fancy Pipe" },
+    { isActive: true, name: "Fancy Guitar" },
+    { isActive: false, name: "Lantern prereqs" },
+    { isActive: false, name: "Misty Forest" },
+  ];
+  const suggestions = getSetSuggestions(sets, items, [], {});
+  check(
+    "only item-named sets, active one first",
+    suggestions.map((entry) => entry.name),
+    ["Fancy Guitar", "Fancy Pipe", "Lantern"]
+  );
+  check(
+    "the active set says so",
+    suggestions[0].reason.includes("active set"),
+    true
+  );
+  check(
+    "already-tracked goals are skipped",
+    getSetSuggestions(
+      sets,
+      items,
+      [{ addedAt: 0, name: "Fancy Guitar", quantity: 1 }],
+      {}
+    ).map((entry) => entry.name),
+    ["Fancy Pipe", "Lantern"]
   );
 }
 
