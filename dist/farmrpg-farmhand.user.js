@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.21
+// @version 1.1.22
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1270,6 +1270,78 @@ const collectMailbox = () => __awaiter(void 0, void 0, void 0, function* () {
     yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COLLECT_ALL_MAIL_ITEMS }));
 });
 exports.collectMailbox = collectMailbox;
+
+
+/***/ }),
+
+/***/ 283:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.masteryState = exports.parseMasteryPage = void 0;
+const state_1 = __webpack_require__(4782);
+const requests_1 = __webpack_require__(3300);
+const page_1 = __webpack_require__(7952);
+// Pull the in-progress mastery rows out of the mastery page.
+//
+// Every row lives in one list under "Mastery In-Progress", grouped by collapsed
+// tier headings — the collapsed tiers carry `style="display:none"`, so matching
+// on the class alone (rather than anything about visibility) is what gets all
+// of them rather than only the expanded ones.
+const parseMasteryPage = (root) => {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+    const entries = [];
+    for (const row of root.querySelectorAll("li[class*='tier-t']")) {
+        const name = (_b = (_a = row.querySelector(".item-title strong")) === null || _a === void 0 ? void 0 : _a.textContent) === null || _b === void 0 ? void 0 : _b.trim();
+        if (!name) {
+            continue;
+        }
+        const progress = /([\d,]+)\s*\/\s*([\d,]+)\s*progress/i.exec((_d = (_c = row.querySelector(".item-title")) === null || _c === void 0 ? void 0 : _c.textContent) !== null && _d !== void 0 ? _d : "");
+        if (!progress) {
+            continue;
+        }
+        const value = Number(progress[1].replaceAll(",", ""));
+        const required = Number(progress[2].replaceAll(",", ""));
+        if (Number.isNaN(value) || Number.isNaN(required) || required <= 0) {
+            continue;
+        }
+        const id = (_g = /id=(\d+)/.exec((_f = (_e = row.querySelector("a")) === null || _e === void 0 ? void 0 : _e.getAttribute("href")) !== null && _f !== void 0 ? _f : "")) === null || _g === void 0 ? void 0 : _g[1];
+        entries.push({
+            id: id ? Number(id) : undefined,
+            name,
+            remaining: Math.max(0, required - value),
+            required,
+            tier: (_j = (_h = [...row.classList]
+                .find((token) => token.startsWith("tier-"))) === null || _h === void 0 ? void 0 : _h.slice(5)) !== null && _j !== void 0 ? _j : "",
+            value,
+        });
+    }
+    return entries;
+};
+exports.parseMasteryPage = parseMasteryPage;
+// No `defaultState`, matching the other snapshots: a fresh read must replace
+// the previous list outright rather than merge over it, and a parse that finds
+// nothing keeps the last good read instead of asserting an empty one.
+exports.masteryState = new state_1.CachedState(state_1.StorageKey.MASTERY, () => __awaiter(void 0, void 0, void 0, function* () {
+    const response = yield (0, requests_1.getHTML)(page_1.Page.MASTERY, new URLSearchParams());
+    const entries = (0, exports.parseMasteryPage)(response.body);
+    if (entries.length === 0) {
+        return;
+    }
+    return { entries, updatedAt: Date.now() };
+}), {
+    timeout: 30 * 60, // 30 minutes
+});
 
 
 /***/ }),
@@ -2676,11 +2748,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.briefingPanel = void 0;
+const goals_1 = __webpack_require__(1267);
 const craftworks_1 = __webpack_require__(7831);
 const theme_1 = __webpack_require__(1178);
 const craftworks_2 = __webpack_require__(920);
 const recipes_1 = __webpack_require__(498);
-const goals_1 = __webpack_require__(1267);
+const suggestions_1 = __webpack_require__(9262);
 const focus_1 = __webpack_require__(7167);
 const requests_1 = __webpack_require__(3300);
 const quests_1 = __webpack_require__(303);
@@ -2688,6 +2761,7 @@ const settings_1 = __webpack_require__(126);
 const inventory_1 = __webpack_require__(4514);
 const api_1 = __webpack_require__(3413);
 const gameLinks_1 = __webpack_require__(1616);
+const mastery_1 = __webpack_require__(283);
 const promise_1 = __webpack_require__(6762);
 const page_1 = __webpack_require__(7952);
 const unlimited_1 = __webpack_require__(4808);
@@ -2914,14 +2988,15 @@ const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
 // Everything the three tabs need, gathered once. Switching tabs re-renders from
 // this rather than re-fetching, so only the refresh control costs requests.
 const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const settings = yield (0, settings_1.getSettingValues)();
     const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_a = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _a !== void 0 ? _a : ""));
-    const [snapshot, craftworks, quests, goals] = yield Promise.all([
+    const [snapshot, craftworks, quests, goals, mastery] = yield Promise.all([
         (0, promise_1.orUndefined)(inventory_1.inventoryState.get({ ignoreCache: force })),
         (0, promise_1.orUndefined)(craftworks_2.craftworksState.get({ ignoreCache: force })),
         fetchActiveQuests(),
         (0, goals_1.getGoals)(),
+        (0, promise_1.orUndefined)(mastery_1.masteryState.get({ ignoreCache: force })),
     ]);
     const inventory = (_b = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _b !== void 0 ? _b : {};
     const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
@@ -2941,8 +3016,9 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         goals,
         graph,
         inventory,
+        mastery: (_e = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _e !== void 0 ? _e : [],
         questGoals,
-        statuses: (0, focus_1.getGoalStatuses)(graph, (_e = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _e !== void 0 ? _e : [], inventory, unlimited),
+        statuses: (0, focus_1.getGoalStatuses)(graph, (_f = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _f !== void 0 ? _f : [], inventory, unlimited),
         unlimited,
     };
 });
@@ -3030,9 +3106,8 @@ const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 
     const { goals, graph, inventory, unlimited } = context;
     if (goals.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
-            "No goals yet. Open any craftable item and use “Track as goal” to watch its progress here.",
+            "No goals yet — pick one below, or use “Track as goal” on any item page.",
         ]));
-        return;
     }
     const missingLists = [];
     for (const goal of goals) {
@@ -3080,10 +3155,48 @@ const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 
         body.append(row);
     }
     yield renderWhereToGo(body, context, (0, focus_1.mergeMissing)(...missingLists));
+    renderSuggestions(body, context, rerender);
 });
+// Suggestions are offered, never auto-adopted. Mastery alone would add hundreds
+// of entries and the tab would stop being a place to look for what matters, so
+// the player promotes the few they actually intend to chase.
+const renderSuggestions = (body, context, rerender) => {
+    var _a, _b, _c;
+    const { cap, goals, graph, inventory, mastery, questGoals } = context;
+    const suggestions = [
+        ...(0, suggestions_1.getMasterySuggestions)(mastery, inventory, cap, goals, 4),
+        ...(0, suggestions_1.getQuestSuggestions)((_a = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _a !== void 0 ? _a : [], inventory, goals, 3),
+    ];
+    if (suggestions.length === 0) {
+        return;
+    }
+    body.append(makeHeading("Suggested"));
+    for (const suggestion of suggestions) {
+        const row = document.createElement("div");
+        row.className = "fh-goal-top";
+        row.style.marginBottom = "4px";
+        const text = (0, gameLinks_1.makeLinkedLine)(suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_GRAY, [
+            (0, gameLinks_1.makeItemLink)(suggestion.name, (_b = suggestion.id) !== null && _b !== void 0 ? _b : (_c = graph.nodes.get(suggestion.name)) === null || _c === void 0 ? void 0 : _c.id, suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_WHITE),
+            ` ${suggestion.quantity.toLocaleString()} more — ${suggestion.reason}`,
+        ]);
+        text.style.marginBottom = "0";
+        const add = document.createElement("span");
+        add.className = "fh-goal-remove";
+        add.style.color = theme_1.TEXT_SUCCESS;
+        add.textContent = "+";
+        add.title = `Track ${suggestion.name}`;
+        add.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+            event.stopPropagation();
+            yield (0, goals_1.addGoal)(suggestion.name, suggestion.quantity);
+            rerender();
+        }));
+        row.append(text, add);
+        body.append(row);
+    }
+};
 const renderCraftworks = (body, context) => {
     var _a, _b;
-    const { advice, cap, craftworks, goals, graph, inventory, unlimited } = context;
+    const { advice, cap, craftworks, goals, graph, inventory, mastery, unlimited, } = context;
     if (!advice || !craftworks) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Could not read the Craftworks queue."]));
         return;
@@ -3121,6 +3234,16 @@ const renderCraftworks = (body, context) => {
             parts.push(" — crafting");
         }
         body.append((0, gameLinks_1.makeLinkedLine)(color, parts));
+    }
+    const frozen = (0, suggestions_1.getFrozenMastery)(mastery, inventory, cap);
+    if (frozen.length > 0) {
+        body.append(makeHeading("Mastery frozen at cap"));
+        for (const entry of frozen.slice(0, MAX_LISTED)) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
+                (0, gameLinks_1.makeItemLink)(entry.name, entry.id, theme_1.TEXT_ERROR),
+                ` ${entry.value.toLocaleString()}/${entry.required.toLocaleString()} — ${entry.remaining.toLocaleString()} more, but you are at cap so none of it counts`,
+            ]));
+        }
     }
     if (advice.supplied.length > 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
@@ -8950,7 +9073,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.21" !== void 0 ? "1.1.21" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.22" !== void 0 ? "1.1.22" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -10727,6 +10850,7 @@ var Page;
     Page["KITCHEN"] = "kitchen";
     Page["LOCKSMITH"] = "locksmith";
     Page["MAILBOX"] = "mailbox";
+    Page["MASTERY"] = "mastery";
     Page["MINING"] = "mining";
     Page["OVEN"] = "oven";
     Page["PASTURE"] = "pasture";
@@ -11212,6 +11336,7 @@ var StorageKey;
     StorageKey["LATEST_VERSION"] = "latestVersion";
     StorageKey["LOCATION_DATA"] = "locationData";
     StorageKey["MAILBOX"] = "mailbox";
+    StorageKey["MASTERY"] = "mastery";
     StorageKey["MEALS_STATUS"] = "mealsStatus";
     StorageKey["NOTES"] = "notes";
     StorageKey["PAGE_DATA"] = "pageData";
@@ -11352,6 +11477,93 @@ class CachedState {
     }
 }
 exports.CachedState = CachedState;
+
+
+/***/ }),
+
+/***/ 9262:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getQuestSuggestions = exports.getMasterySuggestions = exports.getFrozenMastery = void 0;
+// Mastery is earned by acquiring an item, and an item sitting at the inventory
+// cap cannot be acquired — crafting stalls and drops are discarded. So a capped
+// item with mastery in progress is not merely a wasted Craftworks slot, it is
+// mastery progress that has stopped dead. That is worth saying out loud, because
+// nothing in the game connects the two screens.
+const getFrozenMastery = (entries, inventory, cap) => {
+    if (cap === undefined) {
+        return [];
+    }
+    return entries
+        .filter((entry) => { var _a; return entry.remaining > 0 && ((_a = inventory[entry.name]) !== null && _a !== void 0 ? _a : 0) >= cap; })
+        .sort((a, b) => a.remaining - b.remaining);
+};
+exports.getFrozenMastery = getFrozenMastery;
+// Mastery tiers worth chasing, nearest first.
+//
+// Ranked by units still needed rather than percentage: 1 unit off a 100-unit
+// tier is a trip to the shop, while 8% off a 1,000,000-unit tier is a month.
+// Percentage would rank those the wrong way round.
+const getMasterySuggestions = (entries, inventory, cap, tracked, limit = 5) => {
+    const already = new Set(tracked.map((goal) => goal.name));
+    return entries
+        .filter((entry) => entry.remaining > 0 && !already.has(entry.name))
+        .sort((a, b) => a.remaining - b.remaining)
+        .slice(0, limit)
+        .map((entry) => {
+        var _a;
+        const isFrozen = cap !== undefined && ((_a = inventory[entry.name]) !== null && _a !== void 0 ? _a : 0) >= cap;
+        return {
+            id: entry.id,
+            isFrozen,
+            name: entry.name,
+            quantity: entry.remaining,
+            reason: isFrozen
+                ? `mastery ${entry.value.toLocaleString()}/${entry.required.toLocaleString()} — frozen at cap`
+                : `mastery ${entry.value.toLocaleString()}/${entry.required.toLocaleString()}`,
+            source: "mastery",
+        };
+    });
+};
+exports.getMasterySuggestions = getMasterySuggestions;
+// Quest requirements the inventory does not already cover.
+//
+// The suggestion is for the shortfall, not the full requirement, so accepting
+// one produces a goal that finishes the quest rather than one that overshoots
+// by whatever is already on the shelf.
+const getQuestSuggestions = (goals, inventory, tracked, limit = 5) => {
+    var _a;
+    const already = new Set(tracked.map((goal) => goal.name));
+    const byName = new Map();
+    for (const goal of goals) {
+        for (const need of goal.needs) {
+            if (already.has(need.name)) {
+                continue;
+            }
+            const shortfall = need.quantity - ((_a = inventory[need.name]) !== null && _a !== void 0 ? _a : 0);
+            if (shortfall <= 0) {
+                continue;
+            }
+            const existing = byName.get(need.name);
+            // one item can serve several requests; keep the largest ask so accepting
+            // the suggestion satisfies all of them
+            if (!existing || shortfall > existing.quantity) {
+                byName.set(need.name, {
+                    name: need.name,
+                    quantity: shortfall,
+                    reason: `for ${goal.label}`,
+                    source: "quest",
+                });
+            }
+        }
+    }
+    return [...byName.values()]
+        .sort((a, b) => a.quantity - b.quantity)
+        .slice(0, limit);
+};
+exports.getQuestSuggestions = getQuestSuggestions;
 
 
 /***/ }),
