@@ -3,6 +3,7 @@ import {
   parseMaxSlots,
   planCraftworksQueue,
   Slot,
+  suggestQueueChanges,
 } from "./craftworks";
 import {
   getGoalStatuses,
@@ -19,6 +20,7 @@ import {
   RecipeNode,
 } from "./craftPlanner";
 import { Item } from "~/api/buddyfarm/types";
+import { parseUnlimitedItems } from "./unlimited";
 
 let failures = 0;
 
@@ -431,6 +433,120 @@ console.info("mergeMissing: overlapping asks are one trip, not two");
     ]
   );
   check("empty in, empty out", mergeMissing([], []), []);
+}
+
+console.info("unlimited items are never a shortfall");
+{
+  // Reed's perk auto-buys Iron and Nails
+  const unlimited = parseUnlimitedItems("iron, Nails");
+  const gadget = makeGraph({
+    Iron: { drops: [{ location: "Small Cave", rate: 4 }] },
+    Nails: {},
+    Rivet: { drops: [{ location: "Small Cave", rate: 9 }] },
+    Gadget: {
+      ingredients: [
+        ["Iron", 10],
+        ["Nails", 4],
+        ["Rivet", 2],
+      ],
+    },
+  });
+  const plan = planCraft(gadget, "Gadget", 1, {}, unlimited);
+  check("only the real shortfall is reported", plan.missing, [
+    { name: "Rivet", quantity: 2 },
+  ]);
+  check(
+    "and no trip is planned for them",
+    planSourcing(gadget, plan.missing).locations.map((entry) => [
+      entry.location,
+      entry.items.map((item) => item.name),
+    ]),
+    [["Small Cave", ["Rivet"]]]
+  );
+  // without the perk the same craft is short of all three
+  check(
+    "still counted when the perk is off",
+    planCraft(gadget, "Gadget", 1, {}).missing.length,
+    3
+  );
+  check(
+    "max craftable ignores the auto-bought parts",
+    getMaxCraftable(gadget, "Gadget", { Rivet: 6 }, unlimited),
+    3
+  );
+}
+
+console.info("adviseOnSlots: an auto-bought blocker is not a trip");
+{
+  const slots: Slot[] = [
+    {
+      blockedOn: [
+        { id: "", name: "Iron" },
+        { id: "", name: "Carbon Sphere" },
+      ],
+      id: "1",
+      inventory: 5,
+      isCapRed: false,
+      isPaused: false,
+      name: "Steel Wire",
+      position: 1,
+    },
+  ];
+  const advice = adviseOnSlots(slots, 1032, parseUnlimitedItems("Iron"));
+  check(
+    "only the real blocker is a root",
+    advice.roots.map((entry) => entry.name),
+    ["Carbon Sphere"]
+  );
+  check(
+    "the auto-bought one is set aside",
+    advice.supplied.map((entry) => entry.name),
+    ["Iron"]
+  );
+}
+
+console.info("suggestQueueChanges");
+{
+  const slots: Slot[] = [
+    {
+      blockedOn: [],
+      id: "1",
+      inventory: 1032,
+      isCapRed: true,
+      isPaused: false,
+      name: "Twine",
+      position: 1,
+    },
+  ];
+  const desired = [
+    { name: "Unpolished Shimmer Stone", quantity: 4 },
+    { name: "Shimmer Stone", quantity: 2 },
+    { name: "Glass Orb", quantity: 1 },
+  ];
+  const suggestions = suggestQueueChanges(desired, slots, {}, 1032, 2);
+  check(
+    "drops the dead slot and fills the room that frees",
+    suggestions.map((entry) => `${entry.action}:${entry.name}`),
+    ["drop:Twine", "add:Unpolished Shimmer Stone", "add:Shimmer Stone"]
+  );
+  check(
+    "additions keep the deepest-first order",
+    suggestions
+      .filter((entry) => entry.action === "add")
+      .map((entry) => entry.position),
+    [1, 2]
+  );
+  check(
+    "an already-queued item is not suggested again",
+    suggestQueueChanges(
+      [{ name: "Twine", quantity: 5 }],
+      slots,
+      {},
+      1032,
+      8
+    ).filter((entry) => entry.action === "add").length,
+    0
+  );
 }
 
 if (failures > 0) {
