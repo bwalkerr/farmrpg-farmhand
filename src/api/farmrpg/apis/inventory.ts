@@ -39,6 +39,34 @@ export const getRowCount = (after: HTMLElement): number => {
   return Number(countText.replaceAll(",", "").trim());
 };
 
+// An inventory row's title is the item name followed by a description and
+// sometimes a status flag:
+//
+//   <div class="item-title">Iron<br><span>A pressing need</span>MAX ON HAND</div>
+//
+// so reading its textContent yields "Iron\n A pressing needMAX ON HAND". That
+// was cosmetic while only the cap tracker used it, but these names are the keys
+// of the inventory snapshot the planner looks items up by, and a mangled key
+// matches nothing — every lookup for such an item silently reported zero on
+// hand. The name is the leading text node, before any markup.
+const getRowName = (title: HTMLElement | null): string | undefined => {
+  if (!title) {
+    return undefined;
+  }
+  for (const node of title.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent?.trim();
+      if (text) {
+        return text;
+      }
+      continue;
+    }
+    // stop at the first element: anything past it is description or status
+    break;
+  }
+  return title.textContent?.trim().split("\n")[0].trim();
+};
+
 // Parse every item row out of an inventory page DOM, plus the storage cap.
 // This is the whole inventory, unfiltered — the cap tracker narrows it down to
 // the at/near-cap rows, the craft planner wants all of it. Returns undefined
@@ -75,8 +103,7 @@ export const parseInventoryPage = (
       continue;
     }
     const image = row.querySelector<HTMLImageElement>(".item-media img");
-    const title = row.querySelector<HTMLElement>(".item-title");
-    const name = title?.textContent?.trim();
+    const name = getRowName(row.querySelector<HTMLElement>(".item-title"));
     if (!name) {
       continue;
     }
