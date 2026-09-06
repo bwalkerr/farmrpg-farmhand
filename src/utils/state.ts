@@ -9,6 +9,7 @@ export interface StateQueryOptions {
 
 export enum StorageKey {
   CHAT_BANNERS = "chatBanners",
+  CRAFTWORKS = "craftworks",
   CURRENT_PERKS_SET_ID = "currentPerksSetId",
   FARM_ID = "farmId",
   FARM_STATE = "farmState",
@@ -21,6 +22,7 @@ export enum StorageKey {
   ITEM_DATA = "items",
   KITHCEN_STATUS = "kitchenStatus",
   LATEST_VERSION = "latestVersion",
+  LOCATION_DATA = "locationData",
   MAILBOX = "mailbox",
   MEALS_STATUS = "mealsStatus",
   NOTES = "notes",

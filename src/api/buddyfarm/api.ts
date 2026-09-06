@@ -175,3 +175,57 @@ export const questDataState = new CachedState<QuestDetail, string>(
     timeout: 60 * 60 * 24 * 7, // 1 week
   }
 );
+
+interface LocationPageDataResponse {
+  result: {
+    data: {
+      farmrpg: {
+        locations: { name: string; type: "explore" | "fishing" }[];
+      };
+    };
+    pageContext: { id: number; name: string };
+  };
+}
+
+export interface LocationRef {
+  id: number;
+  name: string;
+  type: "explore" | "fishing";
+}
+
+// A location's in-game id, so drop advice can link straight to the place
+// rather than just naming it.
+//
+// buddy.farm mirrors the game's own database ids -- verified against ten items
+// whose ids Reed's Craftworks page reported independently, all exact -- and the
+// id lives on the page's `pageContext`, not on the location record itself.
+export const locationDataState = new CachedState<LocationRef, string>(
+  StorageKey.LOCATION_DATA,
+  async (state, locationName) => {
+    if (!locationName) {
+      return;
+    }
+    const previous = state.state[locationName];
+    if (previous) {
+      return previous;
+    }
+    const response = await fetch(
+      `https://buddy.farm/page-data/l/${nameToSlug(
+        locationName
+      )}/page-data.json`
+    );
+    if (!response.ok) {
+      return previous;
+    }
+    const data = (await response.json()) as LocationPageDataResponse;
+    const location = data?.result?.data?.farmrpg?.locations?.[0];
+    const id = data?.result?.pageContext?.id;
+    if (!location || !id) {
+      return previous;
+    }
+    return { id, name: location.name, type: location.type };
+  },
+  {
+    timeout: 60 * 60 * 24 * 7, // 1 week
+  }
+);
