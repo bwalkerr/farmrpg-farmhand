@@ -134,26 +134,36 @@ export const improvedInputs: Feature = {
               proxyOption: option,
             };
           }
-          const match = option.textContent?.match(/^(.*) \(([\d,]+)\)$/);
+          const text = option.textContent?.trim() ?? "";
+          if (
+            text === "--- select ---" ||
+            text === "Nothing Selected" ||
+            !text
+          ) {
+            return;
+          }
+          // Only the inventory-style selects suffix a count, as "Wood (1,234)".
+          // Plenty of selects list plain names instead -- the Craftworks item
+          // picker and its set-image picker are two, several hundred options
+          // between them -- so a missing count is an ordinary shape, not a
+          // parse failure. Those carry the name in `data-name`; fall back to
+          // the label otherwise, and skip the buddy.farm lookups entirely,
+          // since without a count there is no icon or quantity to show.
+          const match = text.match(/^(.*) \(([\d,]+)\)$/);
           if (!match) {
-            if (
-              option.textContent === "--- select ---" ||
-              option.textContent === "Nothing Selected"
-            ) {
-              return;
-            }
-            console.error("Failed to parse option", option);
             return {
-              name: option.textContent ?? "",
+              name: option.dataset.name ?? text,
               value: option.value,
               proxyOption: option,
             };
           }
           const [, name, quantity] = match;
           if (!(await isItem(name))) {
-            console.error("Not an item", name);
+            // a counted option that is not a catalogued item is legitimate
+            // (game-only entries buddy.farm has never indexed); show the label
+            console.debug("[Farmhand] option is not a known item", name);
             return {
-              name: option.textContent ?? "",
+              name: text,
               value: option.value,
               proxyOption: option,
             };
