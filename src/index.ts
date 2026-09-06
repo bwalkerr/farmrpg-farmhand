@@ -2,6 +2,7 @@ import { autocomplete } from "./utils/autocomplete";
 import { autocompleteItems } from "./features/autocompleteItems";
 import { autocompleteUsers } from "./features/autocompleteUsers";
 import { banker } from "./features/banker";
+import { briefingPanel } from "./features/briefingPanel";
 import { buddyFarm } from "~/features/buddyfarm";
 import { chatMailboxStats } from "./features/mailboxInChat";
 import { chatNav } from "./features/chatNav";
@@ -24,7 +25,6 @@ import { focusDashboard } from "./features/focusDashboard";
 import { getCurrentPage, getPage } from "~/utils/page";
 import { getSettingValues, registerSettings } from "./utils/settings";
 import { highlightSelfInChat } from "./features/highlightSelfInChat";
-import { homeBriefing } from "./features/homeBriefing";
 import { improvedInputs } from "./features/improvedInputs";
 import { inventoryCapWarnings } from "./features/inventoryCapWarnings";
 import { kitchenNotifications } from "./features/kitchenNotifications";
@@ -63,11 +63,11 @@ const FEATURES = [
 
   // UI
   improvedInputs,
+  briefingPanel,
 
   // home
   cleanupHome,
   moveUpdateToTop,
-  homeBriefing,
 
   // kitchen
   kitchenNotifications,
