@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.28
+// @version 1.1.29
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2863,7 +2863,10 @@ const BOTTOM_OFFSET = "62px";
 const TABS = [
     { id: "now", label: "Now" },
     { id: "goals", label: "Goals" },
-    { id: "craftworks", label: "Craftworks" },
+    { id: "sets", label: "Sets" },
+    // "Queue" rather than "Craftworks": four labels have to fit 380px, and the
+    // panel is already inside Craftworks by context
+    { id: "craftworks", label: "Queue" },
 ];
 const injectStyles = () => {
     if (document.querySelector(`#${STYLE_ID}`)) {
@@ -2984,6 +2987,29 @@ const injectStyles = () => {
       #${PANEL_ID} .fh-tab[data-active="true"] {
         color: ${theme_1.TEXT_WHITE};
         background: rgba(255, 255, 255, 0.09);
+      }
+      #${PANEL_ID} .fh-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin: 2px 0 8px;
+      }
+      #${PANEL_ID} .fh-chip {
+        padding: 2px 8px;
+        border-radius: 10px;
+        border: 1px solid ${theme_1.BORDER_GRAY};
+        font-size: 11px;
+        cursor: pointer;
+        color: ${theme_1.TEXT_GRAY};
+        user-select: none;
+        transition: background 120ms ease, color 120ms ease,
+          border-color 120ms ease;
+      }
+      #${PANEL_ID} .fh-chip:hover { color: ${theme_1.TEXT_WHITE}; }
+      #${PANEL_ID} .fh-chip[data-active="true"] {
+        color: ${theme_1.TEXT_WHITE};
+        background: rgba(255, 255, 255, 0.11);
+        border-color: #5a5a5a;
       }
       #${PANEL_ID} .fh-goal { margin-bottom: 10px; }
       #${PANEL_ID} .fh-goal-top {
@@ -3242,45 +3268,103 @@ const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 
     }
     renderSuggestions(body, context, rerender);
 });
+// Panel-scoped, not persisted: a filter is a way to read the list right now,
+// not a preference worth carrying between sessions.
+let suggestionFilter = "all";
+const FILTER_LABELS = [
+    { id: "all", label: "All" },
+    { id: "set", label: "Sets" },
+    { id: "mastery", label: "Mastery" },
+    { id: "quest", label: "Requests" },
+];
 // Suggestions are offered, never auto-adopted. Mastery alone would add hundreds
 // of entries and the tab would stop being a place to look for what matters, so
 // the player promotes the few they actually intend to chase.
+//
+// Unfiltered, each source contributes a few so no one of them crowds the others
+// out. Picking a category then shows far more of it — filtering is for reading
+// deeper into one source, not only for hiding the rest.
+const PER_SOURCE_UNFILTERED = 3;
+const PER_SOURCE_FILTERED = 10;
 const renderSuggestions = (body, context, rerender) => {
-    var _a, _b, _c, _d;
+    var _a, _b;
     const { cap, craftworks, goals, graph, inventory, itemNames, mastery, questGoals, } = context;
-    const suggestions = [
-        // the player's own saved sets come first: a set named after an item is a
-        // goal they have already been keeping by hand
-        ...(0, suggestions_1.getSetSuggestions)((_a = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _a !== void 0 ? _a : [], itemNames, goals, inventory, 4),
-        ...(0, suggestions_1.getMasterySuggestions)(mastery, inventory, cap, goals, 4),
-        ...(0, suggestions_1.getQuestSuggestions)((_b = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _b !== void 0 ? _b : [], inventory, goals, 3),
-    ];
-    if (suggestions.length === 0) {
+    const bySource = {
+        mastery: (0, suggestions_1.getMasterySuggestions)(mastery, inventory, cap, goals, PER_SOURCE_FILTERED),
+        quest: (0, suggestions_1.getQuestSuggestions)((_a = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _a !== void 0 ? _a : [], inventory, goals, PER_SOURCE_FILTERED),
+        set: (0, suggestions_1.getSetSuggestions)((_b = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _b !== void 0 ? _b : [], itemNames, goals, inventory, PER_SOURCE_FILTERED),
+    };
+    const total = bySource.set.length + bySource.mastery.length + bySource.quest.length;
+    if (total === 0) {
         return;
     }
     body.append(makeHeading("Suggested"));
-    for (const suggestion of suggestions) {
-        const row = document.createElement("div");
-        row.className = "fh-goal-top";
-        row.style.marginBottom = "4px";
-        const text = (0, gameLinks_1.makeLinkedLine)(suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_GRAY, [
-            (0, gameLinks_1.makeItemLink)(suggestion.name, (_c = suggestion.id) !== null && _c !== void 0 ? _c : (_d = graph.nodes.get(suggestion.name)) === null || _d === void 0 ? void 0 : _d.id, suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_WHITE),
-            ` ${suggestion.quantity.toLocaleString()} more — ${suggestion.reason}`,
-        ]);
-        text.style.marginBottom = "0";
-        const add = document.createElement("span");
-        add.className = "fh-goal-remove";
-        add.style.color = theme_1.TEXT_SUCCESS;
-        add.textContent = "+";
-        add.title = `Track ${suggestion.name}`;
-        add.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+    const chips = document.createElement("div");
+    chips.className = "fh-chips";
+    const list = document.createElement("div");
+    body.append(chips, list);
+    const drawList = () => {
+        var _a, _b;
+        list.textContent = "";
+        const shown = suggestionFilter === "all"
+            ? [
+                // saved sets first: goals the player has already been keeping
+                ...bySource.set.slice(0, PER_SOURCE_UNFILTERED),
+                ...bySource.mastery.slice(0, PER_SOURCE_UNFILTERED),
+                ...bySource.quest.slice(0, PER_SOURCE_UNFILTERED),
+            ]
+            : bySource[suggestionFilter];
+        for (const chip of chips.children) {
+            chip.dataset.active = String(chip.dataset.filter === suggestionFilter);
+        }
+        for (const suggestion of shown) {
+            const row = document.createElement("div");
+            row.className = "fh-goal-top";
+            row.style.marginBottom = "4px";
+            const text = (0, gameLinks_1.makeLinkedLine)(suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_GRAY, [
+                (0, gameLinks_1.makeItemLink)(suggestion.name, (_a = suggestion.id) !== null && _a !== void 0 ? _a : (_b = graph.nodes.get(suggestion.name)) === null || _b === void 0 ? void 0 : _b.id, suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_WHITE),
+                ` ${suggestion.quantity.toLocaleString()} more — ${suggestion.reason}`,
+            ]);
+            text.style.marginBottom = "0";
+            const add = document.createElement("span");
+            add.className = "fh-goal-remove";
+            add.style.color = theme_1.TEXT_SUCCESS;
+            add.textContent = "+";
+            add.title = `Track ${suggestion.name}`;
+            add.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+                event.stopPropagation();
+                yield (0, goals_1.addGoal)(suggestion.name, suggestion.quantity);
+                rerender();
+            }));
+            row.append(text, add);
+            list.append(row);
+        }
+    };
+    const select = (filter) => {
+        suggestionFilter = filter;
+        drawList();
+    };
+    for (const entry of FILTER_LABELS) {
+        const count = entry.id === "all" ? total : bySource[entry.id].length;
+        // a category with nothing in it is not worth a chip
+        if (count === 0) {
+            continue;
+        }
+        const chip = document.createElement("span");
+        chip.className = "fh-chip";
+        chip.dataset.filter = entry.id;
+        chip.textContent = `${entry.label} ${count}`;
+        chip.addEventListener("click", (event) => {
             event.stopPropagation();
-            yield (0, goals_1.addGoal)(suggestion.name, suggestion.quantity);
-            rerender();
-        }));
-        row.append(text, add);
-        body.append(row);
+            select(entry.id);
+        });
+        chips.append(chip);
     }
+    // a filter left over from a previous draw may no longer have any entries
+    if (suggestionFilter !== "all" && bySource[suggestionFilter].length === 0) {
+        suggestionFilter = "all";
+    }
+    drawList();
 };
 const renderCraftworks = (body, context, reload) => {
     var _a, _b;
@@ -3371,9 +3455,49 @@ const renderCraftworks = (body, context, reload) => {
     }
 };
 // Loading a set is destructive: it clears the queue first. So it takes two
-// presses -- the second one states exactly how many items it will clear -- and
-// on failure it offers to put the old queue back, which the game's own button
+// presses -- the second states exactly how many items it will clear -- and on
+// failure it offers to put the old queue back, which the game's own button
 // cannot do because it never knew what was there.
+const makeSetLoadControl = (set, context, reload, onFailure) => {
+    var _a, _b;
+    const slots = (_b = (_a = context.craftworks) === null || _a === void 0 ? void 0 : _a.slots) !== null && _b !== void 0 ? _b : [];
+    const action = document.createElement("a");
+    action.href = "#";
+    action.style.color = theme_1.TEXT_SUCCESS;
+    action.style.fontSize = "12px";
+    action.style.textDecoration = "underline";
+    action.textContent = "load";
+    let armed = false;
+    action.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!armed) {
+            armed = true;
+            action.textContent = `confirm — clears ${slots.length} item${slots.length === 1 ? "" : "s"}`;
+            action.style.color = theme_1.TEXT_WARNING;
+            return;
+        }
+        action.textContent = "loading…";
+        action.style.color = theme_1.TEXT_GRAY;
+        const result = yield (0, craftworks_1.activateSet)(set.id, slots);
+        if (result.ok) {
+            reload();
+            return;
+        }
+        onFailure((0, gameLinks_1.makeMutedText)(` ${result.message}`));
+        action.textContent = "put the old queue back";
+        action.style.color = theme_1.TEXT_ERROR;
+        action.addEventListener("click", (undoEvent) => __awaiter(void 0, void 0, void 0, function* () {
+            undoEvent.preventDefault();
+            undoEvent.stopPropagation();
+            action.textContent = "restoring…";
+            const restored = yield (0, craftworks_1.restoreQueue)(result.previous);
+            action.textContent = `restored ${restored} of ${result.previous.length}`;
+            reload();
+        }), { once: true });
+    }));
+    return action;
+};
 const renderSetLoader = (body, context, reload) => {
     const { craftworks, goals, itemNames } = context;
     if (!craftworks) {
@@ -3386,42 +3510,48 @@ const renderSetLoader = (body, context, reload) => {
     const line = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
         `“${recommended.name}” matches your ${recommended.goalName} goal — `,
     ]);
-    const action = document.createElement("a");
-    action.href = "#";
-    action.style.color = theme_1.TEXT_SUCCESS;
-    action.style.textDecoration = "underline";
-    action.textContent = "load it";
-    let armed = false;
-    action.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!armed) {
-            armed = true;
-            action.textContent = `confirm — clears ${craftworks.slots.length} item${craftworks.slots.length === 1 ? "" : "s"}`;
-            action.style.color = theme_1.TEXT_WARNING;
-            return;
-        }
-        action.textContent = "loading…";
-        action.style.color = theme_1.TEXT_GRAY;
-        const result = yield (0, craftworks_1.activateSet)(recommended.id, craftworks.slots);
-        if (result.ok) {
-            reload();
-            return;
-        }
-        line.append((0, gameLinks_1.makeMutedText)(` ${result.message}`));
-        action.textContent = "put the old queue back";
-        action.style.color = theme_1.TEXT_ERROR;
-        action.addEventListener("click", (undoEvent) => __awaiter(void 0, void 0, void 0, function* () {
-            undoEvent.preventDefault();
-            undoEvent.stopPropagation();
-            action.textContent = "restoring…";
-            const restored = yield (0, craftworks_1.restoreQueue)(result.previous);
-            action.textContent = `restored ${restored} of ${result.previous.length}`;
-            reload();
-        }), { once: true });
-    }));
-    line.append(action);
+    line.append(makeSetLoadControl(recommended, context, reload, (node) => line.append(node)));
     body.append(line);
+};
+// Every saved set, loadable in place. The recommendation alone was too easy to
+// miss: it only appears when a tracked goal happens to share a name with a set,
+// so a queue of location loadouts showed nothing at all.
+const renderSets = (body, context, reload) => {
+    const { craftworks, goals, itemNames } = context;
+    if (!craftworks || craftworks.sets.length === 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["No saved sets found on the Craftworks page."]));
+        return;
+    }
+    const recommended = (0, suggestions_1.getRecommendedSet)(goals, craftworks.sets, itemNames);
+    for (const set of craftworks.sets) {
+        const row = document.createElement("div");
+        row.className = "fh-goal-top";
+        row.style.marginBottom = "5px";
+        const isRecommended = (recommended === null || recommended === void 0 ? void 0 : recommended.id) === set.id;
+        let color = theme_1.TEXT_GRAY;
+        if (set.isActive) {
+            color = theme_1.TEXT_WHITE;
+        }
+        else if (isRecommended) {
+            color = theme_1.TEXT_SUCCESS;
+        }
+        let suffix = "";
+        if (set.isActive) {
+            suffix = " · loaded";
+        }
+        else if (isRecommended) {
+            suffix = ` · matches your ${recommended === null || recommended === void 0 ? void 0 : recommended.goalName} goal`;
+        }
+        const label = (0, gameLinks_1.makeLinkedLine)(color, [`${set.name}${suffix}`]);
+        label.style.marginBottom = "0";
+        row.append(label);
+        // reloading the set already in place would re-run a destructive activation
+        // for no change
+        if (!set.isActive) {
+            row.append(makeSetLoadControl(set, context, reload, (node) => label.append(node)));
+        }
+        body.append(row);
+    }
 };
 // One button and one panel for the whole session, hung off document.body.
 //
@@ -3468,17 +3598,25 @@ const ensurePanel = () => {
         for (const tab of tabs.children) {
             tab.dataset.active = String(tab.dataset.tab === active);
         }
-        if (active === "now") {
-            renderNow(body, context);
-        }
-        else if (active === "goals") {
-            renderGoals(body, context, () => {
-                // a removed goal changes the list itself, so reload before redrawing
-                load(false);
-            });
-        }
-        else {
-            renderCraftworks(body, context, () => load(true));
+        switch (active) {
+            case "now": {
+                renderNow(body, context);
+                break;
+            }
+            case "goals": {
+                renderGoals(body, context, () => {
+                    // a removed goal changes the list itself, so reload before redrawing
+                    load(false);
+                });
+                break;
+            }
+            case "sets": {
+                renderSets(body, context, () => load(true));
+                break;
+            }
+            default: {
+                renderCraftworks(body, context, () => load(true));
+            }
         }
     };
     const load = (force) => __awaiter(void 0, void 0, void 0, function* () {
@@ -9281,7 +9419,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.28" !== void 0 ? "1.1.28" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.29" !== void 0 ? "1.1.29" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
