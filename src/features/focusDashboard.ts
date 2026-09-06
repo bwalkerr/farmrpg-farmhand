@@ -25,6 +25,7 @@ import {
   makeQuestLink,
 } from "~/utils/gameLinks";
 import { orUndefined } from "~/utils/promise";
+import { parseUnlimitedItems, UnlimitedItems } from "~/utils/unlimited";
 import { SettingId } from "~/utils/settings";
 
 const SETTING_FOCUS_DASHBOARD: FeatureSetting = {
@@ -65,7 +66,11 @@ const makeHeading = (text: string): HTMLDivElement => {
 const formatHits = (hits: number): string =>
   hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
 
-const render = async (container: HTMLElement, goals: Goal[]): Promise<void> => {
+const render = async (
+  container: HTMLElement,
+  goals: Goal[],
+  unlimited: UnlimitedItems
+): Promise<void> => {
   const snapshot = await inventoryState.get();
   const inventory = snapshot?.quantities ?? {};
 
@@ -74,7 +79,7 @@ const render = async (container: HTMLElement, goals: Goal[]): Promise<void> => {
   const graph = await gatherRecipeGraph(
     goals.flatMap((goal) => goal.needs.map((need) => need.name))
   );
-  const statuses = getGoalStatuses(graph, goals, inventory);
+  const statuses = getGoalStatuses(graph, goals, inventory, unlimited);
   const ready = statuses.filter((status) => status.isReady);
   const nearlyDone = getNearlyDone(statuses);
   const bottlenecks = rankBottlenecks(statuses);
@@ -221,7 +226,11 @@ export const focusDashboard: Feature = {
       );
       return;
     }
-    await render(inner, goals);
+    await render(
+      inner,
+      goals,
+      parseUnlimitedItems(String(settings[SettingId.UNLIMITED_ITEMS] ?? ""))
+    );
     if (unmatched.length > 0) {
       inner.append(
         makeLine(

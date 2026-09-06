@@ -1,3 +1,4 @@
+import { addGoal, getGoals, removeGoal } from "~/utils/goals";
 import {
   applyStyles,
   BORDER_GRAY,
@@ -25,6 +26,7 @@ import {
   makeLocationLink,
 } from "~/utils/gameLinks";
 import { orUndefined } from "~/utils/promise";
+import { parseUnlimitedItems, UnlimitedItems } from "~/utils/unlimited";
 import { planCraftworksQueue } from "~/utils/craftworks";
 import { SettingId } from "~/utils/settings";
 
@@ -38,6 +40,18 @@ const SETTING_CRAFT_PLANNER: FeatureSetting = {
   `,
   type: "boolean",
   defaultValue: true,
+};
+
+const SETTING_UNLIMITED_ITEMS: FeatureSetting = {
+  id: SettingId.UNLIMITED_ITEMS,
+  title: "Planning: Always-available items",
+  description: `
+    Comma-separated items a perk buys for you automatically. They are never
+    counted as missing and never generate an explore trip
+  `,
+  type: "string",
+  defaultValue: "Iron, Nails",
+  placeholder: "Iron, Nails",
 };
 
 const CONTAINER_ID = "fh-craft-planner";
@@ -71,7 +85,8 @@ const renderPlan = (
   maxCraftable: number,
   inventory: Record<string, number>,
   cap: number | undefined,
-  locations: Map<string, LocationRef>
+  locations: Map<string, LocationRef>,
+  unlimited: UnlimitedItems
 ): void => {
   output.textContent = "";
 
@@ -163,7 +178,7 @@ const renderPlan = (
 
   // Craftworks holds 8 for Reed (6 base + 2 Patreon); assume the common case
   // rather than fetching the page just to read the number back
-  const queue = planCraftworksQueue(plan, inventory, cap, 8);
+  const queue = planCraftworksQueue(plan, inventory, cap, 8, unlimited);
   if (queue.entries.length > 1) {
     output.append(makeHeading("Craftworks queue for this"));
     for (const entry of queue.entries) {
@@ -203,7 +218,7 @@ const renderPlan = (
 };
 
 export const craftPlanner: Feature = {
-  settings: [SETTING_CRAFT_PLANNER],
+  settings: [SETTING_CRAFT_PLANNER, SETTING_UNLIMITED_ITEMS],
   onPageLoad: async (settings, page) => {
     if (page !== Page.ITEM) {
       return;
@@ -234,6 +249,9 @@ export const craftPlanner: Feature = {
 
     const snapshot = await inventoryState.get();
     const inventory = snapshot?.quantities ?? {};
+    const unlimited = parseUnlimitedItems(
+      String(settings[SettingId.UNLIMITED_ITEMS] ?? "")
+    );
 
     const card = document.createElement("div");
     card.id = CONTAINER_ID;
@@ -269,7 +287,26 @@ export const craftPlanner: Feature = {
       ...INPUT_STYLES,
       minWidth: "90px",
     } as CSSStyleDeclaration);
-    controls.append(label, input);
+    const track = document.createElement("a");
+    track.className = "button";
+    track.href = "#";
+    track.style.marginLeft = "auto";
+    track.style.maxWidth = "130px";
+    const tracked = await getGoals();
+    const setTrackLabel = (isTracked: boolean): void => {
+      track.textContent = isTracked ? "Tracking ✓" : "Track as goal";
+    };
+    setTrackLabel(tracked.some((goal) => goal.name === itemName));
+    track.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const goals = await getGoals();
+      const isTracked = goals.some((goal) => goal.name === itemName);
+      await (isTracked
+        ? removeGoal(itemName)
+        : addGoal(itemName, Math.max(1, Math.floor(Number(input.value) || 1))));
+      setTrackLabel(!isTracked);
+    });
+    controls.append(label, input, track);
     inner.append(controls);
 
     const output = document.createElement("div");
@@ -287,7 +324,7 @@ export const craftPlanner: Feature = {
 
     // the graph and the inventory are already in hand, so re-planning on every
     // keystroke is pure arithmetic — no requests, no debounce needed
-    const maxCraftable = getMaxCraftable(graph, itemName, inventory);
+    const maxCraftable = getMaxCraftable(graph, itemName, inventory, unlimited);
 
     // resolve every location the plan could name, once, so re-planning on each
     // keystroke stays synchronous
@@ -312,11 +349,12 @@ export const craftPlanner: Feature = {
       renderPlan(
         output,
         graph,
-        planCraft(graph, itemName, quantity, inventory),
+        planCraft(graph, itemName, quantity, inventory, unlimited),
         maxCraftable,
         inventory,
         snapshot?.cap,
-        locations
+        locations,
+        unlimited
       );
     };
     input.addEventListener("input", update);

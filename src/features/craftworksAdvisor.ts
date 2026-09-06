@@ -28,6 +28,7 @@ import {
   makeLocationLink,
 } from "~/utils/gameLinks";
 import { orUndefined } from "~/utils/promise";
+import { parseUnlimitedItems } from "~/utils/unlimited";
 import { SettingId } from "~/utils/settings";
 
 const SETTING_CRAFTWORKS_ADVISOR: FeatureSetting = {
@@ -69,11 +70,12 @@ const formatHits = (hits: number): string =>
 const renderAdvice = async (
   container: HTMLElement,
   slots: Slot[],
-  maxSlots: number | undefined
+  maxSlots: number | undefined,
+  unlimited: ReturnType<typeof parseUnlimitedItems>
 ): Promise<void> => {
   const snapshot = await inventoryState.get();
   const cap = snapshot?.cap;
-  const advice = adviseOnSlots(slots, cap);
+  const advice = adviseOnSlots(slots, cap, unlimited);
 
   const summary = document.createElement("div");
   summary.style.color = TEXT_GRAY;
@@ -296,6 +298,11 @@ export const craftworksAdvisor: Feature = {
       currentPage.querySelector(".content-block")?.append(card);
     }
 
-    await renderAdvice(inner, slots, getMaxSlots(currentPage));
+    await renderAdvice(
+      inner,
+      slots,
+      getMaxSlots(currentPage),
+      parseUnlimitedItems(String(settings[SettingId.UNLIMITED_ITEMS] ?? ""))
+    );
   },
 };
