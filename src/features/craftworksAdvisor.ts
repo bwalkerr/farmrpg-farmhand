@@ -209,8 +209,11 @@ const renderAdvice = async (
     );
   }
 
+  // same ordering as the planner: most blockers cleared first, cheapest trip
+  // breaking ties
   const locations = [...byLocation.entries()].sort(
-    (a, b) => b[1].blockers.length - a[1].blockers.length
+    (a, b) =>
+      b[1].blockers.length - a[1].blockers.length || a[1].hits - b[1].hits
   );
   if (locations.length > 0) {
     container.append(makeHeading("Where to go"));

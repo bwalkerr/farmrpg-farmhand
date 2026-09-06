@@ -297,7 +297,13 @@ export const planSourcing = (
     byLocation.set(source.location, existing);
   }
   return {
-    locations: [...byLocation.values()].sort((a, b) => b.hits - a.hits),
+    // Most needs covered first, cheapest trip breaking ties. Sorting by total
+    // hits put the longest grind at the top, which answers "what will cost me
+    // most" rather than "where should I go" — one trip that clears three
+    // shortfalls beats one that clears a single expensive one.
+    locations: [...byLocation.values()].sort(
+      (a, b) => b.items.length - a.items.length || a.hits - b.hits
+    ),
     unsourced,
   };
 };

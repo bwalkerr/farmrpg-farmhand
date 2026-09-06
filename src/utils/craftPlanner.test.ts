@@ -218,7 +218,7 @@ console.info("planSourcing: rolls missing items up by location");
   const plan = planCraft(glassOrb, "Glass Orb", 1, {});
   const sourcing = planSourcing(glassOrb, plan.missing);
   check(
-    "locations by hits",
+    "locations by needs covered",
     sourcing.locations.map((entry) => [
       entry.location,
       Math.round(entry.hits * 10) / 10,
@@ -229,6 +229,42 @@ console.info("planSourcing: rolls missing items up by location");
       // 1 Stone x2
       ["Small Cave", 2],
     ]
+  );
+
+  // the ordering that matters: a cheap one-item trip must not outrank a
+  // pricier trip that clears three shortfalls
+  const spread = makeGraph({
+    Hub: { drops: [{ location: "Busy Place", rate: 30 }] },
+    HubTwo: { drops: [{ location: "Busy Place", rate: 30 }] },
+    HubThree: { drops: [{ location: "Busy Place", rate: 30 }] },
+    Lonely: { drops: [{ location: "Quiet Place", rate: 1 }] },
+  });
+  check(
+    "three needs at 90 explores beat one need at 1",
+    planSourcing(spread, [
+      { name: "Lonely", quantity: 1 },
+      { name: "Hub", quantity: 1 },
+      { name: "HubTwo", quantity: 1 },
+      { name: "HubThree", quantity: 1 },
+    ]).locations.map((entry) => [entry.location, entry.items.length]),
+    [
+      ["Busy Place", 3],
+      ["Quiet Place", 1],
+    ]
+  );
+  check(
+    "ties break toward the cheaper trip",
+    planSourcing(
+      makeGraph({
+        Far: { drops: [{ location: "Far Place", rate: 50 }] },
+        Near: { drops: [{ location: "Near Place", rate: 2 }] },
+      }),
+      [
+        { name: "Far", quantity: 1 },
+        { name: "Near", quantity: 1 },
+      ]
+    ).locations.map((entry) => entry.location),
+    ["Near Place", "Far Place"]
   );
   check("nothing unsourced", sourcing.unsourced, []);
 }
