@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.22
+// @version 1.1.23
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3013,6 +3013,7 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         advice,
         cap,
         craftworks,
+        goalProgress: goals.map((goal) => (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited)),
         goals,
         graph,
         inventory,
@@ -3022,14 +3023,13 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         unlimited,
     };
 });
-const renderWhereToGo = (body, context, extra) => __awaiter(void 0, void 0, void 0, function* () {
+// Takes exactly what to source. It used to fold in quest bottlenecks itself
+// regardless of caller, which meant the Goals tab quoted trips for items no
+// tracked goal wanted — each tab now decides what its own list means.
+const renderWhereToGo = (body, context, missing) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
-    const { graph, statuses } = context;
-    const bottlenecks = (0, focus_1.rankBottlenecks)(statuses);
-    const sourcing = (0, craftPlanner_1.planSourcing)(graph, (0, focus_1.mergeMissing)(bottlenecks.map((entry) => ({
-        name: entry.name,
-        quantity: entry.maxNeeded,
-    })), extra));
+    const { graph } = context;
+    const sourcing = (0, craftPlanner_1.planSourcing)(graph, missing);
     if (sourcing.locations.length === 0) {
         return;
     }
@@ -3053,7 +3053,7 @@ const renderWhereToGo = (body, context, extra) => __awaiter(void 0, void 0, void
 });
 const renderNow = (body, context) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
-    const { advice, graph, questGoals, statuses } = context;
+    const { advice, goalProgress, graph, questGoals, statuses } = context;
     const ready = statuses.filter((status) => status.isReady);
     const nearlyDone = (0, focus_1.getNearlyDone)(statuses);
     if (ready.length > 0) {
@@ -3092,7 +3092,13 @@ const renderNow = (body, context) => __awaiter(void 0, void 0, void 0, function*
     // Craftworks says what a slot is out of but never how many it is short by,
     // so a blocker counts as one unit; a request's shortfall is exact. Both are
     // the same trip, which is why they merge rather than being listed twice.
-    yield renderWhereToGo(body, context, ((_b = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _b !== void 0 ? _b : []).map((root) => ({ name: root.name, quantity: 1 })));
+    yield renderWhereToGo(body, context, (0, focus_1.mergeMissing)((0, focus_1.rankBottlenecks)(statuses).map((entry) => ({
+        name: entry.name,
+        quantity: entry.maxNeeded,
+    })), ((_b = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _b !== void 0 ? _b : []).map((root) => ({ name: root.name, quantity: 1 })), 
+    // tracked goals steer this list too, so setting a goal changes where the
+    // panel sends you rather than only what the Goals tab says
+    ...goalProgress.map((entry) => entry.missing)));
     if (body.childNodes.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, ["Nothing needs attention."]));
     }
@@ -3103,23 +3109,21 @@ const renderNow = (body, context) => __awaiter(void 0, void 0, void 0, function*
 });
 const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
-    const { goals, graph, inventory, unlimited } = context;
+    const { goalProgress, goals, graph } = context;
     if (goals.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
             "No goals yet — pick one below, or use “Track as goal” on any item page.",
         ]));
     }
-    const missingLists = [];
-    for (const goal of goals) {
-        const progress = (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited);
-        missingLists.push(progress.missing);
+    for (const progress of goalProgress) {
+        const { canMakeNow, goal, have, missing, ratio } = progress;
         const row = document.createElement("div");
         row.className = "fh-goal";
         const top = document.createElement("div");
         top.className = "fh-goal-top";
         const name = document.createElement("div");
         name.style.fontSize = "12px";
-        name.append((0, gameLinks_1.makeItemLink)(goal.name, (_a = graph.nodes.get(goal.name)) === null || _a === void 0 ? void 0 : _a.id, progress.ratio >= 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_WHITE));
+        name.append((0, gameLinks_1.makeItemLink)(goal.name, (_a = graph.nodes.get(goal.name)) === null || _a === void 0 ? void 0 : _a.id, ratio >= 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_WHITE));
         const remove = document.createElement("span");
         remove.className = "fh-goal-remove";
         remove.textContent = "×";
@@ -3133,18 +3137,18 @@ const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 
         const bar = document.createElement("div");
         bar.className = "fh-bar";
         const fill = document.createElement("div");
-        fill.style.width = `${Math.round(progress.ratio * 100)}%`;
-        if (progress.ratio < 1) {
+        fill.style.width = `${Math.round(ratio * 100)}%`;
+        if (ratio < 1) {
             fill.style.background = theme_1.TEXT_WARNING;
         }
         bar.append(fill);
-        const detail = progress.ratio >= 1
-            ? `ready — ${progress.have} on hand${progress.canMakeNow > 0 ? `, ${progress.canMakeNow} craftable` : ""}`
-            : `${progress.have}/${goal.quantity} made · ${progress.canMakeNow} craftable now`;
+        const detail = ratio >= 1
+            ? `ready — ${have} on hand${canMakeNow > 0 ? `, ${canMakeNow} craftable` : ""}`
+            : `${have}/${goal.quantity} made · ${canMakeNow} craftable now`;
         row.append(top, bar, (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [detail]));
-        if (progress.missing.length > 0) {
+        if (missing.length > 0) {
             const parts = ["short: "];
-            for (const [index, entry] of progress.missing.slice(0, 4).entries()) {
+            for (const [index, entry] of missing.slice(0, 4).entries()) {
                 if (index > 0) {
                     parts.push(", ");
                 }
@@ -3154,7 +3158,10 @@ const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 
         }
         body.append(row);
     }
-    yield renderWhereToGo(body, context, (0, focus_1.mergeMissing)(...missingLists));
+    // only what the tracked goals themselves need
+    if (goalProgress.length > 0) {
+        yield renderWhereToGo(body, context, (0, focus_1.mergeMissing)(...goalProgress.map((entry) => entry.missing)));
+    }
     renderSuggestions(body, context, rerender);
 });
 // Suggestions are offered, never auto-adopted. Mastery alone would add hundreds
@@ -9073,7 +9080,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.22" !== void 0 ? "1.1.22" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.23" !== void 0 ? "1.1.23" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
