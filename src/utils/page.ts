@@ -14,6 +14,7 @@ export enum Page {
   KITCHEN = "kitchen",
   LOCKSMITH = "locksmith",
   MAILBOX = "mailbox",
+  MASTERY = "mastery",
   MINING = "mining",
   OVEN = "oven",
   PASTURE = "pasture",

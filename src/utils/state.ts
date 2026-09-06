@@ -24,6 +24,7 @@ export enum StorageKey {
   LATEST_VERSION = "latestVersion",
   LOCATION_DATA = "locationData",
   MAILBOX = "mailbox",
+  MASTERY = "mastery",
   MEALS_STATUS = "mealsStatus",
   NOTES = "notes",
   PAGE_DATA = "pageData",
