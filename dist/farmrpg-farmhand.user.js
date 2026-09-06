@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.23
+// @version 1.1.24
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -4690,7 +4690,9 @@ const renderAdvice = (container, slots, maxSlots, unlimited) => __awaiter(void 0
             details.length > 0 ? ` · ${details.join(" · ")}` : " · no known source",
         ]));
     }
-    const locations = [...byLocation.entries()].sort((a, b) => b[1].blockers.length - a[1].blockers.length);
+    // same ordering as the planner: most blockers cleared first, cheapest trip
+    // breaking ties
+    const locations = [...byLocation.entries()].sort((a, b) => b[1].blockers.length - a[1].blockers.length || a[1].hits - b[1].hits);
     if (locations.length > 0) {
         container.append(makeHeading("Where to go"));
         const references = yield Promise.all(locations.map(([location]) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: location }))));
@@ -9080,7 +9082,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.23" !== void 0 ? "1.1.23" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.24" !== void 0 ? "1.1.24" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -9891,7 +9893,11 @@ const planSourcing = (graph, missing) => {
         byLocation.set(source.location, existing);
     }
     return {
-        locations: [...byLocation.values()].sort((a, b) => b.hits - a.hits),
+        // Most needs covered first, cheapest trip breaking ties. Sorting by total
+        // hits put the longest grind at the top, which answers "what will cost me
+        // most" rather than "where should I go" — one trip that clears three
+        // shortfalls beats one that clears a single expensive one.
+        locations: [...byLocation.values()].sort((a, b) => b.items.length - a.items.length || a.hits - b.hits),
         unsourced,
     };
 };
