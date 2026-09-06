@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.25
+// @version 1.1.26
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -6190,24 +6190,34 @@ exports.improvedInputs = {
                         proxyOption: option,
                     };
                 }
-                const match = (_b = option.textContent) === null || _b === void 0 ? void 0 : _b.match(/^(.*) \(([\d,]+)\)$/);
+                const text = (_c = (_b = option.textContent) === null || _b === void 0 ? void 0 : _b.trim()) !== null && _c !== void 0 ? _c : "";
+                if (text === "--- select ---" ||
+                    text === "Nothing Selected" ||
+                    !text) {
+                    return;
+                }
+                // Only the inventory-style selects suffix a count, as "Wood (1,234)".
+                // Plenty of selects list plain names instead -- the Craftworks item
+                // picker and its set-image picker are two, several hundred options
+                // between them -- so a missing count is an ordinary shape, not a
+                // parse failure. Those carry the name in `data-name`; fall back to
+                // the label otherwise, and skip the buddy.farm lookups entirely,
+                // since without a count there is no icon or quantity to show.
+                const match = text.match(/^(.*) \(([\d,]+)\)$/);
                 if (!match) {
-                    if (option.textContent === "--- select ---" ||
-                        option.textContent === "Nothing Selected") {
-                        return;
-                    }
-                    console.error("Failed to parse option", option);
                     return {
-                        name: (_c = option.textContent) !== null && _c !== void 0 ? _c : "",
+                        name: (_d = option.dataset.name) !== null && _d !== void 0 ? _d : text,
                         value: option.value,
                         proxyOption: option,
                     };
                 }
                 const [, name, quantity] = match;
                 if (!(yield (0, api_1.isItem)(name))) {
-                    console.error("Not an item", name);
+                    // a counted option that is not a catalogued item is legitimate
+                    // (game-only entries buddy.farm has never indexed); show the label
+                    console.debug("[Farmhand] option is not a known item", name);
                     return {
-                        name: (_d = option.textContent) !== null && _d !== void 0 ? _d : "",
+                        name: text,
                         value: option.value,
                         proxyOption: option,
                     };
@@ -9092,7 +9102,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.25" !== void 0 ? "1.1.25" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.26" !== void 0 ? "1.1.26" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
