@@ -5,19 +5,26 @@ import {
   TEXT_WARNING,
   TEXT_WHITE,
 } from "~/utils/theme";
+import { Feature, FeatureSetting } from "../utils/feature";
+import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
+import { getCurrentPage, getTitle, Page } from "~/utils/page";
 import {
-  Bottleneck,
   getFocusSourcing,
   getGoalStatuses,
   getNearlyDone,
   Goal,
   rankBottlenecks,
 } from "~/utils/focus";
-import { Feature, FeatureSetting } from "../utils/feature";
-import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
-import { getCurrentPage, getTitle, Page } from "~/utils/page";
 import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
+import { locationDataState } from "~/api/buddyfarm/api";
+import {
+  makeItemLink,
+  makeLinkedLine,
+  makeLocationLink,
+  makeQuestLink,
+} from "~/utils/gameLinks";
+import { orUndefined } from "~/utils/promise";
 import { SettingId } from "~/utils/settings";
 
 const SETTING_FOCUS_DASHBOARD: FeatureSetting = {
@@ -58,16 +65,6 @@ const makeHeading = (text: string): HTMLDivElement => {
 const formatHits = (hits: number): string =>
   hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
 
-const describeBottleneck = (entry: Bottleneck): string => {
-  const gated =
-    entry.goalsGated > 1
-      ? `blocks ${entry.goalsGated} requests`
-      : `blocks ${entry.goals[0]}`;
-  return `${
-    entry.name
-  } — ${gated}, need up to ${entry.maxNeeded.toLocaleString()}`;
-};
-
 const render = async (container: HTMLElement, goals: Goal[]): Promise<void> => {
   const snapshot = await inventoryState.get();
   const inventory = snapshot?.quantities ?? {};
@@ -94,7 +91,11 @@ const render = async (container: HTMLElement, goals: Goal[]): Promise<void> => {
   if (ready.length > 0) {
     container.append(makeHeading("Ready to turn in"));
     for (const status of ready) {
-      container.append(makeLine(TEXT_SUCCESS, status.goal.label));
+      container.append(
+        makeLinkedLine(TEXT_SUCCESS, [
+          makeQuestLink(status.goal.label, status.goal.href, TEXT_SUCCESS),
+        ])
+      );
     }
   }
 
@@ -103,12 +104,11 @@ const render = async (container: HTMLElement, goals: Goal[]): Promise<void> => {
     for (const status of nearlyDone.slice(0, MAX_LISTED)) {
       const [only] = status.missing;
       container.append(
-        makeLine(
-          TEXT_WARNING,
-          `${status.goal.label} — ${only.quantity.toLocaleString()} × ${
-            only.name
-          }`
-        )
+        makeLinkedLine(TEXT_WARNING, [
+          makeQuestLink(status.goal.label, status.goal.href, TEXT_WARNING),
+          ` — ${only.quantity.toLocaleString()} × `,
+          makeItemLink(only.name, graph.nodes.get(only.name)?.id, TEXT_WARNING),
+        ])
       );
     }
   }
@@ -116,28 +116,47 @@ const render = async (container: HTMLElement, goals: Goal[]): Promise<void> => {
   if (bottlenecks.length > 0) {
     container.append(makeHeading("Holding up the most"));
     for (const entry of bottlenecks.slice(0, MAX_LISTED)) {
+      const color = entry.goalsGated > 1 ? TEXT_WARNING : TEXT_GRAY;
       container.append(
-        makeLine(
-          entry.goalsGated > 1 ? TEXT_WARNING : TEXT_GRAY,
-          describeBottleneck(entry)
-        )
+        makeLinkedLine(color, [
+          makeItemLink(entry.name, graph.nodes.get(entry.name)?.id, color),
+          ` — ${
+            entry.goalsGated > 1
+              ? `blocks ${entry.goalsGated} requests`
+              : `blocks ${entry.goals[0]}`
+          }, need up to ${entry.maxNeeded.toLocaleString()}`,
+        ])
       );
     }
 
     const sourcing = getFocusSourcing(graph, bottlenecks);
     if (sourcing.locations.length > 0) {
       container.append(makeHeading("Where to go"));
-      for (const location of sourcing.locations) {
-        container.append(
-          makeLine(
-            location.items.length > 1 ? TEXT_SUCCESS : TEXT_GRAY,
-            `${location.location} — ${location.items
-              .map((item) => item.name)
-              .join(", ")} (~${formatHits(location.hits)} ${
-              location.type === "fishing" ? "casts" : "explores"
-            })`
-          )
+      const references = await Promise.all(
+        sourcing.locations.map((entry) =>
+          orUndefined(locationDataState.get({ query: entry.location }))
+        )
+      );
+      for (const [index, location] of sourcing.locations.entries()) {
+        const color = location.items.length > 1 ? TEXT_SUCCESS : TEXT_GRAY;
+        const parts: (string | Node)[] = [
+          makeLocationLink(location.location, references[index], color),
+          " — ",
+        ];
+        for (const [itemIndex, item] of location.items.entries()) {
+          if (itemIndex > 0) {
+            parts.push(", ");
+          }
+          parts.push(
+            makeItemLink(item.name, graph.nodes.get(item.name)?.id, color)
+          );
+        }
+        parts.push(
+          ` (~${formatHits(location.hits)} ${
+            location.type === "fishing" ? "casts" : "explores"
+          })`
         );
+        container.append(makeLinkedLine(color, parts));
       }
     }
   } else if (ready.length === statuses.length && statuses.length > 0) {

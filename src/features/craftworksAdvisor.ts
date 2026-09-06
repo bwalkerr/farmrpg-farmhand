@@ -21,6 +21,13 @@ import {
 } from "~/utils/craftPlanner";
 import { getCurrentPage, Page } from "~/utils/page";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
+import { locationDataState } from "~/api/buddyfarm/api";
+import {
+  makeItemLink,
+  makeLinkedLine,
+  makeLocationLink,
+} from "~/utils/gameLinks";
+import { orUndefined } from "~/utils/promise";
 import { SettingId } from "~/utils/settings";
 
 const SETTING_CRAFTWORKS_ADVISOR: FeatureSetting = {
@@ -192,14 +199,11 @@ const renderAdvice = async (
       details.push("craftable — could take the free slot");
     }
     container.append(
-      makeLine(
-        TEXT_WARNING,
-        `${name} → blocks ${consumers}${
-          details.length > 0
-            ? ` · ${details.join(" · ")}`
-            : " · no known source"
-        }`
-      )
+      makeLinkedLine(TEXT_WARNING, [
+        makeItemLink(name, node?.id, TEXT_WARNING),
+        ` → blocks ${consumers}`,
+        details.length > 0 ? ` · ${details.join(" · ")}` : " · no known source",
+      ])
     );
   }
 
@@ -208,17 +212,29 @@ const renderAdvice = async (
   );
   if (locations.length > 0) {
     container.append(makeHeading("Where to go"));
-    for (const [location, entry] of locations) {
-      container.append(
-        makeLine(
-          entry.blockers.length > 1 ? TEXT_SUCCESS : TEXT_GRAY,
-          `${location} — ${entry.blockers.join(", ")} (${formatHits(
-            entry.hits
-          )} ${
-            entry.type === "fishing" ? "casts" : "explores"
-          } for one of each)`
-        )
+    const references = await Promise.all(
+      locations.map(([location]) =>
+        orUndefined(locationDataState.get({ query: location }))
+      )
+    );
+    for (const [index, [location, entry]] of locations.entries()) {
+      const color = entry.blockers.length > 1 ? TEXT_SUCCESS : TEXT_GRAY;
+      const parts: (string | Node)[] = [
+        makeLocationLink(location, references[index], color),
+        " — ",
+      ];
+      for (const [blockerIndex, blocker] of entry.blockers.entries()) {
+        if (blockerIndex > 0) {
+          parts.push(", ");
+        }
+        parts.push(makeItemLink(blocker, graph.nodes.get(blocker)?.id, color));
+      }
+      parts.push(
+        ` (${formatHits(entry.hits)} ${
+          entry.type === "fishing" ? "casts" : "explores"
+        } for one of each)`
       );
+      container.append(makeLinkedLine(color, parts));
     }
   }
 

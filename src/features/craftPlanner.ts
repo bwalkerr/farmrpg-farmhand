@@ -18,6 +18,13 @@ import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import { getCardByTitle, getCurrentPage, Page } from "~/utils/page";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
+import { locationDataState, LocationRef } from "~/api/buddyfarm/api";
+import {
+  makeItemLink,
+  makeLinkedLine,
+  makeLocationLink,
+} from "~/utils/gameLinks";
+import { orUndefined } from "~/utils/promise";
 import { planCraftworksQueue } from "~/utils/craftworks";
 import { SettingId } from "~/utils/settings";
 
@@ -63,7 +70,8 @@ const renderPlan = (
   plan: CraftPlan,
   maxCraftable: number,
   inventory: Record<string, number>,
-  cap: number | undefined
+  cap: number | undefined,
+  locations: Map<string, LocationRef>
 ): void => {
   output.textContent = "";
 
@@ -82,7 +90,10 @@ const renderPlan = (
     output.append(makeHeading("Craft in this order"));
     for (const step of subSteps) {
       output.append(
-        makeLine(TEXT_GRAY, `${step.quantity.toLocaleString()} × ${step.name}`)
+        makeLinkedLine(TEXT_GRAY, [
+          `${step.quantity.toLocaleString()} × `,
+          makeItemLink(step.name, graph.nodes.get(step.name)?.id, TEXT_GRAY),
+        ])
       );
     }
     output.append(
@@ -98,10 +109,14 @@ const renderPlan = (
     output.append(makeHeading("Short of"));
     for (const entry of plan.missing) {
       output.append(
-        makeLine(
-          TEXT_WARNING,
-          `${entry.quantity.toLocaleString()} × ${entry.name}`
-        )
+        makeLinkedLine(TEXT_WARNING, [
+          `${entry.quantity.toLocaleString()} × `,
+          makeItemLink(
+            entry.name,
+            graph.nodes.get(entry.name)?.id,
+            TEXT_WARNING
+          ),
+        ])
       );
     }
 
@@ -109,17 +124,31 @@ const renderPlan = (
     if (sourcing.locations.length > 0) {
       output.append(makeHeading("Where to go"));
       for (const location of sourcing.locations) {
-        const detail = location.items
-          .map((item) => `${item.quantity.toLocaleString()} ${item.name}`)
-          .join(", ");
-        output.append(
-          makeLine(
-            TEXT_SUCCESS,
-            `${location.location} — ~${formatHits(location.hits)} ${
-              location.type === "fishing" ? "casts" : "explores"
-            } (${detail})`
-          )
-        );
+        const parts: (string | Node)[] = [
+          makeLocationLink(
+            location.location,
+            locations.get(location.location),
+            TEXT_SUCCESS
+          ),
+          ` — ~${formatHits(location.hits)} ${
+            location.type === "fishing" ? "casts" : "explores"
+          } (`,
+        ];
+        for (const [index, item] of location.items.entries()) {
+          if (index > 0) {
+            parts.push(", ");
+          }
+          parts.push(
+            `${item.quantity.toLocaleString()} `,
+            makeItemLink(
+              item.name,
+              graph.nodes.get(item.name)?.id,
+              TEXT_SUCCESS
+            )
+          );
+        }
+        parts.push(")");
+        output.append(makeLinkedLine(TEXT_SUCCESS, parts));
       }
     }
     if (sourcing.unsourced.length > 0) {
@@ -139,12 +168,11 @@ const renderPlan = (
     output.append(makeHeading("Craftworks queue for this"));
     for (const entry of queue.entries) {
       output.append(
-        makeLine(
-          TEXT_GRAY,
-          `${entry.position}. ${
-            entry.name
-          } (${entry.quantity.toLocaleString()} needed)`
-        )
+        makeLinkedLine(TEXT_GRAY, [
+          `${entry.position}. `,
+          makeItemLink(entry.name, graph.nodes.get(entry.name)?.id, TEXT_GRAY),
+          ` (${entry.quantity.toLocaleString()} needed)`,
+        ])
       );
     }
     for (const entry of queue.dropped) {
@@ -260,6 +288,25 @@ export const craftPlanner: Feature = {
     // the graph and the inventory are already in hand, so re-planning on every
     // keystroke is pure arithmetic — no requests, no debounce needed
     const maxCraftable = getMaxCraftable(graph, itemName, inventory);
+
+    // resolve every location the plan could name, once, so re-planning on each
+    // keystroke stays synchronous
+    const locations = new Map<string, LocationRef>();
+    const names = new Set(
+      planSourcing(
+        graph,
+        planCraft(graph, itemName, 1, inventory).missing
+      ).locations.map((entry) => entry.location)
+    );
+    await Promise.all(
+      [...names].map(async (name) => {
+        const ref = await orUndefined(locationDataState.get({ query: name }));
+        if (ref) {
+          locations.set(name, ref);
+        }
+      })
+    );
+
     const update = (): void => {
       const quantity = Math.max(1, Math.floor(Number(input.value) || 1));
       renderPlan(
@@ -268,7 +315,8 @@ export const craftPlanner: Feature = {
         planCraft(graph, itemName, quantity, inventory),
         maxCraftable,
         inventory,
-        snapshot?.cap
+        snapshot?.cap,
+        locations
       );
     };
     input.addEventListener("input", update);

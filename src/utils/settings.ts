@@ -24,6 +24,7 @@ export enum SettingId {
   FLEA_MARKET = "fleaMarket",
   HARVEST_NOTIFICATIONS = "harvestNotifications",
   HARVEST_POPUP = "harvestPopup",
+  HOME_BRIEFING = "homeBriefing",
   HOME_COMPRESS_SKILLS = "homeCompressSkills",
   HOME_HIDE_FOOTER = "homeHideFooter",
   HOME_HIDE_PLAYERS = "homeHidePlayers",
