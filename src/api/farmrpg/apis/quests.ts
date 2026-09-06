@@ -12,8 +12,8 @@ export interface ActiveQuest {
 // tagging feature has used since upstream, so this is proven markup rather than
 // a fresh guess: each request is an `li` whose link carries the quest id and
 // whose `.item-title strong` is the title.
-export const parseActiveQuests = (): ActiveQuest[] => {
-  const list = getListByTitle(/Active Requests/);
+export const parseActiveQuests = (root?: HTMLElement): ActiveQuest[] => {
+  const list = getListByTitle(/Active Requests/, root);
   if (!list) {
     return [];
   }

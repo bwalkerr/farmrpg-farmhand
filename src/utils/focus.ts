@@ -137,3 +137,25 @@ export const getFocusSourcing = (
       quantity: entry.maxNeeded,
     }))
   );
+
+// Fold several shortfall lists into one, taking the largest ask for any item
+// rather than the sum.
+//
+// The lists come from sources that overlap: a request short of 40 Steel and a
+// Craftworks slot stalled on Steel are the same trip, not two. Summing would
+// inflate the hit count for exactly the materials that matter most, which is
+// the opposite of useful when the point is deciding where to spend an hour.
+export const mergeMissing = (...lists: MissingItem[][]): MissingItem[] => {
+  const byName = new Map<string, number>();
+  for (const list of lists) {
+    for (const entry of list) {
+      byName.set(
+        entry.name,
+        Math.max(byName.get(entry.name) ?? 0, entry.quantity)
+      );
+    }
+  }
+  return [...byName.entries()]
+    .map(([name, quantity]) => ({ name, quantity }))
+    .sort((a, b) => b.quantity - a.quantity);
+};
