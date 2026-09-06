@@ -4,7 +4,13 @@ import {
   planCraftworksQueue,
   Slot,
 } from "./craftworks";
-import { getGoalStatuses, getNearlyDone, Goal, rankBottlenecks } from "./focus";
+import {
+  getGoalStatuses,
+  getNearlyDone,
+  Goal,
+  mergeMissing,
+  rankBottlenecks,
+} from "./focus";
 import {
   getMaxCraftable,
   planCraft,
@@ -402,6 +408,29 @@ console.info("parseMaxSlots: the upgrade card must not win");
     8
   );
   check("no match is undefined", parseMaxSlots("nothing here"), undefined);
+}
+
+console.info("mergeMissing: overlapping asks are one trip, not two");
+{
+  check(
+    "takes the larger ask, never the sum",
+    mergeMissing(
+      [
+        { name: "Steel", quantity: 40 },
+        { name: "Mushroom", quantity: 3 },
+      ],
+      [
+        { name: "Steel", quantity: 12 },
+        { name: "Carbon Sphere", quantity: 5 },
+      ]
+    ),
+    [
+      { name: "Steel", quantity: 40 },
+      { name: "Carbon Sphere", quantity: 5 },
+      { name: "Mushroom", quantity: 3 },
+    ]
+  );
+  check("empty in, empty out", mergeMissing([], []), []);
 }
 
 if (failures > 0) {
