@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.30
+// @version 1.1.31
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -39,7 +39,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.locationDataState = exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
+exports.getLocationNames = exports.locationDataState = exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(6747);
 exports.itemDataState = new state_1.CachedState(state_1.StorageKey.ITEM_DATA, (state, itemName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -175,7 +175,7 @@ exports.questDataState = new state_1.CachedState(state_1.StorageKey.QUEST_DATA, 
 // whose ids Reed's Craftworks page reported independently, all exact -- and the
 // id lives on the page's `pageContext`, not on the location record itself.
 exports.locationDataState = new state_1.CachedState(state_1.StorageKey.LOCATION_DATA, (state, locationName) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     if (!locationName) {
         return;
     }
@@ -193,10 +193,46 @@ exports.locationDataState = new state_1.CachedState(state_1.StorageKey.LOCATION_
     if (!location || !id) {
         return previous;
     }
-    return { id, name: location.name, type: location.type };
+    // Prefer the profile that assumes no perks, so a quoted rate is one the
+    // player can definitely hit; fall back to whatever exists if every profile
+    // needs one. Rates are per item, so the best across profiles is kept.
+    const profiles = (_g = location.dropRates) !== null && _g !== void 0 ? _g : [];
+    const plain = profiles.filter((profile) => !profile.ironDepot && !profile.runecube);
+    const best = new Map();
+    for (const profile of plain.length > 0 ? plain : profiles) {
+        for (const entry of (_h = profile.items) !== null && _h !== void 0 ? _h : []) {
+            if (!((_j = entry.item) === null || _j === void 0 ? void 0 : _j.name) || !entry.rate) {
+                continue;
+            }
+            const existing = best.get(entry.item.name);
+            if (!existing || entry.rate < existing.rate) {
+                best.set(entry.item.name, {
+                    id: entry.item.id,
+                    name: entry.item.name,
+                    rate: entry.rate,
+                });
+            }
+        }
+    }
+    return {
+        drops: [...best.values()].sort((a, b) => a.rate - b.rate),
+        id,
+        name: location.name,
+        type: location.type,
+    };
 }), {
     timeout: 60 * 60 * 24 * 7, // 1 week
 });
+// Every location buddy.farm knows, for matching a page title against. They land
+// in the catch-all `pages` bucket, identified by their /l/ href.
+const getLocationNames = () => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const { pages } = (_a = (yield exports.pageDataState.get())) !== null && _a !== void 0 ? _a : {};
+    return (pages !== null && pages !== void 0 ? pages : [])
+        .filter((page) => page.href.startsWith("/l/"))
+        .map((page) => page.name);
+});
+exports.getLocationNames = getLocationNames;
 
 
 /***/ }),
@@ -428,7 +464,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.restoreQueue = exports.activateSet = exports.craftworksState = void 0;
+exports.restoreQueue = exports.setQueueRunning = exports.activateSet = exports.craftworksState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3300);
 const craftworks_1 = __webpack_require__(7831);
@@ -475,7 +511,7 @@ const postWorker = (query) => __awaiter(void 0, void 0, void 0, function* () {
 // not come back, and hands the caller the previous queue either way so a
 // failure can be walked back. That is why it is worth reimplementing here
 // rather than forwarding a click: the copy is strictly safer than the original.
-const activateSet = (setId, previous) => __awaiter(void 0, void 0, void 0, function* () {
+const activateSet = (setId_1, previous_1, ...args_1) => __awaiter(void 0, [setId_1, previous_1, ...args_1], void 0, function* (setId, previous, autoPlay = false) {
     try {
         yield postWorker(new URLSearchParams({ go: "removeallcw" }));
     }
@@ -504,10 +540,34 @@ const activateSet = (setId, previous) => __awaiter(void 0, void 0, void 0, funct
             previous,
         };
     }
+    if (autoPlay) {
+        // a freshly loaded set is no use sitting paused, and whether it arrives
+        // paused depends on how the set was saved -- so assert it either way
+        try {
+            yield postWorker(new URLSearchParams({ go: "playallcw" }));
+        }
+        catch (_c) {
+            // the set did load; failing to start it is not worth failing the whole
+            // operation over, and the queue toggle can start it
+        }
+    }
     yield exports.craftworksState.get({ ignoreCache: true });
     return { message: "Set loaded.", ok: true, previous };
 });
 exports.activateSet = activateSet;
+// Start or stop every slot. Neither call takes parameters, and both are
+// reversible, so this needs no confirmation the way loading a set does.
+const setQueueRunning = (play) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const result = yield postWorker(new URLSearchParams({ go: play ? "playallcw" : "pauseallcw" }));
+        yield exports.craftworksState.get({ ignoreCache: true });
+        return result === "success" || result === "";
+    }
+    catch (_a) {
+        return false;
+    }
+});
+exports.setQueueRunning = setQueueRunning;
 // Put a queue back, in order. Appending each item to the bottom reproduces the
 // original order without needing the reorder endpoint.
 const restoreQueue = (slots) => __awaiter(void 0, void 0, void 0, function* () {
@@ -3394,6 +3454,33 @@ const renderSuggestions = (body, context, rerender) => {
     }
     drawList();
 };
+// Start/stop for the whole queue. Both calls are reversible and take no
+// parameters, so unlike loading a set this needs no confirmation.
+const makeQueueToggle = (craftworks, reload) => {
+    const running = craftworks.slots.filter((slot) => !slot.isPaused).length;
+    const isRunning = running > 0;
+    const toggle = document.createElement("a");
+    toggle.href = "#";
+    toggle.style.fontSize = "11px";
+    toggle.style.whiteSpace = "nowrap";
+    toggle.style.textDecoration = "underline";
+    toggle.style.color = isRunning ? theme_1.TEXT_WARNING : theme_1.TEXT_SUCCESS;
+    toggle.textContent = isRunning ? "pause all" : "start all";
+    toggle.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+        event.preventDefault();
+        event.stopPropagation();
+        toggle.textContent = isRunning ? "pausing…" : "starting…";
+        toggle.style.color = theme_1.TEXT_GRAY;
+        const ok = yield (0, craftworks_1.setQueueRunning)(!isRunning);
+        if (!ok) {
+            toggle.textContent = "failed — try again";
+            toggle.style.color = theme_1.TEXT_ERROR;
+            return;
+        }
+        reload();
+    }));
+    return toggle;
+};
 const renderCraftworks = (body, context, reload) => {
     var _a, _b;
     const { advice, cap, craftworks, goals, graph, inventory, mastery, unlimited, } = context;
@@ -3403,10 +3490,16 @@ const renderCraftworks = (body, context, reload) => {
     }
     const maxSlots = (_a = craftworks.maxSlots) !== null && _a !== void 0 ? _a : craftworks.slots.length;
     const free = maxSlots - craftworks.slots.length;
-    body.append((0, gameLinks_1.makeLinkedLine)(advice.working.length > 0 ? theme_1.TEXT_GRAY : theme_1.TEXT_WARNING, [
+    const summary = document.createElement("div");
+    summary.className = "fh-goal-top";
+    summary.style.marginBottom = "4px";
+    const summaryText = (0, gameLinks_1.makeLinkedLine)(advice.working.length > 0 ? theme_1.TEXT_GRAY : theme_1.TEXT_WARNING, [
         `${advice.working.length} of ${craftworks.slots.length} slots crafting`,
         free > 0 ? `, ${free} free` : "",
-    ]));
+    ]);
+    summaryText.style.marginBottom = "0";
+    summary.append(summaryText, makeQueueToggle(craftworks, reload));
+    body.append(summary);
     for (const slot of craftworks.slots) {
         const isDead = advice.dead.includes(slot);
         const isStalled = slot.blockedOn.length > 0 && !isDead;
@@ -3507,7 +3600,8 @@ const makeSetLoadControl = (set, context, reload, onFailure) => {
         }
         action.textContent = "loading…";
         action.style.color = theme_1.TEXT_GRAY;
-        const result = yield (0, craftworks_1.activateSet)(set.id, slots);
+        // a set you just chose should start working immediately
+        const result = yield (0, craftworks_1.activateSet)(set.id, slots, true);
         if (result.ok) {
             reload();
             return;
@@ -9449,7 +9543,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.30" !== void 0 ? "1.1.30" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.31" !== void 0 ? "1.1.31" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
