@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.29
+// @version 1.1.30
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3049,11 +3049,39 @@ const ICON = `
     <path d="M3 6h11M3 12h8M3 18h11" />
     <path d="M16 15l3 3 5-6" />
   </svg>`;
-const setBadge = (count) => {
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+// What the badge is counting, in words.
+//
+// The number alone mixes three unrelated things, so "1" could be a dead slot,
+// a mis-ordered queue or a request waiting to be handed in. The tooltip says
+// which, and both callers build it the same way so the figure cannot mean one
+// thing before the panel is opened and another after.
+const summarizeAttention = (advice, readyRequests) => {
+    const parts = [];
+    if (advice && advice.dead.length > 0) {
+        parts.push(`${plural(advice.dead.length, "slot")} at cap`);
+    }
+    if (advice && advice.ordering.length > 0) {
+        parts.push(`${plural(advice.ordering.length, "slot")} out of order`);
+    }
+    if (readyRequests > 0) {
+        parts.push(`${plural(readyRequests, "request")} ready`);
+    }
+    return {
+        count: (advice ? advice.dead.length + advice.ordering.length : 0) +
+            readyRequests,
+        parts,
+    };
+};
+const setBadge = (count, parts, isStale = false) => {
     const button = document.querySelector(`#${BUTTON_ID}`);
     if (!button) {
         return;
     }
+    button.title =
+        parts.length > 0
+            ? `Farmhand briefing — ${parts.join(", ")}${isStale ? " (from the last read)" : ""}`
+            : "Farmhand briefing";
     const existing = button.querySelector(".fh-badge");
     if (count <= 0) {
         existing === null || existing === void 0 ? void 0 : existing.remove();
@@ -3623,10 +3651,8 @@ const ensurePanel = () => {
         body.textContent = "";
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Reading your farm…"]));
         context = yield loadContext(force);
-        const attention = (context.advice
-            ? context.advice.dead.length + context.advice.ordering.length
-            : 0) + context.statuses.filter((status) => status.isReady).length;
-        setBadge(attention);
+        const attention = summarizeAttention(context.advice, context.statuses.filter((status) => status.isReady).length);
+        setBadge(attention.count, attention.parts);
         draw();
     });
     const selectTab = (id) => {
@@ -3693,8 +3719,12 @@ const primeBadge = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!craftworks) {
         return;
     }
+    // requests are not counted here: reading them costs a fetch, and this runs
+    // before the panel has been opened. Marked stale so the tooltip says so
+    // rather than implying it is the whole picture.
     const advice = (0, craftworks_2.adviseOnSlots)(craftworks.slots, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap);
-    setBadge(advice.dead.length + advice.ordering.length);
+    const attention = summarizeAttention(advice, 0);
+    setBadge(attention.count, attention.parts, true);
 });
 exports.briefingPanel = {
     settings: [SETTING_BRIEFING_PANEL],
@@ -9419,7 +9449,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.29" !== void 0 ? "1.1.29" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.30" !== void 0 ? "1.1.30" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
