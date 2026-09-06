@@ -11,6 +11,8 @@ import { collapseItemImage } from "./features/collapseItemImage";
 import { compactSilver } from "./features/compactSilver";
 import { compressChat } from "./features/compressChat";
 import { confirmations } from "./utils/confirmation";
+import { craftPlanner } from "./features/craftPlanner";
+import { craftworksAdvisor } from "./features/craftworksAdvisor";
 import { customNavigation, NavigationItem } from "./features/customNavigation";
 import { dismissableChatBanners } from "./features/dismissableChatBanners";
 import { exploreFirst } from "./features/exploreFirst";
@@ -18,6 +20,7 @@ import { farmhandSettings } from "./features/farmhandSettings";
 import { fieldNotifications } from "./features/harvestNotifications";
 import { fishinInBarrel } from "./features/fishInBarrel";
 import { fleaMarket } from "./features/fleaMarket";
+import { focusDashboard } from "./features/focusDashboard";
 import { getCurrentPage, getPage } from "~/utils/page";
 import { getSettingValues, registerSettings } from "./utils/settings";
 import { highlightSelfInChat } from "./features/highlightSelfInChat";
@@ -82,12 +85,17 @@ const FEATURES = [
   quicksellSafely,
   linkifyQuickCraft,
   exploreFirst,
+  craftPlanner,
+
+  // craftworks
+  craftworksAdvisor,
 
   // inventory
   inventoryCapWarnings,
 
   // quests
   quests,
+  focusDashboard,
   questCollapse,
   questTagging,
   compactSilver,

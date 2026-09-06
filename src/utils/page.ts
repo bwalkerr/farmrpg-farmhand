@@ -1,6 +1,7 @@
 export enum Page {
   AREA = "area",
   BANK = "bank",
+  CRAFTWORKS = "craftworks",
   BIO = "settings_bio",
   FARM = "xfarm",
   FARMERS_MARKET = "market",
