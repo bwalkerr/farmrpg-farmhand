@@ -31,6 +31,7 @@ import {
   getQuestSuggestions,
   getRecommendedSet,
   getSetSuggestions,
+  GoalSuggestion,
 } from "~/utils/suggestions";
 import {
   getGoalStatuses,
@@ -76,11 +77,14 @@ const MAX_LISTED = 5;
 const EDGE_OFFSET = "8px";
 const BOTTOM_OFFSET = "62px";
 
-type TabId = "now" | "goals" | "craftworks";
+type TabId = "now" | "goals" | "sets" | "craftworks";
 const TABS: { id: TabId; label: string }[] = [
   { id: "now", label: "Now" },
   { id: "goals", label: "Goals" },
-  { id: "craftworks", label: "Craftworks" },
+  { id: "sets", label: "Sets" },
+  // "Queue" rather than "Craftworks": four labels have to fit 380px, and the
+  // panel is already inside Craftworks by context
+  { id: "craftworks", label: "Queue" },
 ];
 
 const injectStyles = (): void => {
@@ -204,6 +208,29 @@ const injectStyles = (): void => {
       #${PANEL_ID} .fh-tab[data-active="true"] {
         color: ${TEXT_WHITE};
         background: rgba(255, 255, 255, 0.09);
+      }
+      #${PANEL_ID} .fh-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin: 2px 0 8px;
+      }
+      #${PANEL_ID} .fh-chip {
+        padding: 2px 8px;
+        border-radius: 10px;
+        border: 1px solid ${BORDER_GRAY};
+        font-size: 11px;
+        cursor: pointer;
+        color: ${TEXT_GRAY};
+        user-select: none;
+        transition: background 120ms ease, color 120ms ease,
+          border-color 120ms ease;
+      }
+      #${PANEL_ID} .fh-chip:hover { color: ${TEXT_WHITE}; }
+      #${PANEL_ID} .fh-chip[data-active="true"] {
+        color: ${TEXT_WHITE};
+        background: rgba(255, 255, 255, 0.11);
+        border-color: #5a5a5a;
       }
       #${PANEL_ID} .fh-goal { margin-bottom: 10px; }
       #${PANEL_ID} .fh-goal-top {
@@ -568,6 +595,29 @@ const renderGoals = async (
 // Suggestions are offered, never auto-adopted. Mastery alone would add hundreds
 // of entries and the tab would stop being a place to look for what matters, so
 // the player promotes the few they actually intend to chase.
+type SuggestionFilter = "all" | "set" | "mastery" | "quest";
+
+// Panel-scoped, not persisted: a filter is a way to read the list right now,
+// not a preference worth carrying between sessions.
+let suggestionFilter: SuggestionFilter = "all";
+
+const FILTER_LABELS: { id: SuggestionFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "set", label: "Sets" },
+  { id: "mastery", label: "Mastery" },
+  { id: "quest", label: "Requests" },
+];
+
+// Suggestions are offered, never auto-adopted. Mastery alone would add hundreds
+// of entries and the tab would stop being a place to look for what matters, so
+// the player promotes the few they actually intend to chase.
+//
+// Unfiltered, each source contributes a few so no one of them crowds the others
+// out. Picking a category then shows far more of it — filtering is for reading
+// deeper into one source, not only for hiding the rest.
+const PER_SOURCE_UNFILTERED = 3;
+const PER_SOURCE_FILTERED = 10;
+
 const renderSuggestions = (
   body: HTMLElement,
   context: Context,
@@ -583,49 +633,114 @@ const renderSuggestions = (
     mastery,
     questGoals,
   } = context;
-  const suggestions = [
-    // the player's own saved sets come first: a set named after an item is a
-    // goal they have already been keeping by hand
-    ...getSetSuggestions(
+  const bySource: Record<Exclude<SuggestionFilter, "all">, GoalSuggestion[]> = {
+    mastery: getMasterySuggestions(
+      mastery,
+      inventory,
+      cap,
+      goals,
+      PER_SOURCE_FILTERED
+    ),
+    quest: getQuestSuggestions(
+      questGoals?.goals ?? [],
+      inventory,
+      goals,
+      PER_SOURCE_FILTERED
+    ),
+    set: getSetSuggestions(
       craftworks?.sets ?? [],
       itemNames,
       goals,
       inventory,
-      4
+      PER_SOURCE_FILTERED
     ),
-    ...getMasterySuggestions(mastery, inventory, cap, goals, 4),
-    ...getQuestSuggestions(questGoals?.goals ?? [], inventory, goals, 3),
-  ];
-  if (suggestions.length === 0) {
+  };
+  const total =
+    bySource.set.length + bySource.mastery.length + bySource.quest.length;
+  if (total === 0) {
     return;
   }
+
   body.append(makeHeading("Suggested"));
-  for (const suggestion of suggestions) {
-    const row = document.createElement("div");
-    row.className = "fh-goal-top";
-    row.style.marginBottom = "4px";
-    const text = makeLinkedLine(suggestion.isFrozen ? TEXT_ERROR : TEXT_GRAY, [
-      makeItemLink(
-        suggestion.name,
-        suggestion.id ?? graph.nodes.get(suggestion.name)?.id,
-        suggestion.isFrozen ? TEXT_ERROR : TEXT_WHITE
-      ),
-      ` ${suggestion.quantity.toLocaleString()} more — ${suggestion.reason}`,
-    ]);
-    text.style.marginBottom = "0";
-    const add = document.createElement("span");
-    add.className = "fh-goal-remove";
-    add.style.color = TEXT_SUCCESS;
-    add.textContent = "+";
-    add.title = `Track ${suggestion.name}`;
-    add.addEventListener("click", async (event) => {
+  const chips = document.createElement("div");
+  chips.className = "fh-chips";
+  const list = document.createElement("div");
+  body.append(chips, list);
+
+  const drawList = (): void => {
+    list.textContent = "";
+    const shown =
+      suggestionFilter === "all"
+        ? [
+            // saved sets first: goals the player has already been keeping
+            ...bySource.set.slice(0, PER_SOURCE_UNFILTERED),
+            ...bySource.mastery.slice(0, PER_SOURCE_UNFILTERED),
+            ...bySource.quest.slice(0, PER_SOURCE_UNFILTERED),
+          ]
+        : bySource[suggestionFilter];
+    for (const chip of chips.children) {
+      (chip as HTMLElement).dataset.active = String(
+        (chip as HTMLElement).dataset.filter === suggestionFilter
+      );
+    }
+    for (const suggestion of shown) {
+      const row = document.createElement("div");
+      row.className = "fh-goal-top";
+      row.style.marginBottom = "4px";
+      const text = makeLinkedLine(
+        suggestion.isFrozen ? TEXT_ERROR : TEXT_GRAY,
+        [
+          makeItemLink(
+            suggestion.name,
+            suggestion.id ?? graph.nodes.get(suggestion.name)?.id,
+            suggestion.isFrozen ? TEXT_ERROR : TEXT_WHITE
+          ),
+          ` ${suggestion.quantity.toLocaleString()} more — ${
+            suggestion.reason
+          }`,
+        ]
+      );
+      text.style.marginBottom = "0";
+      const add = document.createElement("span");
+      add.className = "fh-goal-remove";
+      add.style.color = TEXT_SUCCESS;
+      add.textContent = "+";
+      add.title = `Track ${suggestion.name}`;
+      add.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await addGoal(suggestion.name, suggestion.quantity);
+        rerender();
+      });
+      row.append(text, add);
+      list.append(row);
+    }
+  };
+
+  const select = (filter: SuggestionFilter): void => {
+    suggestionFilter = filter;
+    drawList();
+  };
+  for (const entry of FILTER_LABELS) {
+    const count = entry.id === "all" ? total : bySource[entry.id].length;
+    // a category with nothing in it is not worth a chip
+    if (count === 0) {
+      continue;
+    }
+    const chip = document.createElement("span");
+    chip.className = "fh-chip";
+    chip.dataset.filter = entry.id;
+    chip.textContent = `${entry.label} ${count}`;
+    chip.addEventListener("click", (event) => {
       event.stopPropagation();
-      await addGoal(suggestion.name, suggestion.quantity);
-      rerender();
+      select(entry.id);
     });
-    row.append(text, add);
-    body.append(row);
+    chips.append(chip);
   }
+  // a filter left over from a previous draw may no longer have any entries
+  if (suggestionFilter !== "all" && bySource[suggestionFilter].length === 0) {
+    suggestionFilter = "all";
+  }
+  drawList();
 };
 
 const renderCraftworks = (
@@ -757,9 +872,60 @@ const renderCraftworks = (
 };
 
 // Loading a set is destructive: it clears the queue first. So it takes two
-// presses -- the second one states exactly how many items it will clear -- and
-// on failure it offers to put the old queue back, which the game's own button
+// presses -- the second states exactly how many items it will clear -- and on
+// failure it offers to put the old queue back, which the game's own button
 // cannot do because it never knew what was there.
+const makeSetLoadControl = (
+  set: { id: string; name: string },
+  context: Context,
+  reload: () => void,
+  onFailure: (node: Node) => void
+): HTMLAnchorElement => {
+  const slots = context.craftworks?.slots ?? [];
+  const action = document.createElement("a");
+  action.href = "#";
+  action.style.color = TEXT_SUCCESS;
+  action.style.fontSize = "12px";
+  action.style.textDecoration = "underline";
+  action.textContent = "load";
+  let armed = false;
+  action.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!armed) {
+      armed = true;
+      action.textContent = `confirm — clears ${slots.length} item${
+        slots.length === 1 ? "" : "s"
+      }`;
+      action.style.color = TEXT_WARNING;
+      return;
+    }
+    action.textContent = "loading…";
+    action.style.color = TEXT_GRAY;
+    const result = await activateSet(set.id, slots);
+    if (result.ok) {
+      reload();
+      return;
+    }
+    onFailure(makeMutedText(` ${result.message}`));
+    action.textContent = "put the old queue back";
+    action.style.color = TEXT_ERROR;
+    action.addEventListener(
+      "click",
+      async (undoEvent) => {
+        undoEvent.preventDefault();
+        undoEvent.stopPropagation();
+        action.textContent = "restoring…";
+        const restored = await restoreQueue(result.previous);
+        action.textContent = `restored ${restored} of ${result.previous.length}`;
+        reload();
+      },
+      { once: true }
+    );
+  });
+  return action;
+};
+
 const renderSetLoader = (
   body: HTMLElement,
   context: Context,
@@ -776,48 +942,59 @@ const renderSetLoader = (
   const line = makeLinkedLine(TEXT_SUCCESS, [
     `“${recommended.name}” matches your ${recommended.goalName} goal — `,
   ]);
-  const action = document.createElement("a");
-  action.href = "#";
-  action.style.color = TEXT_SUCCESS;
-  action.style.textDecoration = "underline";
-  action.textContent = "load it";
-  let armed = false;
-  action.addEventListener("click", async (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!armed) {
-      armed = true;
-      action.textContent = `confirm — clears ${craftworks.slots.length} item${
-        craftworks.slots.length === 1 ? "" : "s"
-      }`;
-      action.style.color = TEXT_WARNING;
-      return;
-    }
-    action.textContent = "loading…";
-    action.style.color = TEXT_GRAY;
-    const result = await activateSet(recommended.id, craftworks.slots);
-    if (result.ok) {
-      reload();
-      return;
-    }
-    line.append(makeMutedText(` ${result.message}`));
-    action.textContent = "put the old queue back";
-    action.style.color = TEXT_ERROR;
-    action.addEventListener(
-      "click",
-      async (undoEvent) => {
-        undoEvent.preventDefault();
-        undoEvent.stopPropagation();
-        action.textContent = "restoring…";
-        const restored = await restoreQueue(result.previous);
-        action.textContent = `restored ${restored} of ${result.previous.length}`;
-        reload();
-      },
-      { once: true }
-    );
-  });
-  line.append(action);
+  line.append(
+    makeSetLoadControl(recommended, context, reload, (node) =>
+      line.append(node)
+    )
+  );
   body.append(line);
+};
+
+// Every saved set, loadable in place. The recommendation alone was too easy to
+// miss: it only appears when a tracked goal happens to share a name with a set,
+// so a queue of location loadouts showed nothing at all.
+const renderSets = (
+  body: HTMLElement,
+  context: Context,
+  reload: () => void
+): void => {
+  const { craftworks, goals, itemNames } = context;
+  if (!craftworks || craftworks.sets.length === 0) {
+    body.append(
+      makeLinkedLine(TEXT_GRAY, ["No saved sets found on the Craftworks page."])
+    );
+    return;
+  }
+  const recommended = getRecommendedSet(goals, craftworks.sets, itemNames);
+  for (const set of craftworks.sets) {
+    const row = document.createElement("div");
+    row.className = "fh-goal-top";
+    row.style.marginBottom = "5px";
+    const isRecommended = recommended?.id === set.id;
+    let color = TEXT_GRAY;
+    if (set.isActive) {
+      color = TEXT_WHITE;
+    } else if (isRecommended) {
+      color = TEXT_SUCCESS;
+    }
+    let suffix = "";
+    if (set.isActive) {
+      suffix = " · loaded";
+    } else if (isRecommended) {
+      suffix = ` · matches your ${recommended?.goalName} goal`;
+    }
+    const label = makeLinkedLine(color, [`${set.name}${suffix}`]);
+    label.style.marginBottom = "0";
+    row.append(label);
+    // reloading the set already in place would re-run a destructive activation
+    // for no change
+    if (!set.isActive) {
+      row.append(
+        makeSetLoadControl(set, context, reload, (node) => label.append(node))
+      );
+    }
+    body.append(row);
+  }
 };
 
 // One button and one panel for the whole session, hung off document.body.
@@ -873,15 +1050,28 @@ const ensurePanel = (): void => {
         (tab as HTMLElement).dataset.tab === active
       );
     }
-    if (active === "now") {
-      renderNow(body, context);
-    } else if (active === "goals") {
-      renderGoals(body, context, () => {
-        // a removed goal changes the list itself, so reload before redrawing
-        load(false);
-      });
-    } else {
-      renderCraftworks(body, context, () => load(true));
+    switch (active) {
+      case "now": {
+        renderNow(body, context);
+
+        break;
+      }
+      case "goals": {
+        renderGoals(body, context, () => {
+          // a removed goal changes the list itself, so reload before redrawing
+          load(false);
+        });
+
+        break;
+      }
+      case "sets": {
+        renderSets(body, context, () => load(true));
+
+        break;
+      }
+      default: {
+        renderCraftworks(body, context, () => load(true));
+      }
     }
   };
 
