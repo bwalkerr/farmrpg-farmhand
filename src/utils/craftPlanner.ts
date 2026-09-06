@@ -1,3 +1,4 @@
+import { isUnlimited, NO_UNLIMITED, UnlimitedItems } from "~/utils/unlimited";
 import { Item } from "~/api/buddyfarm/types";
 
 // A recipe tree deep enough to reach raw drops from anything in the game, with
@@ -58,7 +59,8 @@ export const planCraft = (
   graph: RecipeGraph,
   target: string,
   quantity: number,
-  inventory: Record<string, number>
+  inventory: Record<string, number>,
+  unlimited: UnlimitedItems = NO_UNLIMITED
 ): CraftPlan => {
   const pool: Record<string, number> = { ...inventory };
   const spend: Record<string, number> = {};
@@ -101,6 +103,11 @@ export const planCraft = (
     }
     const remaining = want - onHand;
     if (remaining <= 0) {
+      return;
+    }
+    // a perk buys this on demand, so the shortfall is not one the player has
+    // to go and solve
+    if (isUnlimited(unlimited, name)) {
       return;
     }
     const node = nodes.get(name);
@@ -171,10 +178,12 @@ export const getMaxCraftable = (
   graph: RecipeGraph,
   target: string,
   inventory: Record<string, number>,
+  unlimited: UnlimitedItems = NO_UNLIMITED,
   limit = 10_000
 ): number => {
   const fits = (quantity: number): boolean =>
-    planCraft(graph, target, quantity, inventory).missing.length === 0;
+    planCraft(graph, target, quantity, inventory, unlimited).missing.length ===
+    0;
   if (!fits(1)) {
     return 0;
   }

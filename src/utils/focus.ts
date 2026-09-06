@@ -1,3 +1,4 @@
+import { isUnlimited, NO_UNLIMITED, UnlimitedItems } from "./unlimited";
 import {
   MissingItem,
   planCraft,
@@ -35,7 +36,8 @@ export interface GoalStatus {
 export const getGoalStatuses = (
   graph: RecipeGraph,
   goals: Goal[],
-  inventory: Record<string, number>
+  inventory: Record<string, number>,
+  unlimited: UnlimitedItems = NO_UNLIMITED
 ): GoalStatus[] => {
   const statuses: GoalStatus[] = [];
   for (const goal of goals) {
@@ -44,6 +46,9 @@ export const getGoalStatuses = (
       // a quest wants the item itself, so spend inventory first and only then
       // fall back to crafting — planCraft always builds its target in full,
       // which is right for "make me N more" and wrong for "hand over N"
+      if (isUnlimited(unlimited, need.name)) {
+        continue;
+      }
       const held = inventory[need.name] ?? 0;
       const shortfall = need.quantity - held;
       if (shortfall <= 0) {
@@ -54,7 +59,7 @@ export const getGoalStatuses = (
         // craft the shortfall, spending everything except what this need
         // already took off the shelf
         const pool = { ...inventory, [need.name]: 0 };
-        const plan = planCraft(graph, need.name, shortfall, pool);
+        const plan = planCraft(graph, need.name, shortfall, pool, unlimited);
         for (const entry of plan.missing) {
           missing.set(
             entry.name,

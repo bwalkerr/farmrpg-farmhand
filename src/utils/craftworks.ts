@@ -1,3 +1,5 @@
+import { isUnlimited, NO_UNLIMITED, UnlimitedItems } from "./unlimited";
+
 // Reading the Craftworks queue and reasoning about it, kept free of rendering
 // and of any import that needs a browser so it can be unit-tested directly.
 //
@@ -98,6 +100,8 @@ export interface Advice {
   paused: Slot[];
   // blockers nothing in the queue produces — the only ones worth going out for
   roots: Blocker[];
+  // blockers a perk buys on demand, so they resolve themselves
+  supplied: Blocker[];
   // blockers an earlier slot already makes, so they clear on their own
   upstream: Blocker[];
   working: Slot[];
@@ -111,7 +115,11 @@ export interface Advice {
 // an earlier slot already produces will clear itself once that slot runs, while
 // one nothing in the queue makes is the actual reason the queue is stalled and
 // the only kind worth spending explores on.
-export const adviseOnSlots = (slots: Slot[], cap?: number): Advice => {
+export const adviseOnSlots = (
+  slots: Slot[],
+  cap?: number,
+  unlimited: UnlimitedItems = NO_UNLIMITED
+): Advice => {
   const positionByName = new Map(slots.map((slot) => [slot.name, slot]));
   const advice: Advice = {
     blockers: new Map(),
@@ -119,6 +127,7 @@ export const adviseOnSlots = (slots: Slot[], cap?: number): Advice => {
     ordering: [],
     paused: [],
     roots: [],
+    supplied: [],
     upstream: [],
     working: [],
   };
@@ -159,6 +168,9 @@ export const adviseOnSlots = (slots: Slot[], cap?: number): Advice => {
       !advice.paused.includes(blocker.producer);
     if (isLive) {
       advice.upstream.push(blocker);
+    } else if (isUnlimited(unlimited, blocker.name)) {
+      // a perk buys this on demand, so it is not something to go and get
+      advice.supplied.push(blocker);
     } else {
       advice.roots.push(blocker);
     }
@@ -192,11 +204,15 @@ export const planCraftworksQueue = (
   plan: { steps: { name: string; quantity: number }[]; target: string },
   inventory: Record<string, number>,
   cap: number | undefined,
-  maxSlots: number
+  maxSlots: number,
+  unlimited: UnlimitedItems = NO_UNLIMITED
 ): QueueProposal => {
   const dropped: { name: string; reason: string }[] = [];
   const eligible: { name: string; quantity: number }[] = [];
   for (const step of plan.steps) {
+    if (isUnlimited(unlimited, step.name)) {
+      continue;
+    }
     if (cap !== undefined && (inventory[step.name] ?? 0) >= cap) {
       dropped.push({ name: step.name, reason: "already at cap" });
       continue;
@@ -216,4 +232,59 @@ export const planCraftworksQueue = (
     })),
     targetOmitted: !kept.some((step) => step.name === plan.target),
   };
+};
+
+export interface QueueSuggestion {
+  action: "add" | "drop";
+  name: string;
+  // where in the proposed order an addition belongs, 1-based
+  position?: number;
+  reason: string;
+}
+
+// What to change about the queue to serve a set of goals.
+//
+// `desired` arrives deepest-first, which is the order the queue wants, so
+// additions keep that order and land above whatever consumes them. Slots
+// sitting at the cap are proposed for removal first, since freeing one is what
+// makes room for an addition — a queue that is nominally full is usually not.
+export const suggestQueueChanges = (
+  desired: { name: string; quantity: number }[],
+  slots: Slot[],
+  inventory: Record<string, number>,
+  cap: number | undefined,
+  maxSlots: number,
+  unlimited: UnlimitedItems = NO_UNLIMITED
+): QueueSuggestion[] => {
+  const queued = new Set(slots.map((slot) => slot.name));
+  const suggestions: QueueSuggestion[] = [];
+  const dead = slots.filter(
+    (slot) => cap !== undefined && slot.inventory >= cap
+  );
+  for (const slot of dead) {
+    suggestions.push({
+      action: "drop",
+      name: slot.name,
+      reason: "at cap, so the slot never crafts",
+    });
+  }
+  const room = Math.max(0, maxSlots - slots.length) + dead.length;
+  if (room === 0) {
+    return suggestions;
+  }
+  const additions = desired.filter(
+    (entry) =>
+      !queued.has(entry.name) &&
+      !isUnlimited(unlimited, entry.name) &&
+      !(cap !== undefined && (inventory[entry.name] ?? 0) >= cap)
+  );
+  for (const [index, entry] of additions.slice(0, room).entries()) {
+    suggestions.push({
+      action: "add",
+      name: entry.name,
+      position: index + 1,
+      reason: `${entry.quantity.toLocaleString()} needed`,
+    });
+  }
+  return suggestions;
 };

@@ -50,6 +50,7 @@ export enum SettingId {
   QUEST_COLLAPSE = "questCollapse",
   QUEST_TAGGING = "questTagging",
   QUICKSELL_SAFELY = "quicksellSafely",
+  UNLIMITED_ITEMS = "unlimitedItems",
   UPDATE_AT_TOP = "updateAtTop",
   VAULT_SOLVER = "vaultSolver",
 }
