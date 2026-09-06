@@ -1,6 +1,7 @@
 import {
   adviseOnSlots,
   getMaxSlots,
+  parseSavedSets,
   parseSlots,
   Slot,
 } from "~/utils/craftworks";
@@ -19,9 +20,11 @@ import {
   getDropSources,
   RecipeGraph,
 } from "~/utils/craftPlanner";
+import { getBasicItems, locationDataState } from "~/api/buddyfarm/api";
 import { getCurrentPage, Page } from "~/utils/page";
+import { getGoals } from "~/utils/goals";
+import { getRecommendedSet } from "~/utils/suggestions";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
-import { locationDataState } from "~/api/buddyfarm/api";
 import {
   makeItemLink,
   makeLinkedLine,
@@ -67,6 +70,62 @@ const makeHeading = (text: string): HTMLDivElement => {
 const formatHits = (hits: number): string =>
   hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
 
+// Recommend the saved set that matches a tracked goal, and offer to load it by
+// clicking the game's own button.
+//
+// The activation is deliberately NOT reimplemented. The game fires
+// `worker.php?go=removeallcw` -- which wipes the whole queue -- then activates
+// the set 500ms later, and the wipe has no failure handler: if the second call
+// never lands, the queue is simply gone. Driving the real button runs the
+// game's own sequence, timing and refresh instead of a copy that could drift.
+const renderSetRecommendation = async (
+  container: HTMLElement
+): Promise<void> => {
+  const currentPage = getCurrentPage();
+  if (!currentPage) {
+    return;
+  }
+  const sets = parseSavedSets(currentPage);
+  if (sets.length === 0) {
+    return;
+  }
+  const [goals, items] = await Promise.all([getGoals(), getBasicItems()]);
+  const recommended = getRecommendedSet(
+    goals,
+    sets,
+    items.map((item) => item.name)
+  );
+  if (!recommended) {
+    return;
+  }
+  const button = currentPage.querySelector<HTMLElement>(
+    `.activatecwsetbtn[data-id="${recommended.id}"]`
+  );
+  const line = makeLinkedLine(TEXT_SUCCESS, [
+    `Your “${recommended.name}” set matches your ${recommended.goalName} goal.`,
+  ]);
+  container.append(line);
+  if (!button) {
+    return;
+  }
+  const load = document.createElement("a");
+  load.href = "#";
+  load.textContent = "Load that set";
+  load.style.color = TEXT_SUCCESS;
+  load.style.fontSize = "12px";
+  load.style.textDecoration = "underline";
+  load.addEventListener("click", (event) => {
+    event.preventDefault();
+    // one deliberate press, forwarded to the game's own control
+    button.click();
+  });
+  const warning = makeLinkedLine(TEXT_GRAY, [
+    "— loading a set clears the current queue first ",
+  ]);
+  warning.append(load);
+  container.append(warning);
+};
+
 const renderAdvice = async (
   container: HTMLElement,
   slots: Slot[],
@@ -76,6 +135,7 @@ const renderAdvice = async (
   const snapshot = await inventoryState.get();
   const cap = snapshot?.cap;
   const advice = adviseOnSlots(slots, cap, unlimited);
+  await renderSetRecommendation(container);
 
   const summary = document.createElement("div");
   summary.style.color = TEXT_GRAY;

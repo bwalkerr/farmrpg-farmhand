@@ -188,3 +188,34 @@ export const getSetSuggestions = (
     )
     .slice(0, limit);
 };
+
+export interface SetRecommendation {
+  goalName: string;
+  id: string;
+  name: string;
+}
+
+// The saved set that matches a tracked goal and is not already loaded.
+//
+// Matching runs the same name inference as getSetSuggestions, in reverse: the
+// player named a set after the thing it builds, so a goal for that thing means
+// that set is the one to load. The active set is excluded because recommending
+// it would be advice to re-run a destructive activation for no change.
+export const getRecommendedSet = (
+  goals: TrackedGoal[],
+  sets: { id: string; isActive: boolean; name: string }[],
+  itemNames: Iterable<string>
+): SetRecommendation | undefined => {
+  const names = [...itemNames];
+  const wanted = new Set(goals.map((goal) => goal.name.toLowerCase()));
+  for (const set of sets) {
+    if (set.isActive) {
+      continue;
+    }
+    const item = matchSetNameToItem(set.name, names);
+    if (item && wanted.has(item.toLowerCase())) {
+      return { goalName: item, id: set.id, name: set.name };
+    }
+  }
+  return undefined;
+};

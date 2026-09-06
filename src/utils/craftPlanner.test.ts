@@ -9,6 +9,7 @@ import {
   getFrozenMastery,
   getMasterySuggestions,
   getQuestSuggestions,
+  getRecommendedSet,
   getSetSuggestions,
   matchSetNameToItem,
 } from "./suggestions";
@@ -750,6 +751,41 @@ console.info("saved set names: Reed's real 12 sets");
       {}
     ).map((entry) => entry.name),
     ["Fancy Pipe", "Lantern"]
+  );
+}
+
+console.info("getRecommendedSet");
+{
+  const items = ["Fancy Guitar", "Fancy Table", "Lantern"];
+  const sets = [
+    { id: "341449", isActive: true, name: "Fancy Guitar" },
+    { id: "341447", isActive: false, name: "Fancy table" },
+    { id: "336011", isActive: false, name: "explore - highland hills" },
+  ];
+  check(
+    "a goal picks the set named after it",
+    getRecommendedSet(
+      [{ addedAt: 0, name: "Fancy Table", quantity: 1 }],
+      sets,
+      items
+    ),
+    { goalName: "Fancy Table", id: "341447", name: "Fancy table" }
+  );
+  // recommending the loaded set would be advice to re-run a destructive
+  // activation for no change
+  check(
+    "the active set is never recommended",
+    getRecommendedSet(
+      [{ addedAt: 0, name: "Fancy Guitar", quantity: 1 }],
+      sets,
+      items
+    ),
+    undefined
+  );
+  check(
+    "no goal, no recommendation",
+    getRecommendedSet([], sets, items),
+    undefined
   );
 }
 
