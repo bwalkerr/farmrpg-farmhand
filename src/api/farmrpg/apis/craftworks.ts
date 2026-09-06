@@ -74,7 +74,8 @@ export interface ActivationResult {
 // rather than forwarding a click: the copy is strictly safer than the original.
 export const activateSet = async (
   setId: string,
-  previous: Slot[]
+  previous: Slot[],
+  autoPlay = false
 ): Promise<ActivationResult> => {
   try {
     await postWorker(new URLSearchParams({ go: "removeallcw" }));
@@ -106,8 +107,32 @@ export const activateSet = async (
       previous,
     };
   }
+  if (autoPlay) {
+    // a freshly loaded set is no use sitting paused, and whether it arrives
+    // paused depends on how the set was saved -- so assert it either way
+    try {
+      await postWorker(new URLSearchParams({ go: "playallcw" }));
+    } catch {
+      // the set did load; failing to start it is not worth failing the whole
+      // operation over, and the queue toggle can start it
+    }
+  }
   await craftworksState.get({ ignoreCache: true });
   return { message: "Set loaded.", ok: true, previous };
+};
+
+// Start or stop every slot. Neither call takes parameters, and both are
+// reversible, so this needs no confirmation the way loading a set does.
+export const setQueueRunning = async (play: boolean): Promise<boolean> => {
+  try {
+    const result = await postWorker(
+      new URLSearchParams({ go: play ? "playallcw" : "pauseallcw" })
+    );
+    await craftworksState.get({ ignoreCache: true });
+    return result === "success" || result === "";
+  } catch {
+    return false;
+  }
 };
 
 // Put a queue back, in order. Appending each item to the bottom reproduces the

@@ -3,6 +3,7 @@ import {
   CraftworksSnapshot,
   craftworksState,
   restoreQueue,
+  setQueueRunning,
 } from "~/api/farmrpg/apis/craftworks";
 import {
   addGoal,
@@ -780,6 +781,37 @@ const renderSuggestions = (
   drawList();
 };
 
+// Start/stop for the whole queue. Both calls are reversible and take no
+// parameters, so unlike loading a set this needs no confirmation.
+const makeQueueToggle = (
+  craftworks: CraftworksSnapshot,
+  reload: () => void
+): HTMLAnchorElement => {
+  const running = craftworks.slots.filter((slot) => !slot.isPaused).length;
+  const isRunning = running > 0;
+  const toggle = document.createElement("a");
+  toggle.href = "#";
+  toggle.style.fontSize = "11px";
+  toggle.style.whiteSpace = "nowrap";
+  toggle.style.textDecoration = "underline";
+  toggle.style.color = isRunning ? TEXT_WARNING : TEXT_SUCCESS;
+  toggle.textContent = isRunning ? "pause all" : "start all";
+  toggle.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggle.textContent = isRunning ? "pausing…" : "starting…";
+    toggle.style.color = TEXT_GRAY;
+    const ok = await setQueueRunning(!isRunning);
+    if (!ok) {
+      toggle.textContent = "failed — try again";
+      toggle.style.color = TEXT_ERROR;
+      return;
+    }
+    reload();
+  });
+  return toggle;
+};
+
 const renderCraftworks = (
   body: HTMLElement,
   context: Context,
@@ -803,12 +835,19 @@ const renderCraftworks = (
   }
   const maxSlots = craftworks.maxSlots ?? craftworks.slots.length;
   const free = maxSlots - craftworks.slots.length;
-  body.append(
-    makeLinkedLine(advice.working.length > 0 ? TEXT_GRAY : TEXT_WARNING, [
+  const summary = document.createElement("div");
+  summary.className = "fh-goal-top";
+  summary.style.marginBottom = "4px";
+  const summaryText = makeLinkedLine(
+    advice.working.length > 0 ? TEXT_GRAY : TEXT_WARNING,
+    [
       `${advice.working.length} of ${craftworks.slots.length} slots crafting`,
       free > 0 ? `, ${free} free` : "",
-    ])
+    ]
   );
+  summaryText.style.marginBottom = "0";
+  summary.append(summaryText, makeQueueToggle(craftworks, reload));
+  body.append(summary);
 
   for (const slot of craftworks.slots) {
     const isDead = advice.dead.includes(slot);
@@ -939,7 +978,8 @@ const makeSetLoadControl = (
     }
     action.textContent = "loading…";
     action.style.color = TEXT_GRAY;
-    const result = await activateSet(set.id, slots);
+    // a set you just chose should start working immediately
+    const result = await activateSet(set.id, slots, true);
     if (result.ok) {
       reload();
       return;
