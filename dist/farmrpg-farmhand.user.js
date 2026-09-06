@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.24
+// @version 1.1.25
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -448,6 +448,7 @@ exports.craftworksState = new state_1.CachedState(state_1.StorageKey.CRAFTWORKS,
     }
     return {
         maxSlots: (0, craftworks_1.getMaxSlots)(response.body),
+        sets: (0, craftworks_1.parseSavedSets)(response.body),
         slots,
         updatedAt: Date.now(),
     };
@@ -2753,13 +2754,13 @@ const craftworks_1 = __webpack_require__(7831);
 const theme_1 = __webpack_require__(1178);
 const craftworks_2 = __webpack_require__(920);
 const recipes_1 = __webpack_require__(498);
+const api_1 = __webpack_require__(3413);
 const suggestions_1 = __webpack_require__(9262);
 const focus_1 = __webpack_require__(7167);
 const requests_1 = __webpack_require__(3300);
 const quests_1 = __webpack_require__(303);
 const settings_1 = __webpack_require__(126);
 const inventory_1 = __webpack_require__(4514);
-const api_1 = __webpack_require__(3413);
 const gameLinks_1 = __webpack_require__(1616);
 const mastery_1 = __webpack_require__(283);
 const promise_1 = __webpack_require__(6762);
@@ -2991,12 +2992,13 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d, _e, _f;
     const settings = yield (0, settings_1.getSettingValues)();
     const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_a = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _a !== void 0 ? _a : ""));
-    const [snapshot, craftworks, quests, goals, mastery] = yield Promise.all([
+    const [snapshot, craftworks, quests, goals, mastery, basicItems] = yield Promise.all([
         (0, promise_1.orUndefined)(inventory_1.inventoryState.get({ ignoreCache: force })),
         (0, promise_1.orUndefined)(craftworks_2.craftworksState.get({ ignoreCache: force })),
         fetchActiveQuests(),
         (0, goals_1.getGoals)(),
         (0, promise_1.orUndefined)(mastery_1.masteryState.get({ ignoreCache: force })),
+        (0, promise_1.orUndefined)((0, api_1.getBasicItems)()),
     ]);
     const inventory = (_b = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _b !== void 0 ? _b : {};
     const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
@@ -3017,6 +3019,7 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         goals,
         graph,
         inventory,
+        itemNames: (basicItems !== null && basicItems !== void 0 ? basicItems : []).map((item) => item.name),
         mastery: (_e = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _e !== void 0 ? _e : [],
         questGoals,
         statuses: (0, focus_1.getGoalStatuses)(graph, (_f = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _f !== void 0 ? _f : [], inventory, unlimited),
@@ -3168,11 +3171,14 @@ const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 
 // of entries and the tab would stop being a place to look for what matters, so
 // the player promotes the few they actually intend to chase.
 const renderSuggestions = (body, context, rerender) => {
-    var _a, _b, _c;
-    const { cap, goals, graph, inventory, mastery, questGoals } = context;
+    var _a, _b, _c, _d;
+    const { cap, craftworks, goals, graph, inventory, itemNames, mastery, questGoals, } = context;
     const suggestions = [
+        // the player's own saved sets come first: a set named after an item is a
+        // goal they have already been keeping by hand
+        ...(0, suggestions_1.getSetSuggestions)((_a = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _a !== void 0 ? _a : [], itemNames, goals, inventory, 4),
         ...(0, suggestions_1.getMasterySuggestions)(mastery, inventory, cap, goals, 4),
-        ...(0, suggestions_1.getQuestSuggestions)((_a = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _a !== void 0 ? _a : [], inventory, goals, 3),
+        ...(0, suggestions_1.getQuestSuggestions)((_b = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _b !== void 0 ? _b : [], inventory, goals, 3),
     ];
     if (suggestions.length === 0) {
         return;
@@ -3183,7 +3189,7 @@ const renderSuggestions = (body, context, rerender) => {
         row.className = "fh-goal-top";
         row.style.marginBottom = "4px";
         const text = (0, gameLinks_1.makeLinkedLine)(suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_GRAY, [
-            (0, gameLinks_1.makeItemLink)(suggestion.name, (_b = suggestion.id) !== null && _b !== void 0 ? _b : (_c = graph.nodes.get(suggestion.name)) === null || _c === void 0 ? void 0 : _c.id, suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_WHITE),
+            (0, gameLinks_1.makeItemLink)(suggestion.name, (_c = suggestion.id) !== null && _c !== void 0 ? _c : (_d = graph.nodes.get(suggestion.name)) === null || _d === void 0 ? void 0 : _d.id, suggestion.isFrozen ? theme_1.TEXT_ERROR : theme_1.TEXT_WHITE),
             ` ${suggestion.quantity.toLocaleString()} more — ${suggestion.reason}`,
         ]);
         text.style.marginBottom = "0";
@@ -3241,6 +3247,10 @@ const renderCraftworks = (body, context) => {
             parts.push(" — crafting");
         }
         body.append((0, gameLinks_1.makeLinkedLine)(color, parts));
+    }
+    const active = craftworks.sets.find((set) => set.isActive);
+    if (active) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`active set: ${active.name}`]));
     }
     const frozen = (0, suggestions_1.getFrozenMastery)(mastery, inventory, cap);
     if (frozen.length > 0) {
@@ -9082,7 +9092,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.24" !== void 0 ? "1.1.24" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.25" !== void 0 ? "1.1.25" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -9911,7 +9921,7 @@ exports.planSourcing = planSourcing;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.suggestQueueChanges = exports.planCraftworksQueue = exports.adviseOnSlots = exports.getMaxSlots = exports.parseMaxSlots = exports.parseSlots = void 0;
+exports.parseSavedSets = exports.suggestQueueChanges = exports.planCraftworksQueue = exports.adviseOnSlots = exports.getMaxSlots = exports.parseMaxSlots = exports.parseSlots = void 0;
 const unlimited_1 = __webpack_require__(4808);
 // Reading the Craftworks queue and reasoning about it, kept free of rendering
 // and of any import that needs a browser so it can be unit-tested directly.
@@ -10120,6 +10130,34 @@ const suggestQueueChanges = (desired, slots, inventory, cap, maxSlots, unlimited
     return suggestions;
 };
 exports.suggestQueueChanges = suggestQueueChanges;
+// The saved Craftworks sets listed under "My Item Sets".
+//
+// Only names, ids and which one is active are readable. Each row does carry a
+// `data-items` attribute, but it holds the *current* queue rather than that
+// set's contents — identical across every row — and it sits inside an HTML
+// comment. Reading a set's real contents would mean activating it, which
+// overwrites the live queue, so everything here works from the name alone.
+const parseSavedSets = (root) => {
+    var _a, _b;
+    const sets = [];
+    for (const link of root.querySelectorAll("a.activatecwsetbtn[data-id]")) {
+        const name = (_a = link.textContent) === null || _a === void 0 ? void 0 : _a.trim();
+        const { id } = link.dataset;
+        if (!name || !id || sets.some((set) => set.id === id)) {
+            continue;
+        }
+        const title = link.closest(".item-title");
+        sets.push({
+            id,
+            // the game paints the active set teal and prefixes a check icon
+            isActive: /color:\s*teal/i.test((_b = title === null || title === void 0 ? void 0 : title.getAttribute("style")) !== null && _b !== void 0 ? _b : "") ||
+                link.querySelector(".fa-check") !== null,
+            name,
+        });
+    }
+    return sets;
+};
+exports.parseSavedSets = parseSavedSets;
 
 
 /***/ }),
@@ -11499,7 +11537,7 @@ exports.CachedState = CachedState;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getQuestSuggestions = exports.getMasterySuggestions = exports.getFrozenMastery = void 0;
+exports.getSetSuggestions = exports.matchSetNameToItem = exports.getQuestSuggestions = exports.getMasterySuggestions = exports.getFrozenMastery = void 0;
 // Mastery is earned by acquiring an item, and an item sitting at the inventory
 // cap cannot be acquired — crafting stalls and drops are discarded. So a capped
 // item with mastery in progress is not merely a wasted Craftworks slot, it is
@@ -11577,6 +11615,78 @@ const getQuestSuggestions = (goals, inventory, tracked, limit = 5) => {
         .slice(0, limit);
 };
 exports.getQuestSuggestions = getQuestSuggestions;
+// Words players append to a set name that is otherwise just the thing they are
+// building — "Lantern prereqs" is a Lantern goal.
+const SET_NAME_SUFFIXES = [
+    "prereqs",
+    "prereq",
+    "prereqs.",
+    "parts",
+    "mats",
+    "materials",
+    "chain",
+    "line",
+];
+// Work out which item a saved Craftworks set is aiming at, from its name alone.
+//
+// Set contents are unreadable without activating the set, so the name is all
+// there is. Matching is case-insensitive because players are casual about it
+// ("Fancy table"), and a trailing qualifier is stripped so "Lantern prereqs"
+// still resolves. Anything that does not resolve to a real item — a location
+// loadout like "Explore - Mount Banon" — simply returns undefined.
+const matchSetNameToItem = (setName, itemNames) => {
+    const byLower = new Map();
+    for (const name of itemNames) {
+        byLower.set(name.toLowerCase(), name);
+    }
+    const cleaned = setName.trim().toLowerCase();
+    const direct = byLower.get(cleaned);
+    if (direct) {
+        return direct;
+    }
+    for (const suffix of SET_NAME_SUFFIXES) {
+        if (cleaned.endsWith(` ${suffix}`)) {
+            const trimmed = cleaned.slice(0, -suffix.length - 1).trim();
+            const match = byLower.get(trimmed);
+            if (match) {
+                return match;
+            }
+        }
+    }
+    return undefined;
+};
+exports.matchSetNameToItem = matchSetNameToItem;
+// Saved sets named after an item are goals the player has already been keeping
+// by hand; surface them as suggestions so the tool can see what they are
+// building. Inference from a name, so it is offered rather than adopted.
+const getSetSuggestions = (sets, itemNames, tracked, inventory, limit = 4) => {
+    var _a;
+    const already = new Set(tracked.map((goal) => goal.name));
+    const names = [...itemNames];
+    const seen = new Set();
+    const suggestions = [];
+    for (const set of sets) {
+        const item = (0, exports.matchSetNameToItem)(set.name, names);
+        if (!item || already.has(item) || seen.has(item)) {
+            continue;
+        }
+        seen.add(item);
+        suggestions.push({
+            name: item,
+            quantity: Math.max(1, 1 - ((_a = inventory[item]) !== null && _a !== void 0 ? _a : 0)),
+            reason: set.isActive
+                ? `your active set “${set.name}”`
+                : `your saved set “${set.name}”`,
+            source: "set",
+        });
+    }
+    // the set currently loaded is the one being worked on right now
+    return suggestions
+        .sort((a, b) => Number(b.reason.includes("active")) -
+        Number(a.reason.includes("active")))
+        .slice(0, limit);
+};
+exports.getSetSuggestions = getSetSuggestions;
 
 
 /***/ }),
