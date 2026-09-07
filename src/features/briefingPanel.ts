@@ -25,7 +25,13 @@ import {
 } from "~/utils/theme";
 import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
-import { getBasicItems, locationDataState } from "~/api/buddyfarm/api";
+import {
+  getBasicItems,
+  getLocationEntries,
+  locationDataState,
+  LocationRef,
+} from "~/api/buddyfarm/api";
+import { getCurrentPage, Page } from "~/utils/page";
 import {
   getFrozenMastery,
   getMasterySuggestions,
@@ -52,8 +58,12 @@ import {
   makeQuestLink,
 } from "~/utils/gameLinks";
 import { MasteryEntry, masteryState } from "~/api/farmrpg/apis/mastery";
+import {
+  matchLocationByImage,
+  matchLocationName,
+  parseStamina,
+} from "~/utils/locationAdvice";
 import { orUndefined } from "~/utils/promise";
-import { Page } from "~/utils/page";
 import { parseUnlimitedItems, UnlimitedItems } from "~/utils/unlimited";
 import { planSourcing, RecipeGraph } from "~/utils/craftPlanner";
 
@@ -363,12 +373,70 @@ interface Context {
   goals: TrackedGoal[];
   graph: RecipeGraph;
   inventory: Record<string, number>;
+  // the explore or fishing spot in view, when there is one
+  here?: { location: LocationRef; stamina?: number };
   itemNames: string[];
   mastery: MasteryEntry[];
   questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
   statuses: ReturnType<typeof getGoalStatuses>;
   unlimited: UnlimitedItems;
 }
+
+// Identify the explore or fishing spot in view, if the panel was opened on one.
+//
+// This lives in the panel rather than on the page itself because the panel is
+// the surface that reliably renders: injecting a card into the explore page
+// meant guessing at its structure, and a wrong guess fails silently.
+const getHere = async (): Promise<Context["here"]> => {
+  const page = getCurrentPage();
+  if (!page) {
+    return undefined;
+  }
+  const route = window.location.hash || window.location.pathname;
+  if (!/\b(?:area|fishing)\.php/.test(route)) {
+    return undefined;
+  }
+  const locations = await getLocationEntries();
+  const centre = document.querySelector(".navbar-on-center .center");
+  const title =
+    [...(centre?.childNodes ?? [])]
+      .find((node) => node.nodeType === Node.TEXT_NODE)
+      ?.textContent?.trim() ??
+    centre?.textContent?.trim() ??
+    "";
+  const header = page.querySelector<HTMLImageElement>(
+    "img[src*='/img/items/']"
+  );
+  const name =
+    matchLocationName(
+      title,
+      locations.map((entry) => entry.name)
+    ) ??
+    (header
+      ? matchLocationByImage(header.getAttribute("src") ?? "", locations)
+      : undefined);
+  if (!name) {
+    return undefined;
+  }
+  let location = await orUndefined(locationDataState.get({ query: name }));
+  // entries cached before drop tables existed carry no `drops`, and that cache
+  // lives a week
+  if (location && !location.drops) {
+    location = await orUndefined(
+      locationDataState.get({ query: name, ignoreCache: true })
+    );
+  }
+  if (!location?.drops?.length) {
+    return undefined;
+  }
+  const staminaText = page.querySelector("#stamina")?.textContent ?? "";
+  return {
+    location,
+    stamina:
+      Number(staminaText.replaceAll(",", "").trim()) ||
+      parseStamina(page.textContent ?? ""),
+  };
+};
 
 // Everything the three tabs need, gathered once. Switching tabs re-renders from
 // this rather than re-fetching, so only the refresh control costs requests.
@@ -403,6 +471,7 @@ const loadContext = async (force: boolean): Promise<Context> => {
     advice,
     cap,
     craftworks,
+    here: await getHere(),
     goalProgress: goals.map((goal) =>
       getGoalProgress(graph, goal, inventory, unlimited, mastery?.entries ?? [])
     ),
