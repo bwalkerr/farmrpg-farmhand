@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.42
+// @version 1.1.43
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -9292,11 +9292,27 @@ exports.perkManagment = {
     settings: [SETTING_PERK_MANAGER],
     onPageLoad: (settings) => __awaiter(void 0, void 0, void 0, function* () {
         if (!settings[settings_1.SettingId.PERK_MANAGER]) {
+            // The one silent path there was. With auto manage off nothing switches
+            // and nothing says why, which on a phone is indistinguishable from a
+            // broken reconciler -- and manual equipping from the panel still works,
+            // because that calls activatePerkSet directly, so the setting looks on.
+            (0, perks_1.setPerkStatusNote)("auto manage is off");
             return;
         }
         // page-scoped perk switching, driven by the live page (idempotent, so the
         // SPA's duplicate onPageLoad calls converge instead of racing)
-        yield reconcilePerksForCurrentPage();
+        //
+        // Nothing awaits this feature's onPageLoad, so a throw in here would be an
+        // unhandled rejection: silent, and on a phone there is no console to find
+        // it in. Every other path through the reconciler leaves a note, so this one
+        // does too.
+        try {
+            yield reconcilePerksForCurrentPage();
+        }
+        catch (error) {
+            console.error("Failed to reconcile perks", error);
+            (0, perks_1.setPerkStatusNote)(`reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
         // Mount/refresh the equipped-set indicator AFTER the reconcile, never
         // before: the game rebuilds the bottom bar as you navigate, and the perk
         // state isn't read yet on the very first load, so there'd be nothing to
@@ -9987,7 +10003,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.42" !== void 0 ? "1.1.42" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.43" !== void 0 ? "1.1.43" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
