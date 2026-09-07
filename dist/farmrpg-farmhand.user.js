@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.44
+// @version 1.1.45
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3797,13 +3797,33 @@ const renderPerkSets = (body, context, reload) => {
     if (status.note) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [status.note]));
     }
+    // Activity sets are matched by NAME, case-insensitively and exactly, so a set
+    // called "explore" or "def" is invisible to the reconciler while still being
+    // perfectly equippable by hand below. Without a set named "Default" the
+    // reconciler bails before it switches anything at all, which looks exactly
+    // like auto manage being broken -- so say so here rather than leave it to be
+    // deduced.
+    const activityNames = new Set(Object.values(perks_1.PerkActivity)
+        .filter((activity) => activity !== perks_1.PerkActivity.UNKNOWN)
+        .map((activity) => activity.toLowerCase()));
+    const isActivityName = (name) => activityNames.has(name.trim().toLowerCase());
+    if (!perkSets.some((set) => isActivityName(set.name))) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
+            "none of these names match an activity — nothing can auto-switch",
+        ]));
+    }
+    else if (!perkSets.some((set) => set.name.trim().toLowerCase() === "default")) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
+            'no set named "Default" — the reconciler stops before it switches',
+        ]));
+    }
     for (const set of perkSets) {
         const isOn = status.isConfirmed && status.name === set.name;
         const row = document.createElement("div");
         row.className = "fh-goal-top";
         row.style.marginBottom = "5px";
         const label = (0, gameLinks_1.makeLinkedLine)(isOn ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, [
-            `${set.name}${isOn ? " · on" : ""}`,
+            `${set.name}${isOn ? " · on" : ""}${isActivityName(set.name) ? "" : " · manual only"}`,
         ]);
         label.style.marginBottom = "0";
         row.append(label);
@@ -10050,7 +10070,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.44" !== void 0 ? "1.1.44" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.45" !== void 0 ? "1.1.45" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
