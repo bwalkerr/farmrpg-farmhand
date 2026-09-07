@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.39
+// @version 1.1.40
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3862,6 +3862,7 @@ const ensurePanel = () => {
     perkDot.style.borderRadius = "50%";
     perkDot.style.flexShrink = "0";
     perkDot.style.height = "8px";
+    perkDot.style.marginLeft = "4px";
     perkDot.style.width = "8px";
     const perkLabel = document.createElement("span");
     perkLabel.style.fontSize = "11px";
@@ -3887,12 +3888,14 @@ const ensurePanel = () => {
     };
     paintPerk();
     (0, perks_1.onPerkStatusChange)(paintPerk);
-    heading.append(perkDot, perkLabel);
     const title = document.createElement("div");
     title.textContent = "Briefing";
     title.style.color = theme_1.TEXT_WHITE;
     title.style.fontWeight = "bold";
-    heading.append(title);
+    // name first, then the perk state: the title is what identifies the panel,
+    // and the indicator reads as a status attached to it rather than a label
+    // competing with it
+    heading.append(title, perkDot, perkLabel);
     const refresh = document.createElement("span");
     refresh.className = "fh-briefing-refresh";
     refresh.textContent = "refresh";
@@ -9775,7 +9778,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.39" !== void 0 ? "1.1.39" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.40" !== void 0 ? "1.1.40" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
