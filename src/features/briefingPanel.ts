@@ -404,7 +404,7 @@ const loadContext = async (force: boolean): Promise<Context> => {
     cap,
     craftworks,
     goalProgress: goals.map((goal) =>
-      getGoalProgress(graph, goal, inventory, unlimited)
+      getGoalProgress(graph, goal, inventory, unlimited, mastery?.entries ?? [])
     ),
     goals,
     graph,
@@ -746,7 +746,11 @@ const renderSuggestions = (
       add.title = `Track ${suggestion.name}`;
       add.addEventListener("click", async (event) => {
         event.stopPropagation();
-        await addGoal(suggestion.name, suggestion.quantity);
+        await addGoal(
+          suggestion.name,
+          suggestion.quantity,
+          suggestion.source === "mastery" ? "mastery" : undefined
+        );
         rerender();
       });
       row.append(text, add);
@@ -876,7 +880,7 @@ const renderCraftworks = (
     body.append(makeLinkedLine(color, parts));
   }
 
-  const active = craftworks.sets.find((set) => set.isActive);
+  const active = (craftworks.sets ?? []).find((set) => set.isActive);
   if (active) {
     body.append(makeLinkedLine(TEXT_GRAY, [`active set: ${active.name}`]));
   }
@@ -1012,7 +1016,11 @@ const renderSetLoader = (
   if (!craftworks) {
     return;
   }
-  const recommended = getRecommendedSet(goals, craftworks.sets, itemNames);
+  const recommended = getRecommendedSet(
+    goals,
+    craftworks.sets ?? [],
+    itemNames
+  );
   if (!recommended) {
     return;
   }
@@ -1036,14 +1044,15 @@ const renderSets = (
   reload: () => void
 ): void => {
   const { craftworks, goals, itemNames } = context;
-  if (!craftworks || craftworks.sets.length === 0) {
+  const sets = craftworks?.sets ?? [];
+  if (!craftworks || sets.length === 0) {
     body.append(
       makeLinkedLine(TEXT_GRAY, ["No saved sets found on the Craftworks page."])
     );
     return;
   }
-  const recommended = getRecommendedSet(goals, craftworks.sets, itemNames);
-  for (const set of craftworks.sets) {
+  const recommended = getRecommendedSet(goals, sets, itemNames);
+  for (const set of sets) {
     const row = document.createElement("div");
     row.className = "fh-goal-top";
     row.style.marginBottom = "5px";

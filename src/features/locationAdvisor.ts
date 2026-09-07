@@ -5,6 +5,7 @@ import {
   findLocationSet,
   getLocationAdvice,
   matchLocationByImage,
+  matchLocationName,
   parseStamina,
 } from "~/utils/locationAdvice";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
@@ -87,23 +88,48 @@ const render = async (
   currentPage: HTMLElement,
   settings: Parameters<NonNullable<Feature["onPageLoad"]>>[0]
 ): Promise<void> => {
-  // the page prints no location name; the header picture is the only identifier
+  const locations = await getLocationEntries();
+  // The navbar holds the name — "Mount Banon&nbsp;<a …>info</a>" — so take its
+  // leading text node, which excludes the info link's own label. The header
+  // picture is the fallback; it costs nothing, since buddy.farm's search index
+  // already carries an image per location, but it cannot separate places that
+  // share one (pond.png is both Small Pond and Farm Pond).
+  const centre = document.querySelector(".navbar-on-center .center");
+  const title =
+    [...(centre?.childNodes ?? [])]
+      .find((node) => node.nodeType === Node.TEXT_NODE)
+      ?.textContent?.trim() ??
+    centre?.textContent?.trim() ??
+    "";
   const header = currentPage.querySelector<HTMLImageElement>(
     "img[src*='/img/items/']"
   );
-  if (!header) {
-    return;
-  }
-  const locations = await getLocationEntries();
-  const name = matchLocationByImage(
-    header.getAttribute("src") ?? "",
-    locations
-  );
+  const name =
+    matchLocationName(
+      title,
+      locations.map((entry) => entry.name)
+    ) ??
+    (header
+      ? matchLocationByImage(header.getAttribute("src") ?? "", locations)
+      : undefined);
   if (!name) {
+    console.debug("[Farmhand] could not identify location from", {
+      image: header?.getAttribute("src"),
+      title,
+    });
     return;
   }
-  const location = await orUndefined(locationDataState.get({ query: name }));
-  if (!location || location.drops.length === 0) {
+  let location = await orUndefined(locationDataState.get({ query: name }));
+  // Entries cached by a build that predates drop tables carry no `drops`, and
+  // the cache lives a week, so without this the advisor stays silently dead
+  // until it expires. Refetch once when the shape is old.
+  if (location && !location.drops) {
+    location = await orUndefined(
+      locationDataState.get({ query: name, ignoreCache: true })
+    );
+  }
+  if (!location?.drops?.length) {
+    console.debug("[Farmhand] no drop data for location", name, location);
     return;
   }
 
@@ -133,7 +159,13 @@ const render = async (
 
   const reasons = new Map<string, string[]>();
   const goalMissing = goals.map((goal) => {
-    const progress = getGoalProgress(graph, goal, inventory, unlimited);
+    const progress = getGoalProgress(
+      graph,
+      goal,
+      inventory,
+      unlimited,
+      mastery?.entries ?? []
+    );
     for (const entry of progress.missing) {
       reasons.set(entry.name, [
         ...(reasons.get(entry.name) ?? []),
@@ -161,6 +193,16 @@ const render = async (
     mastery?.entries ?? []
   );
   if (needed.length === 0 && wasted.length === 0) {
+    console.debug("[Farmhand] nothing to report here", {
+      atCap: Object.entries(inventory).filter(
+        ([, count]) => cap !== undefined && count >= cap
+      ).length,
+      blockers: blockers.length,
+      cap,
+      drops: location.drops.length,
+      goals: goals.length,
+      location: name,
+    });
     return;
   }
 

@@ -33,7 +33,10 @@ const config: Configuration = {
   cache: isDevelopment ? { type: "filesystem" } : false,
 
   // build fast source maps in dev
-  devtool: isDevelopment ? "eval-cheap-module-source-map" : "source-map",
+  // "hidden-source-map" still writes the map, but omits the
+  // //# sourceMappingURL comment. A userscript is served on its own, so the
+  // browser cannot resolve that comment and devtools logs a 404 for every load.
+  devtool: isDevelopment ? "eval-cheap-module-source-map" : "hidden-source-map",
 
   devServer: {
     port: PORT,
