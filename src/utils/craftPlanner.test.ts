@@ -34,8 +34,16 @@ import {
   RecipeGraph,
   RecipeNode,
 } from "./craftPlanner";
+import {
+  getNearlyDoneScopes,
+  getScopeRoots,
+  Need,
+  rankNeedBottlenecks,
+  resolveNeeds,
+} from "./needs";
 import { Item } from "~/api/buddyfarm/types";
 import { MasteryEntry } from "~/api/farmrpg/apis/mastery";
+import { needsFromGoal, needsFromTrackedGoals } from "./needAdapters";
 import { parseUnlimitedItems } from "./unlimited";
 
 let failures = 0;
@@ -937,6 +945,285 @@ console.info("a mastery goal is measured by acquisition, not by the shelf");
     { "Cave Paste": 99 }
   );
   check("a plain goal for 1 is satisfied by 99 on hand", plain.ratio, 1);
+}
+
+console.info("needs: separate scopes are alternatives, not a batch");
+{
+  // two things the player wants, each wanting the one Stone on the shelf.
+  // Each is measured against the full inventory, because they compete for it
+  // rather than being done together -- the call focus.ts made deliberately.
+  const needs: Need[] = [
+    {
+      id: "a",
+      item: "Stone",
+      kind: "item",
+      label: "A",
+      measure: "hold",
+      quantity: 1,
+      source: "declared",
+    },
+    {
+      id: "b",
+      item: "Stone",
+      kind: "item",
+      label: "B",
+      measure: "hold",
+      quantity: 1,
+      source: "declared",
+    },
+  ];
+  const resolved = resolveNeeds(glassOrb, needs, { Stone: 1 });
+  check("both scopes", resolved.scopes.length, 2);
+  check("A can be done", resolved.scopes[0].isReady, true);
+  check("so can B, from the same Stone", resolved.scopes[1].isReady, true);
+  check("nothing to go and get", resolved.missing, []);
+}
+
+console.info("needs: one scope shares a pool -- the double-count fix");
+{
+  // A quest wanting 2 Unpolished AND a Shimmer Stone (itself 2 Unpolished) is
+  // one undertaking: the 2 on the shelf cannot serve both halves.
+  const needs = needsFromGoal({
+    kind: "quest",
+    label: "Stone Collector",
+    needs: [
+      { name: "Unpolished Shimmer Stone", quantity: 2 },
+      { name: "Shimmer Stone", quantity: 1 },
+    ],
+  });
+  const resolved = resolveNeeds(glassOrb, needs, {
+    "Unpolished Shimmer Stone": 2,
+  });
+  check("one undertaking", resolved.scopes.length, 1);
+  // the 2 on the shelf went to the first half, so the Shimmer Stone has to be
+  // built from the bottom -- planCraft expands a craftable raw rather than
+  // asking for it back
+  check("the second half is costed from raws", resolved.scopes[0].missing, [
+    { name: "Emberstone", quantity: 2 },
+    { name: "Sandstone", quantity: 2 },
+  ]);
+  check("so the quest is not ready", resolved.scopes[0].isReady, false);
+
+  // the old model measured each item against the whole shelf, so both halves
+  // claimed the same 2 and the quest read as doable
+  const perNeed = getGoalStatuses(
+    glassOrb,
+    [
+      {
+        kind: "quest",
+        label: "Stone Collector",
+        needs: [
+          { name: "Unpolished Shimmer Stone", quantity: 2 },
+          { name: "Shimmer Stone", quantity: 1 },
+        ],
+      },
+    ],
+    { "Unpolished Shimmer Stone": 2 }
+  );
+  check("which the old model missed", perNeed[0].isReady, true);
+}
+
+console.info("needs: a child of a planned item is a milestone, not more work");
+{
+  // "get 4 Emberstone" declared underneath "make a Glass Orb" is a checkpoint
+  // inside the orb's own plan. It must not bill the Emberstone twice.
+  const needs: Need[] = [
+    {
+      id: "orb",
+      item: "Glass Orb",
+      kind: "item",
+      label: "Glass Orb",
+      measure: "hold",
+      quantity: 1,
+      source: "declared",
+    },
+    {
+      id: "ember",
+      item: "Emberstone",
+      kind: "item",
+      label: "Emberstone",
+      measure: "hold",
+      parent: "orb",
+      quantity: 4,
+      source: "declared",
+    },
+  ];
+  const resolved = resolveNeeds(glassOrb, needs, { Emberstone: 2 });
+  check("one undertaking", resolved.scopes.length, 1);
+  check(
+    "Emberstone billed once, at the orb's figure",
+    resolved.scopes[0].missing.find((entry) => entry.name === "Emberstone")
+      ?.quantity,
+    2
+  );
+  const ember = resolved.statuses.find((status) => status.need.id === "ember");
+  check("the child reads as a milestone", ember?.coveredByParent, true);
+  check("and adds nothing to the bill", ember?.missing, []);
+  check("but still shows real progress", ember?.ratio, 0.5);
+}
+
+console.info("needs: acquire vs hold survives as a field");
+{
+  const graph = makeGraph({
+    "Cave Paste": { drops: [{ location: "Small Cave", rate: 3 }] },
+  });
+  const mastery = [
+    {
+      name: "Cave Paste",
+      remaining: 1,
+      required: 100,
+      tier: "t2",
+      value: 99,
+    },
+  ];
+  const [acquire] = resolveNeeds(
+    graph,
+    [
+      {
+        id: "m",
+        item: "Cave Paste",
+        kind: "item",
+        label: "Cave Paste",
+        measure: "acquire",
+        quantity: 1,
+        source: "mastery",
+      },
+    ],
+    { "Cave Paste": 99 },
+    undefined,
+    mastery
+  ).statuses;
+  check("99 on the shelf does not finish the tier", acquire.isReady, false);
+  check("progress is the mastery figure", acquire.have, 99);
+
+  const [hold] = resolveNeeds(
+    graph,
+    [
+      {
+        id: "h",
+        item: "Cave Paste",
+        kind: "item",
+        label: "Cave Paste",
+        measure: "hold",
+        quantity: 1,
+        source: "declared",
+      },
+    ],
+    { "Cave Paste": 99 }
+  ).statuses;
+  check("but it does satisfy holding one", hold.isReady, true);
+}
+
+console.info("needs: a broken tree degrades instead of hanging");
+{
+  const cyclic: Need[] = [
+    {
+      id: "x",
+      item: "Stone",
+      kind: "item",
+      label: "X",
+      measure: "hold",
+      parent: "y",
+      quantity: 1,
+      source: "declared",
+    },
+    {
+      id: "y",
+      item: "Stone",
+      kind: "item",
+      label: "Y",
+      measure: "hold",
+      parent: "x",
+      quantity: 1,
+      source: "declared",
+    },
+  ];
+  const roots = getScopeRoots(cyclic);
+  check("a cycle still resolves to something", roots.size, 2);
+  const orphan = getScopeRoots([
+    {
+      id: "z",
+      item: "Stone",
+      kind: "item",
+      label: "Z",
+      measure: "hold",
+      parent: "missing",
+      quantity: 1,
+      source: "declared",
+    },
+  ]);
+  check("a missing parent leaves the need standing", orphan.get("z"), "z");
+}
+
+console.info("needs: bottlenecks and nearly-done roll up per undertaking");
+{
+  const needs = [
+    ...needsFromGoal(
+      {
+        kind: "quest",
+        label: "Quest A",
+        needs: [{ name: "Stone", quantity: 3 }],
+      },
+      0
+    ),
+    ...needsFromGoal(
+      {
+        kind: "quest",
+        label: "Quest B",
+        needs: [
+          { name: "Stone", quantity: 1 },
+          { name: "Emberstone", quantity: 5 },
+        ],
+      },
+      1
+    ),
+    ...needsFromTrackedGoals([{ addedAt: 0, name: "Stone", quantity: 2 }]),
+  ];
+  const resolved = resolveNeeds(glassOrb, needs, {});
+  const ranked = rankNeedBottlenecks(resolved);
+  check("Stone gates the most undertakings", ranked[0].name, "Stone");
+  check("all three of them", ranked[0].gatesCount, 3);
+  check("largest single ask wins the merge", resolved.missing[0], {
+    name: "Emberstone",
+    quantity: 5,
+  });
+  // Quest B wants Stone and Emberstone, so it is two trips, not one
+  check(
+    "the single-item undertakings are the nearly-done ones",
+    getNearlyDoneScopes(resolved).map((scope) => scope.label),
+    ["Quest A", "Stone"]
+  );
+}
+
+console.info("needs: two siblings wanting the same item sum, not dedupe");
+{
+  // A quest wanting Stone twice over is two real demands on one shelf. Only an
+  // ANCESTOR's claim makes a need a milestone -- a sibling's must not, or the
+  // shared pool would quietly forgive the second ask.
+  const needs = needsFromGoal({
+    kind: "quest",
+    label: "Stonemason",
+    needs: [{ name: "Stone", quantity: 3 }],
+  });
+  needs.push({
+    id: "extra",
+    item: "Stone",
+    kind: "item",
+    label: "Stone again",
+    measure: "hold",
+    parent: needs[0].id,
+    quantity: 2,
+    source: "quest",
+  });
+  const resolved = resolveNeeds(glassOrb, needs, { Stone: 4 });
+  check("both siblings are counted", resolved.scopes[0].missing, [
+    { name: "Stone", quantity: 1 },
+  ]);
+  check(
+    "neither is a milestone",
+    resolved.statuses.filter((status) => status.coveredByParent).length,
+    0
+  );
 }
 
 if (failures > 0) {
