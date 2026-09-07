@@ -201,13 +201,17 @@ export interface SetRecommendation {
 // player named a set after the thing it builds, so a goal for that thing means
 // that set is the one to load. The active set is excluded because recommending
 // it would be advice to re-run a destructive activation for no change.
+// Takes the item names the backlog wants rather than the tracked goals, so a
+// set that makes something a QUEST needs -- or an intermediate two
+// undertakings both need -- is recommendable too. Matching only literal
+// tracked-goal names meant the loader stayed silent on almost everything.
 export const getRecommendedSet = (
-  goals: TrackedGoal[],
+  wantedNames: Iterable<string>,
   sets: { id: string; isActive: boolean; name: string }[],
   itemNames: Iterable<string>
 ): SetRecommendation | undefined => {
   const names = [...itemNames];
-  const wanted = new Set(goals.map((goal) => goal.name.toLowerCase()));
+  const wanted = new Set([...wantedNames].map((name) => name.toLowerCase()));
   for (const set of sets) {
     if (set.isActive) {
       continue;

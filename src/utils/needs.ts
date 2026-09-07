@@ -70,6 +70,8 @@ export interface NeedStatus {
   isReady: boolean;
   missing: MissingItem[];
   need: Need;
+  // how many more this need still wants: what a queue or a trip has to produce
+  outstanding: number;
   // 0..1
   ratio: number;
 }
@@ -141,6 +143,7 @@ const READY: Omit<NeedStatus, "need"> = {
   have: 0,
   isReady: true,
   missing: [],
+  outstanding: 0,
   ratio: 1,
 };
 
@@ -183,6 +186,7 @@ const costAgainstPool = (
       have,
       isReady: false,
       missing: plan.missing,
+      outstanding: remaining,
       ratio: required > 0 ? Math.min(1, have / required) : 0,
     };
   }
@@ -204,6 +208,7 @@ const costAgainstPool = (
       have,
       isReady: false,
       missing: [{ name: need.item, quantity: outstanding }],
+      outstanding,
       ratio: have / need.quantity,
     };
   }
@@ -222,6 +227,7 @@ const costAgainstPool = (
     have,
     isReady: false,
     missing: plan.missing,
+    outstanding,
     ratio: Math.min(1, (have + canMakeNow) / need.quantity),
   };
 };
@@ -257,6 +263,7 @@ const costAsMilestone = (
     have,
     isReady: false,
     missing: [],
+    outstanding,
     ratio: Math.min(1, (have + canMakeNow) / need.quantity),
   };
 };
@@ -440,3 +447,53 @@ export const getNearlyDoneScopes = (resolved: ResolvedNeeds): ScopeStatus[] =>
   resolved.scopes.filter(
     (scope) => !scope.isReady && scope.missing.length === 1
   );
+
+// What the Craftworks queue should be making, across the whole backlog.
+//
+// The old queue advice reasoned from tracked goals alone, so a quest wanting
+// forty of something never reached it and the fallback asked for ONE of each
+// thing a slot happened to be stalled on -- which is how a queue full of
+// single units happens. Every need is in here now, at the quantity it actually
+// wants, and an item two undertakings both need keeps the deeper of its two
+// positions so the order still builds bottom-up.
+export const getDesiredQueueForNeeds = (
+  graph: RecipeGraph,
+  resolved: ResolvedNeeds,
+  inventory: Record<string, number>,
+  unlimited: UnlimitedItems = NO_UNLIMITED
+): { name: string; quantity: number }[] => {
+  const byName = new Map<string, { depth: number; quantity: number }>();
+  for (const status of resolved.statuses) {
+    // a milestone is already inside its parent's plan; costing it again would
+    // ask the queue for the same materials twice
+    if (
+      status.need.kind !== "item" ||
+      status.isReady ||
+      status.coveredByParent ||
+      status.outstanding <= 0
+    ) {
+      continue;
+    }
+    const node = graph.nodes.get(status.need.item);
+    if (!node?.canCraft || node.ingredients.length === 0) {
+      continue;
+    }
+    const plan = planCraft(
+      graph,
+      status.need.item,
+      status.outstanding,
+      { ...inventory, [status.need.item]: 0 },
+      unlimited
+    );
+    for (const step of plan.steps) {
+      const existing = byName.get(step.name);
+      byName.set(step.name, {
+        depth: Math.max(existing?.depth ?? 0, step.depth),
+        quantity: (existing?.quantity ?? 0) + step.quantity,
+      });
+    }
+  }
+  return [...byName.entries()]
+    .sort((a, b) => b[1].depth - a[1].depth)
+    .map(([name, entry]) => ({ name, quantity: entry.quantity }));
+};

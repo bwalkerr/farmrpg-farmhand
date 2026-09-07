@@ -15,7 +15,6 @@ import {
 } from "~/api/farmrpg/apis/craftworks";
 import {
   addGoal,
-  getDesiredQueue,
   getGoalProgress,
   getGoals,
   GoalProgress,
@@ -36,6 +35,7 @@ import {
   TEXT_WARNING,
   TEXT_WHITE,
 } from "~/utils/theme";
+import { buildNeeds } from "~/utils/needAdapters";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import {
   getBasicItems,
@@ -44,6 +44,11 @@ import {
   LocationRef,
 } from "~/api/buddyfarm/api";
 import { getCurrentPage, Page } from "~/utils/page";
+import {
+  getDesiredQueueForNeeds,
+  ResolvedNeeds,
+  resolveNeeds,
+} from "~/utils/needs";
 import {
   getFrozenMastery,
   getMasterySuggestions,
@@ -478,6 +483,9 @@ interface Context {
   mastery: MasteryEntry[];
   perks?: { currentPerkSetId?: number; perkSets: PerkSet[] };
   questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
+  // every demand on you -- tracked goals, open requests, stalled queue slots --
+  // resolved once, so each tab reasons from the same numbers
+  resolved: ResolvedNeeds;
   statuses: ReturnType<typeof getGoalStatuses>;
   unlimited: UnlimitedItems;
 }
@@ -598,6 +606,17 @@ const loadContext = async (force: boolean): Promise<Context> => {
     mastery: mastery?.entries ?? [],
     perks: await orUndefined(perksState.get()),
     questGoals,
+    resolved: resolveNeeds(
+      graph,
+      buildNeeds({
+        craftworksRoots: advice?.roots ?? [],
+        questGoals: questGoals?.goals ?? [],
+        trackedGoals: goals,
+      }),
+      inventory,
+      unlimited,
+      mastery?.entries ?? []
+    ),
     statuses: getGoalStatuses(
       graph,
       questGoals?.goals ?? [],
@@ -606,6 +625,22 @@ const loadContext = async (force: boolean): Promise<Context> => {
     ),
     unlimited,
   };
+};
+
+// The item names the backlog wants, for matching Craftworks set names against.
+// Everything outstanding, not only what was tracked by hand: a set that makes
+// an intermediate a request needs is worth offering too.
+const getWantedNames = (context: Context): string[] => {
+  const names = new Set<string>();
+  for (const status of context.resolved.statuses) {
+    if (status.need.kind === "item" && !status.isReady) {
+      names.add(status.need.item);
+    }
+  }
+  for (const entry of context.resolved.missing) {
+    names.add(entry.name);
+  }
+  return [...names];
 };
 
 // Takes exactly what to source. It used to fold in quest bottlenecks itself
@@ -1011,10 +1046,10 @@ const renderCraftworks = (
     advice,
     cap,
     craftworks,
-    goals,
     graph,
     inventory,
     mastery,
+    resolved,
     unlimited,
   } = context;
   if (!advice || !craftworks) {
@@ -1097,12 +1132,17 @@ const renderCraftworks = (
 
   // Suggestions are goal-driven when there are goals; otherwise the queue's own
   // stalled slots are the only thing there is to reason from.
-  const desired =
-    goals.length > 0
-      ? getDesiredQueue(graph, goals, inventory, unlimited)
-      : advice.roots
-          .filter((root) => graph.nodes.get(root.name)?.canCraft)
-          .map((root) => ({ name: root.name, quantity: 1 }));
+  // Everything that wants something, at the quantity it wants: tracked goals,
+  // open requests and the queue's own stalled slots. The old list was tracked
+  // goals alone, falling back to ONE of each thing a slot was stalled on --
+  // which is how the queue filled up with single units of things nothing
+  // actually needed much of.
+  const desired = getDesiredQueueForNeeds(
+    graph,
+    resolved,
+    inventory,
+    unlimited
+  );
   const suggestions = suggestQueueChanges(
     desired,
     craftworks.slots,
@@ -1127,7 +1167,9 @@ const renderCraftworks = (
         ])
       );
     }
-    if (goals.length === 0) {
+    // only when there is genuinely nothing to aim at -- suggestions now come
+    // from open requests and stalled slots too, not tracked goals alone
+    if (resolved.scopes.length === 0) {
       body.append(
         makeLinkedLine(TEXT_GRAY, [
           "Track a goal to get suggestions aimed at something.",
@@ -1198,12 +1240,12 @@ const renderSetLoader = (
   context: Context,
   reload: () => void
 ): void => {
-  const { craftworks, goals, itemNames } = context;
+  const { craftworks, itemNames } = context;
   if (!craftworks) {
     return;
   }
   const recommended = getRecommendedSet(
-    goals,
+    getWantedNames(context),
     craftworks.sets ?? [],
     itemNames
   );
@@ -1368,7 +1410,7 @@ const renderSets = (
   context: Context,
   reload: () => void
 ): void => {
-  const { craftworks, goals, itemNames } = context;
+  const { craftworks, itemNames } = context;
   const sets = craftworks?.sets ?? [];
   if (!craftworks || sets.length === 0) {
     body.append(
@@ -1380,7 +1422,11 @@ const renderSets = (
   if (sets.length > 0) {
     body.append(makeHeading("Craftworks sets"));
   }
-  const recommended = getRecommendedSet(goals, sets, itemNames);
+  const recommended = getRecommendedSet(
+    getWantedNames(context),
+    sets,
+    itemNames
+  );
   for (const set of sets) {
     const row = document.createElement("div");
     row.className = "fh-goal-top";

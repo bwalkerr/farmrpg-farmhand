@@ -91,7 +91,7 @@ const renderSetRecommendation = async (
   }
   const [goals, items] = await Promise.all([getGoals(), getBasicItems()]);
   const recommended = getRecommendedSet(
-    goals,
+    goals.map((goal) => goal.name),
     sets,
     items.map((item) => item.name)
   );

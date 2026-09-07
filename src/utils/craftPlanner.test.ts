@@ -12,6 +12,14 @@ import {
   parseStamina,
 } from "./locationAdvice";
 import {
+  getDesiredQueueForNeeds,
+  getNearlyDoneScopes,
+  getScopeRoots,
+  Need,
+  rankNeedBottlenecks,
+  resolveNeeds,
+} from "./needs";
+import {
   getFrozenMastery,
   getMasterySuggestions,
   getQuestSuggestions,
@@ -34,13 +42,6 @@ import {
   RecipeGraph,
   RecipeNode,
 } from "./craftPlanner";
-import {
-  getNearlyDoneScopes,
-  getScopeRoots,
-  Need,
-  rankNeedBottlenecks,
-  resolveNeeds,
-} from "./needs";
 import { Item } from "~/api/buddyfarm/types";
 import { MasteryEntry } from "~/api/farmrpg/apis/mastery";
 import { needsFromGoal, needsFromTrackedGoals } from "./needAdapters";
@@ -779,22 +780,14 @@ console.info("getRecommendedSet");
   ];
   check(
     "a goal picks the set named after it",
-    getRecommendedSet(
-      [{ addedAt: 0, name: "Fancy Table", quantity: 1 }],
-      sets,
-      items
-    ),
+    getRecommendedSet(["Fancy Table"], sets, items),
     { goalName: "Fancy Table", id: "341447", name: "Fancy table" }
   );
   // recommending the loaded set would be advice to re-run a destructive
   // activation for no change
   check(
     "the active set is never recommended",
-    getRecommendedSet(
-      [{ addedAt: 0, name: "Fancy Guitar", quantity: 1 }],
-      sets,
-      items
-    ),
+    getRecommendedSet(["Fancy Guitar"], sets, items),
     undefined
   );
   check(
@@ -1223,6 +1216,43 @@ console.info("needs: two siblings wanting the same item sum, not dedupe");
     "neither is a milestone",
     resolved.statuses.filter((status) => status.coveredByParent).length,
     0
+  );
+}
+
+console.info("needs: the queue is asked for real quantities, not one of each");
+{
+  // A request wanting 3 Glass Orbs and a tracked goal wanting 2 Shimmer Stone.
+  // The old queue advice saw neither (it read tracked goals only, and fell back
+  // to asking for ONE of whatever a slot was stalled on).
+  const needs = [
+    ...needsFromGoal({
+      kind: "quest",
+      label: "A Towering Investment",
+      needs: [{ name: "Glass Orb", quantity: 3 }],
+    }),
+    ...needsFromTrackedGoals([
+      { addedAt: 0, name: "Shimmer Stone", quantity: 2 },
+    ]),
+  ];
+  const resolved = resolveNeeds(glassOrb, needs, {});
+  const desired = getDesiredQueueForNeeds(glassOrb, resolved, {});
+  const byName = new Map(desired.map((entry) => [entry.name, entry.quantity]));
+  check("it asks for all three orbs", byName.get("Glass Orb"), 3);
+  check(
+    "and the shimmer both undertakings need, summed",
+    byName.get("Shimmer Stone"),
+    // 2 per orb x3, plus the 2 tracked directly
+    8
+  );
+  check(
+    "deepest first, so the order builds bottom-up",
+    desired[0].name,
+    "Unpolished Shimmer Stone"
+  );
+  check(
+    "nothing is asked for in ones",
+    [...byName.values()].includes(1),
+    false
   );
 }
 
