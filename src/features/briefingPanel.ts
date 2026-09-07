@@ -315,6 +315,9 @@ const summarizeAttention = (
   };
 };
 
+const currentRoute = (): string =>
+  (window.location.hash || window.location.pathname).split("?")[0];
+
 const setBadge = (count: number, parts: string[], isStale = false): void => {
   const button = document.querySelector<HTMLElement>(`#${BUTTON_ID}`);
   if (!button) {
@@ -1233,6 +1236,7 @@ const ensurePanel = (): void => {
   const load = async (force: boolean): Promise<void> => {
     body.textContent = "";
     body.append(makeLinkedLine(TEXT_GRAY, ["Reading your farm…"]));
+    loadedRoute = currentRoute();
     context = await loadContext(force);
     const attention = summarizeAttention(
       context.advice,
@@ -1263,12 +1267,41 @@ const ensurePanel = (): void => {
   // minute while a meal cooks, so an eager panel would become a steady
   // background load.
   let hasLoaded = false;
+  let loadedRoute = "";
+
   const setOpen = (open: boolean): void => {
     panel.dataset.open = String(open);
     button.dataset.open = String(open);
-    if (open && !hasLoaded) {
+    if (!open) {
+      return;
+    }
+    if (!hasLoaded) {
       hasLoaded = true;
+      loadedRoute = currentRoute();
       load(false);
+      return;
+    }
+    // The panel outlives page navigation, so what it knows about where you are
+    // standing goes stale the moment you walk somewhere else. Re-deriving that
+    // costs nothing -- both lookups behind it are cached -- so refresh it on
+    // reopen rather than making the whole context reload.
+    if (currentRoute() !== loadedRoute) {
+      loadedRoute = currentRoute();
+      refreshHere();
+    }
+  };
+
+  const refreshHere = async (): Promise<void> => {
+    const previous = context;
+    if (!previous) {
+      return;
+    }
+    const here = await getHere();
+    // a full reload may have replaced the context while this was in flight;
+    // its `here` is already current, so leave it alone
+    if (context === previous) {
+      context = { ...previous, here };
+      draw();
     }
   };
 
@@ -1288,7 +1321,9 @@ const ensurePanel = (): void => {
     }
     event.stopPropagation();
   });
-  document.addEventListener("click", () => setOpen(false));
+  // Deliberately not closed by clicks elsewhere on the page. The whole point
+  // while exploring is to read the advice and keep pressing Continue, and an
+  // outside-click-to-close made the panel vanish on the first press.
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       setOpen(false);
