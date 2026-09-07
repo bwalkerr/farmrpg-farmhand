@@ -85,8 +85,10 @@ const MAX_LISTED = 5;
 
 // Bottom-left, mirroring the cap tracker's floating fallback on the right, so
 // the two never collide and both clear the bottom bar.
-const EDGE_OFFSET = "8px";
-const BOTTOM_OFFSET = "62px";
+// env() keeps the button clear of the iOS home indicator and any notch; the
+// fallbacks make it identical to before on anything that does not report insets.
+const EDGE_OFFSET = "calc(8px + env(safe-area-inset-left, 0px))";
+const BOTTOM_OFFSET = "calc(62px + env(safe-area-inset-bottom, 0px))";
 
 type TabId = "now" | "goals" | "sets" | "craftworks";
 const TABS: { id: TabId; label: string }[] = [
@@ -314,9 +316,6 @@ const summarizeAttention = (
     parts,
   };
 };
-
-const currentRoute = (): string =>
-  (window.location.hash || window.location.pathname).split("?")[0];
 
 const setBadge = (count: number, parts: string[], isStale = false): void => {
   const button = document.querySelector<HTMLElement>(`#${BUTTON_ID}`);
@@ -1252,7 +1251,6 @@ const ensurePanel = (): void => {
   const load = async (force: boolean): Promise<void> => {
     body.textContent = "";
     body.append(makeLinkedLine(TEXT_GRAY, ["Reading your farm…"]));
-    loadedRoute = currentRoute();
     context = await loadContext(force);
     const attention = summarizeAttention(
       context.advice,
@@ -1283,7 +1281,6 @@ const ensurePanel = (): void => {
   // minute while a meal cooks, so an eager panel would become a steady
   // background load.
   let hasLoaded = false;
-  let loadedRoute = "";
 
   const setOpen = (open: boolean): void => {
     panel.dataset.open = String(open);
@@ -1293,7 +1290,6 @@ const ensurePanel = (): void => {
     }
     if (!hasLoaded) {
       hasLoaded = true;
-      loadedRoute = currentRoute();
       load(false);
       return;
     }
@@ -1301,7 +1297,6 @@ const ensurePanel = (): void => {
     // standing goes stale the moment you walk somewhere else. Comparing routes
     // to detect that does not work -- the hash often does not change -- and
     // both lookups behind this are cached, so simply re-derive it every time.
-    loadedRoute = currentRoute();
     refreshHere();
   };
 
