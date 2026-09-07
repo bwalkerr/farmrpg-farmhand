@@ -28,8 +28,13 @@ export const needsFromTrackedGoals = (goals: TrackedGoal[]): Need[] =>
 // wants two items both made of Steel used to cost each against the full
 // inventory and so claimed the same Steel twice. As children of one scope they
 // share a pool and the quest's shortfall is what it would actually take.
-export const needsFromGoal = (goal: Goal, index = 0): Need[] => {
-  const id = `${goal.kind}:${index}:${goal.label}`;
+// The id has to be STABLE across sessions, because focus is persisted against
+// it. It was the goal's position in the list, which shifts the moment a request
+// is finished -- focus would silently jump to a different quest. The label is
+// what actually identifies the undertaking; `suffix` only exists to keep two
+// identically-named ones apart.
+export const needsFromGoal = (goal: Goal, suffix = ""): Need[] => {
+  const id = `${goal.kind}:${goal.label}${suffix}`;
   const source = goal.kind === "quest" ? "quest" : "craftworks";
   const group: Need = {
     href: goal.href,
@@ -56,8 +61,15 @@ export const needsFromGoal = (goal: Goal, index = 0): Need[] => {
   ];
 };
 
-export const needsFromGoals = (goals: Goal[]): Need[] =>
-  goals.flatMap((goal, index) => needsFromGoal(goal, index));
+export const needsFromGoals = (goals: Goal[]): Need[] => {
+  const seen = new Map<string, number>();
+  return goals.flatMap((goal) => {
+    const key = `${goal.kind}:${goal.label}`;
+    const count = seen.get(key) ?? 0;
+    seen.set(key, count + 1);
+    return needsFromGoal(goal, count === 0 ? "" : `#${count}`);
+  });
+};
 
 // Make one need the child of another: the composition the panel's "goalise"
 // action performs. Returns a new list; the tree is only ever a parent id, so

@@ -1151,14 +1151,11 @@ console.info("needs: a broken tree degrades instead of hanging");
 console.info("needs: bottlenecks and nearly-done roll up per undertaking");
 {
   const needs = [
-    ...needsFromGoal(
-      {
-        kind: "quest",
-        label: "Quest A",
-        needs: [{ name: "Stone", quantity: 3 }],
-      },
-      0
-    ),
+    ...needsFromGoal({
+      kind: "quest",
+      label: "Quest A",
+      needs: [{ name: "Stone", quantity: 3 }],
+    }),
     ...needsFromGoal(
       {
         kind: "quest",
@@ -1168,7 +1165,7 @@ console.info("needs: bottlenecks and nearly-done roll up per undertaking");
           { name: "Emberstone", quantity: 5 },
         ],
       },
-      1
+      "#1"
     ),
     ...needsFromTrackedGoals([{ addedAt: 0, name: "Stone", quantity: 2 }]),
   ];

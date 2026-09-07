@@ -49,6 +49,7 @@ import {
   ResolvedNeeds,
   resolveNeeds,
 } from "~/utils/needs";
+import { getFocusedScope, setFocusedScope } from "~/utils/focusScope";
 import {
   getFrozenMastery,
   getMasterySuggestions,
@@ -267,14 +268,42 @@ const injectStyles = (): void => {
         color: ${TEXT_WARNING};
       }
 
+      /* The focused undertaking, and the way out of it. Sits under the title
+         so it is present on every tab, not only the one focus was set from. */
+      #${PANEL_ID} .fh-focus-chip {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        padding: 4px 9px;
+        border-radius: 7px;
+        border: 1px solid ${TEXT_WARNING};
+        color: ${TEXT_WARNING};
+        font-size: 11px;
+      }
+      #${PANEL_ID} .fh-focus-chip[data-on="true"] { display: flex; }
+      #${PANEL_ID} .fh-chip-clear {
+        margin-left: auto;
+        cursor: pointer;
+        opacity: 0.75;
+      }
+      #${PANEL_ID} .fh-chip-clear:hover { opacity: 1; }
+      /* Dimmed, never hidden: a quest that disappeared because you focused
+         another is exactly what you would forget about. */
+      #${PANEL_ID} .fh-dim {
+        opacity: 0.38;
+        transition: opacity 160ms ease;
+      }
+      #${PANEL_ID} .fh-dim:hover { opacity: 0.75; }
+
       /* Wide screens get a two-pane panel: a vertical rail of sections and a
          content pane. The rail is what removes the four-tab ceiling -- a
          column takes as many entries as we want, where the horizontal strip
          could not fit a fifth at 380px. Below this width nothing changes. */
       @media (min-width: 1024px) {
         #${PANEL_ID} {
-          width: 760px;
-          max-height: 78vh;
+          width: 920px;
+          max-height: 82vh;
         }
         #${PANEL_ID} .fh-briefing-main {
           flex-direction: row;
@@ -762,12 +791,117 @@ const renderNow = async (
   }
 };
 
+// The whole-undertaking view: one row per thing you are working toward, with
+// its own roll-up rather than a flat list of items. This is what the scope axis
+// in needs.ts is for -- a quest's items share a pool, so "3 of 5 ready" and the
+// shortfall below it are the real figures for finishing it, not the sum of five
+// independent questions.
+//
+// Non-focused rows are dimmed rather than hidden. The panel's job is stopping
+// you from missing things, and a quest that vanished because you focused
+// another one is exactly the sort of thing you would miss.
+const renderUndertakings = (
+  body: HTMLElement,
+  context: Context,
+  focused: string | undefined,
+  onFocus: (scopeId: string | undefined) => void
+): void => {
+  const { graph, resolved } = context;
+  // single-item scopes are tracked goals, which have their own rows below --
+  // this section is for things made of several parts
+  const scopes = resolved.scopes.filter((scope) => {
+    const items = scope.needs.filter((status) => status.need.kind === "item");
+    return items.length > 1;
+  });
+  if (scopes.length === 0) {
+    return;
+  }
+  body.append(makeHeading("Undertakings"));
+
+  const ordered = [...scopes].sort((a, b) => {
+    if (a.rootId === focused) {
+      return -1;
+    }
+    if (b.rootId === focused) {
+      return 1;
+    }
+    return b.ratio - a.ratio;
+  });
+
+  for (const scope of ordered) {
+    const isFocused = scope.rootId === focused;
+    const isDimmed = focused !== undefined && !isFocused;
+    const items = scope.needs.filter((status) => status.need.kind === "item");
+    const ready = items.filter((status) => status.isReady).length;
+
+    const row = document.createElement("div");
+    row.className = isDimmed ? "fh-goal fh-dim" : "fh-goal";
+
+    const top = document.createElement("div");
+    top.className = "fh-goal-top";
+    const name = document.createElement("div");
+    name.style.fontSize = "12px";
+    let colour = TEXT_WHITE;
+    if (scope.isReady) {
+      colour = TEXT_SUCCESS;
+    } else if (isFocused) {
+      colour = TEXT_WARNING;
+    }
+    const link = document.createElement("span");
+    link.style.color = colour;
+    link.textContent = scope.label;
+    name.append(link);
+
+    const action = document.createElement("span");
+    action.style.cursor = "pointer";
+    action.style.fontSize = "11px";
+    action.style.color = isFocused ? TEXT_WARNING : TEXT_GRAY;
+    action.textContent = isFocused ? "focused" : "focus";
+    action.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onFocus(isFocused ? undefined : scope.rootId);
+    });
+    top.append(name, action);
+    row.append(top);
+
+    const bar = document.createElement("div");
+    bar.className = "fh-bar";
+    const fill = document.createElement("div");
+    fill.style.width = `${Math.round(scope.ratio * 100)}%`;
+    if (!scope.isReady) {
+      fill.style.background = TEXT_WARNING;
+    }
+    bar.append(fill);
+    row.append(bar);
+
+    const detail = makeLinkedLine(TEXT_GRAY, [
+      `${ready}/${items.length} ready`,
+      scope.missing.length > 0 ? " — short " : "",
+      ...scope.missing
+        .slice(0, 3)
+        .flatMap((entry, index) => [
+          index > 0 ? ", " : "",
+          makeItemLink(entry.name, graph.nodes.get(entry.name)?.id, TEXT_GRAY),
+          ` x${entry.quantity}`,
+        ]),
+      scope.missing.length > 3 ? `, +${scope.missing.length - 3} more` : "",
+    ]);
+    detail.style.fontSize = "11px";
+    detail.style.marginBottom = "0";
+    row.append(detail);
+    body.append(row);
+  }
+};
+
 const renderGoals = async (
   body: HTMLElement,
   context: Context,
-  rerender: () => void
+  rerender: () => void,
+  focused: string | undefined,
+  onFocus: (scopeId: string | undefined) => void
 ): Promise<void> => {
   const { goalProgress, goals, graph } = context;
+  renderUndertakings(body, context, focused, onFocus);
   if (goals.length === 0) {
     body.append(
       makeLinkedLine(TEXT_GRAY, [
@@ -1040,7 +1174,8 @@ const makeQueueToggle = (
 const renderCraftworks = (
   body: HTMLElement,
   context: Context,
-  reload: () => void
+  reload: () => void,
+  focused?: string
 ): void => {
   const {
     advice,
@@ -1141,7 +1276,9 @@ const renderCraftworks = (
     graph,
     resolved,
     inventory,
-    unlimited
+    unlimited,
+    // when an undertaking is focused the queue works on that one alone
+    focused
   );
   const suggestions = suggestQueueChanges(
     desired,
@@ -1531,6 +1668,10 @@ const ensurePanel = (): void => {
   refresh.textContent = "refresh";
   head.append(heading, refresh);
 
+  const chip = document.createElement("div");
+  chip.className = "fh-focus-chip";
+  chip.dataset.on = "false";
+
   const tabs = document.createElement("div");
   tabs.className = "fh-briefing-tabs";
   const body = document.createElement("div");
@@ -1538,17 +1679,58 @@ const ensurePanel = (): void => {
   const main = document.createElement("div");
   main.className = "fh-briefing-main";
   main.append(tabs, body);
-  panel.append(head, main);
+  panel.append(head, chip, main);
   document.body.append(button, panel);
 
   let active: TabId = "now";
   let context: Context | undefined;
+  let focused: string | undefined;
+  getFocusedScope()
+    .then((scopeId) => {
+      focused = scopeId;
+      if (context) {
+        draw();
+      }
+    })
+    .catch((error) => {
+      console.error("Failed to read the focused undertaking", error);
+    });
+
+  const setFocus = (scopeId: string | undefined): void => {
+    focused = scopeId;
+    setFocusedScope(scopeId).catch((error) => {
+      console.error("Failed to save the focused undertaking", error);
+    });
+    draw();
+  };
 
   const draw = (): void => {
     body.textContent = "";
     if (!context) {
       return;
     }
+    // The way out of focus has to be visible from every tab, not only the one
+    // you set it from -- otherwise a focus set days ago silently filters the
+    // panel and reads as the panel being wrong.
+    const scope = context.resolved.scopes.find(
+      (entry) => entry.rootId === focused
+    );
+    chip.textContent = "";
+    chip.dataset.on = String(Boolean(scope));
+    if (scope) {
+      const chipLabel = document.createElement("span");
+      chipLabel.textContent = `focused: ${scope.label}`;
+      const clear = document.createElement("span");
+      clear.className = "fh-chip-clear";
+      clear.textContent = "✕";
+      clear.title = "Stop focusing this";
+      clear.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setFocus(undefined);
+      });
+      chip.append(chipLabel, clear);
+    }
+
     const counts = getTabCounts(context);
     for (const tab of tabs.children) {
       const element = tab as HTMLElement;
@@ -1566,10 +1748,16 @@ const ensurePanel = (): void => {
         break;
       }
       case "goals": {
-        renderGoals(body, context, () => {
-          // a removed goal changes the list itself, so reload before redrawing
-          load(false);
-        });
+        renderGoals(
+          body,
+          context,
+          () => {
+            // a removed goal changes the list itself, so reload before redrawing
+            load(false);
+          },
+          focused,
+          setFocus
+        );
 
         break;
       }
@@ -1579,7 +1767,7 @@ const ensurePanel = (): void => {
         break;
       }
       default: {
-        renderCraftworks(body, context, () => load(true));
+        renderCraftworks(body, context, () => load(true), focused);
       }
     }
   };

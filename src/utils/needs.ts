@@ -72,6 +72,8 @@ export interface NeedStatus {
   need: Need;
   // how many more this need still wants: what a queue or a trip has to produce
   outstanding: number;
+  // the undertaking this belongs to, so a surface can filter to one of them
+  scopeId: string;
   // 0..1
   ratio: number;
 }
@@ -137,7 +139,7 @@ const toList = (byName: Map<string, number>): MissingItem[] =>
     .map(([name, quantity]) => ({ name, quantity }))
     .sort((a, b) => b.quantity - a.quantity);
 
-const READY: Omit<NeedStatus, "need"> = {
+const READY: Omit<NeedStatus, "need" | "scopeId"> = {
   canMakeNow: 0,
   coveredByParent: false,
   have: 0,
@@ -158,7 +160,7 @@ const costAgainstPool = (
   pool: Record<string, number>,
   unlimited: UnlimitedItems,
   mastery: MasteryEntry[]
-): Omit<NeedStatus, "need"> => {
+): Omit<NeedStatus, "need" | "scopeId"> => {
   if (isUnlimited(unlimited, need.item)) {
     return { ...READY };
   }
@@ -243,7 +245,7 @@ const costAsMilestone = (
   graph: RecipeGraph,
   inventory: Record<string, number>,
   unlimited: UnlimitedItems
-): Omit<NeedStatus, "need"> => {
+): Omit<NeedStatus, "need" | "scopeId"> => {
   if (isUnlimited(unlimited, need.item)) {
     return { ...READY, coveredByParent: true };
   }
@@ -338,13 +340,13 @@ export const resolveNeeds = (
 
     for (const need of ordered) {
       if (need.kind === "group") {
-        statusById.set(need.id, { ...READY, need });
+        statusById.set(need.id, { ...READY, need, scopeId: rootId });
         continue;
       }
       const status = isClaimedByAncestor(need, byId, claimsByNeed)
         ? costAsMilestone(need, graph, inventory, unlimited)
         : costAgainstPool(need, graph, pool, unlimited, mastery);
-      statusById.set(need.id, { ...status, need });
+      statusById.set(need.id, { ...status, need, scopeId: rootId });
 
       if (status.coveredByParent) {
         continue;
@@ -460,7 +462,10 @@ export const getDesiredQueueForNeeds = (
   graph: RecipeGraph,
   resolved: ResolvedNeeds,
   inventory: Record<string, number>,
-  unlimited: UnlimitedItems = NO_UNLIMITED
+  unlimited: UnlimitedItems = NO_UNLIMITED,
+  // when set, only this undertaking's needs are costed -- what "work a whole
+  // quest at a time" means for the queue
+  scopeId?: string
 ): { name: string; quantity: number }[] => {
   const byName = new Map<string, { depth: number; quantity: number }>();
   for (const status of resolved.statuses) {
@@ -470,7 +475,8 @@ export const getDesiredQueueForNeeds = (
       status.need.kind !== "item" ||
       status.isReady ||
       status.coveredByParent ||
-      status.outstanding <= 0
+      status.outstanding <= 0 ||
+      (scopeId !== undefined && status.scopeId !== scopeId)
     ) {
       continue;
     }
