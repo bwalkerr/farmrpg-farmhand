@@ -23,6 +23,11 @@ import {
 } from "~/utils/goals";
 import { Advice, adviseOnSlots, suggestQueueChanges } from "~/utils/craftworks";
 import {
+  BooleanFeatureSetting,
+  Feature,
+  FeatureSetting,
+} from "../utils/feature";
+import {
   BORDER_GRAY,
   TEXT_ERROR,
   TEXT_GRAY,
@@ -30,7 +35,6 @@ import {
   TEXT_WARNING,
   TEXT_WHITE,
 } from "~/utils/theme";
-import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import {
   getBasicItems,
@@ -55,7 +59,13 @@ import {
 } from "~/utils/focus";
 import { getHTML } from "~/api/farmrpg/utils/requests";
 import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
-import { getSettingValues, SettingId } from "~/utils/settings";
+import {
+  getSetting,
+  getSettings,
+  getSettingValues,
+  setSetting,
+  SettingId,
+} from "~/utils/settings";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
 import {
   makeItemLink,
@@ -1150,6 +1160,58 @@ const renderPerkSets = (
   }
   const status = getPerkStatus();
   body.append(makeHeading("Perk sets"));
+
+  // Auto manage is repeated here, not only on the game's settings page, for two
+  // reasons: that page is genuinely hard to reach on a phone, and this is the
+  // one setting whose being off is indistinguishable from the reconciler being
+  // broken -- manual equipping below still works, because it calls
+  // activatePerkSet directly and never consults the setting.
+  const autoSetting = getSettings().find(
+    (setting): setting is BooleanFeatureSetting =>
+      setting.id === SettingId.PERK_MANAGER && setting.type === "boolean"
+  );
+  if (autoSetting) {
+    const row = document.createElement("div");
+    row.style.alignItems = "center";
+    row.style.display = "flex";
+    row.style.gap = "8px";
+    row.style.marginBottom = "5px";
+    const label = document.createElement("span");
+    label.style.fontSize = "11px";
+    const toggle = document.createElement("a");
+    toggle.href = "#";
+    toggle.style.color = TEXT_GRAY;
+    toggle.style.fontSize = "11px";
+    toggle.style.marginLeft = "auto";
+    toggle.style.textDecoration = "underline";
+    const paintAuto = (isOn: boolean): void => {
+      label.textContent = `Auto manage: ${isOn ? "on" : "off"}`;
+      label.style.color = isOn ? TEXT_SUCCESS : TEXT_WARNING;
+      toggle.textContent = isOn ? "turn off" : "turn on";
+    };
+    paintAuto(Boolean(autoSetting.defaultValue));
+    getSetting(autoSetting)
+      .then((current) => {
+        paintAuto(Boolean(current.value));
+      })
+      .catch((error) => {
+        console.error("Failed to read the perk auto-manage setting", error);
+      });
+    toggle.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const current = await getSetting(autoSetting);
+      const next = !current.value;
+      toggle.textContent = "saving…";
+      await setSetting({ ...autoSetting, value: next });
+      paintAuto(next);
+      // turning it on should take effect where you are, not at the next
+      // navigation -- otherwise it reads as not having worked
+      reload();
+    });
+    row.append(label, toggle);
+    body.append(row);
+  }
+
   if (status.note) {
     body.append(makeLinkedLine(TEXT_GRAY, [status.note]));
   }
