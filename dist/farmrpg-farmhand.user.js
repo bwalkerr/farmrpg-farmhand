@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.38
+// @version 1.1.39
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2916,6 +2916,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.briefingPanel = void 0;
+const perks_1 = __webpack_require__(5543);
 const craftworks_1 = __webpack_require__(920);
 const goals_1 = __webpack_require__(1267);
 const craftworks_2 = __webpack_require__(7831);
@@ -3303,6 +3304,7 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         inventory,
         itemNames: (basicItems !== null && basicItems !== void 0 ? basicItems : []).map((item) => item.name),
         mastery: (_e = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _e !== void 0 ? _e : [],
+        perks: yield (0, promise_1.orUndefined)(perks_1.perksState.get()),
         questGoals,
         statuses: (0, focus_1.getGoalStatuses)(graph, (_f = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _f !== void 0 ? _f : [], inventory, unlimited),
         unlimited,
@@ -3732,6 +3734,58 @@ const renderSetLoader = (body, context, reload) => {
 // Every saved set, loadable in place. The recommendation alone was too easy to
 // miss: it only appears when a tracked goal happens to share a name with a set,
 // so a queue of location loadouts showed nothing at all.
+// Perk sets live here rather than in a tab of their own: this tab is already
+// the loadouts you switch between, and a fifth tab would not fit the panel's
+// width, let alone a thumb. Switching is forced, because the reason to reach
+// for it by hand is that the automatic switch is not being trusted -- and the
+// fast path would otherwise no-op on the very state in doubt.
+const renderPerkSets = (body, context, reload) => {
+    var _a, _b;
+    const perkSets = (_b = (_a = context.perks) === null || _a === void 0 ? void 0 : _a.perkSets) !== null && _b !== void 0 ? _b : [];
+    if (perkSets.length === 0) {
+        return;
+    }
+    const status = (0, perks_1.getPerkStatus)();
+    body.append(makeHeading("Perk sets"));
+    if (status.note) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [status.note]));
+    }
+    for (const set of perkSets) {
+        const isOn = status.isConfirmed && status.name === set.name;
+        const row = document.createElement("div");
+        row.className = "fh-goal-top";
+        row.style.marginBottom = "5px";
+        const label = (0, gameLinks_1.makeLinkedLine)(isOn ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, [
+            `${set.name}${isOn ? " · on" : ""}`,
+        ]);
+        label.style.marginBottom = "0";
+        row.append(label);
+        if (!isOn) {
+            const action = document.createElement("a");
+            action.href = "#";
+            action.style.color = theme_1.TEXT_SUCCESS;
+            action.style.fontSize = "12px";
+            action.style.textDecoration = "underline";
+            action.textContent = "equip";
+            action.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+                event.preventDefault();
+                event.stopPropagation();
+                action.textContent = "equipping…";
+                action.style.color = theme_1.TEXT_GRAY;
+                try {
+                    yield (0, perks_1.activatePerkSet)(set, { force: true, settle: true });
+                    reload();
+                }
+                catch (_a) {
+                    action.textContent = "failed — try again";
+                    action.style.color = theme_1.TEXT_ERROR;
+                }
+            }));
+            row.append(action);
+        }
+        body.append(row);
+    }
+};
 const renderSets = (body, context, reload) => {
     var _a;
     const { craftworks, goals, itemNames } = context;
@@ -3739,6 +3793,10 @@ const renderSets = (body, context, reload) => {
     if (!craftworks || sets.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["No saved sets found on the Craftworks page."]));
         return;
+    }
+    renderPerkSets(body, context, reload);
+    if (sets.length > 0) {
+        body.append(makeHeading("Craftworks sets"));
     }
     const recommended = (0, suggestions_1.getRecommendedSet)(goals, sets, itemNames);
     for (const set of sets) {
@@ -3792,14 +3850,53 @@ const ensurePanel = () => {
     panel.id = PANEL_ID;
     const head = document.createElement("div");
     head.className = "fh-briefing-head";
+    const heading = document.createElement("div");
+    heading.style.alignItems = "center";
+    heading.style.display = "flex";
+    heading.style.gap = "6px";
+    // Which perk set the manager believes is on, in the same shape as the marker
+    // in the stats bar. On a phone that bar has no room for it and there is no
+    // console either, so without this there is no way to tell whether switching
+    // is working at all.
+    const perkDot = document.createElement("span");
+    perkDot.style.borderRadius = "50%";
+    perkDot.style.flexShrink = "0";
+    perkDot.style.height = "8px";
+    perkDot.style.width = "8px";
+    const perkLabel = document.createElement("span");
+    perkLabel.style.fontSize = "11px";
+    perkLabel.style.whiteSpace = "nowrap";
+    const paintPerk = () => {
+        var _a, _b, _c;
+        const status = (0, perks_1.getPerkStatus)();
+        let colour = theme_1.TEXT_GRAY;
+        if (status.isConfirmed) {
+            colour = theme_1.TEXT_SUCCESS;
+        }
+        else if (status.isPending) {
+            colour = theme_1.TEXT_WARNING;
+        }
+        perkDot.style.backgroundColor = colour;
+        perkLabel.style.color = colour;
+        perkLabel.textContent = (_a = status.name) !== null && _a !== void 0 ? _a : "no set";
+        // the note says which page was recognised and whether the switch landed --
+        // the only diagnostic there is without a console
+        heading.title = status.note
+            ? `Perks: ${(_b = status.name) !== null && _b !== void 0 ? _b : "none"} — ${status.note}`
+            : `Perks: ${(_c = status.name) !== null && _c !== void 0 ? _c : "none"}`;
+    };
+    paintPerk();
+    (0, perks_1.onPerkStatusChange)(paintPerk);
+    heading.append(perkDot, perkLabel);
     const title = document.createElement("div");
     title.textContent = "Briefing";
     title.style.color = theme_1.TEXT_WHITE;
     title.style.fontWeight = "bold";
+    heading.append(title);
     const refresh = document.createElement("span");
     refresh.className = "fh-briefing-refresh";
     refresh.textContent = "refresh";
-    head.append(title, refresh);
+    head.append(heading, refresh);
     const tabs = document.createElement("div");
     tabs.className = "fh-briefing-tabs";
     const body = document.createElement("div");
@@ -9678,7 +9775,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.38" !== void 0 ? "1.1.38" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.39" !== void 0 ? "1.1.39" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
