@@ -335,12 +335,31 @@ export const perkManagment: Feature = {
   settings: [SETTING_PERK_MANAGER],
   onPageLoad: async (settings) => {
     if (!settings[SettingId.PERK_MANAGER]) {
+      // The one silent path there was. With auto manage off nothing switches
+      // and nothing says why, which on a phone is indistinguishable from a
+      // broken reconciler -- and manual equipping from the panel still works,
+      // because that calls activatePerkSet directly, so the setting looks on.
+      setPerkStatusNote("auto manage is off");
       return;
     }
 
     // page-scoped perk switching, driven by the live page (idempotent, so the
     // SPA's duplicate onPageLoad calls converge instead of racing)
-    await reconcilePerksForCurrentPage();
+    //
+    // Nothing awaits this feature's onPageLoad, so a throw in here would be an
+    // unhandled rejection: silent, and on a phone there is no console to find
+    // it in. Every other path through the reconciler leaves a note, so this one
+    // does too.
+    try {
+      await reconcilePerksForCurrentPage();
+    } catch (error) {
+      console.error("Failed to reconcile perks", error);
+      setPerkStatusNote(
+        `reconcile failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
 
     // Mount/refresh the equipped-set indicator AFTER the reconcile, never
     // before: the game rebuilds the bottom bar as you navigate, and the perk
