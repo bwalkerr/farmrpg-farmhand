@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.46
+// @version 1.1.47
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3038,10 +3038,21 @@ const injectStyles = () => {
         transform: translateY(0);
         pointer-events: auto;
       }
+      /* Holds the tabs and the body. A column on a phone, exactly as before;
+         a row on a wide screen, which turns the tab strip into a vertical
+         rail. min-height:0 on both is what lets the body scroll inside a flex
+         parent instead of pushing the panel taller. */
+      #${PANEL_ID} .fh-briefing-main {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
       #${PANEL_ID} .fh-briefing-body {
         overflow-y: auto;
         overscroll-behavior: contain;
         flex: 1 1 auto;
+        min-height: 0;
       }
       #${PANEL_ID} .fh-briefing-body::-webkit-scrollbar { width: 8px; }
       #${PANEL_ID} .fh-briefing-body::-webkit-scrollbar-thumb {
@@ -3083,6 +3094,47 @@ const injectStyles = () => {
       #${PANEL_ID} .fh-tab[data-active="true"] {
         color: ${theme_1.TEXT_WHITE};
         background: rgba(255, 255, 255, 0.09);
+      }
+      /* The count of things wanting attention in that tab. Muted, because it
+         is there to be scanned rather than read. */
+      #${PANEL_ID} .fh-tab-count {
+        margin-left: 5px;
+        font-size: 11px;
+        color: ${theme_1.TEXT_WARNING};
+      }
+      #${PANEL_ID} .fh-tab[data-active="true"] .fh-tab-count {
+        color: ${theme_1.TEXT_WARNING};
+      }
+
+      /* Wide screens get a two-pane panel: a vertical rail of sections and a
+         content pane. The rail is what removes the four-tab ceiling -- a
+         column takes as many entries as we want, where the horizontal strip
+         could not fit a fifth at 380px. Below this width nothing changes. */
+      @media (min-width: 1024px) {
+        #${PANEL_ID} {
+          width: 760px;
+          max-height: 78vh;
+        }
+        #${PANEL_ID} .fh-briefing-main {
+          flex-direction: row;
+          gap: 14px;
+        }
+        #${PANEL_ID} .fh-briefing-tabs {
+          flex: 0 0 148px;
+          flex-direction: column;
+          gap: 2px;
+          margin-bottom: 0;
+          padding-bottom: 0;
+          padding-right: 12px;
+          border-bottom: none;
+          border-right: 1px solid ${theme_1.BORDER_GRAY};
+        }
+        #${PANEL_ID} .fh-tab {
+          flex: 0 0 auto;
+          text-align: left;
+          padding: 7px 10px;
+          font-size: 13px;
+        }
       }
       #${PANEL_ID} .fh-chips {
         display: flex;
@@ -3152,6 +3204,28 @@ const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 // a mis-ordered queue or a request waiting to be handed in. The tooltip says
 // which, and both callers build it the same way so the figure cannot mean one
 // thing before the panel is opened and another after.
+// How many things in each tab actually want you. The point of the rail is to
+// answer "where is the work" without opening all four, so a tab with nothing
+// outstanding shows no number at all rather than a zero -- a row of zeroes
+// reads as noise and hides the one number that matters.
+const getTabCounts = (context) => {
+    var _a, _b;
+    const counts = {};
+    const attention = summarizeAttention(context.advice, context.statuses.filter((status) => status.isReady).length);
+    if (attention.count > 0) {
+        counts.now = attention.count;
+    }
+    const unfinished = context.goalProgress.filter((progress) => progress.ratio < 1).length;
+    if (unfinished > 0) {
+        counts.goals = unfinished;
+    }
+    // the blockers nothing in the queue produces: the only ones a trip fixes
+    const roots = (_b = (_a = context.advice) === null || _a === void 0 ? void 0 : _a.roots.length) !== null && _b !== void 0 ? _b : 0;
+    if (roots > 0) {
+        counts.craftworks = roots;
+    }
+    return counts;
+};
 const summarizeAttention = (advice, readyRequests) => {
     const parts = [];
     if (advice && advice.dead.length > 0) {
@@ -3971,7 +4045,10 @@ const ensurePanel = () => {
     tabs.className = "fh-briefing-tabs";
     const body = document.createElement("div");
     body.className = "fh-briefing-body";
-    panel.append(head, tabs, body);
+    const main = document.createElement("div");
+    main.className = "fh-briefing-main";
+    main.append(tabs, body);
+    panel.append(head, main);
     document.body.append(button, panel);
     let active = "now";
     let context;
@@ -3980,8 +4057,15 @@ const ensurePanel = () => {
         if (!context) {
             return;
         }
+        const counts = getTabCounts(context);
         for (const tab of tabs.children) {
-            tab.dataset.active = String(tab.dataset.tab === active);
+            const element = tab;
+            element.dataset.active = String(element.dataset.tab === active);
+            const count = counts[element.dataset.tab];
+            const badge = element.querySelector(".fh-tab-count");
+            if (badge) {
+                badge.textContent = count === undefined ? "" : String(count);
+            }
         }
         switch (active) {
             case "now": {
@@ -4020,7 +4104,11 @@ const ensurePanel = () => {
         const element = document.createElement("div");
         element.className = "fh-tab";
         element.dataset.tab = tab.id;
-        element.textContent = tab.label;
+        const tabLabel = document.createElement("span");
+        tabLabel.textContent = tab.label;
+        const tabCount = document.createElement("span");
+        tabCount.className = "fh-tab-count";
+        element.append(tabLabel, tabCount);
         element.addEventListener("click", (event) => {
             event.stopPropagation();
             selectTab(tab.id);
@@ -10122,7 +10210,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.46" !== void 0 ? "1.1.46" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.47" !== void 0 ? "1.1.47" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
