@@ -15,6 +15,7 @@ export enum SettingId {
   COLLAPSE_ITEM = "collapseItem",
   COMPACT_SILVER = "compactSilver",
   CRAFT_PLANNER = "craftPlanner",
+  ITEM_NEEDS = "itemNeeds",
   CRAFTWORKS_ADVISOR = "craftworksAdvisor",
   EXPLORE_FIRST = "exploreFirst",
   FOCUS_DASHBOARD = "focusDashboard",

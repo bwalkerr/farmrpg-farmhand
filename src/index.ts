@@ -27,6 +27,7 @@ import { getSettingValues, registerSettings } from "./utils/settings";
 import { highlightSelfInChat } from "./features/highlightSelfInChat";
 import { improvedInputs } from "./features/improvedInputs";
 import { inventoryCapWarnings } from "./features/inventoryCapWarnings";
+import { itemNeeds } from "./features/itemNeeds";
 import { kitchenNotifications } from "./features/kitchenNotifications";
 import { linkifyQuickCraft } from "./features/linkifyQuickCraft";
 import { mailboxNotifications } from "./features/mailboxNotifications";
@@ -88,6 +89,7 @@ const FEATURES = [
   linkifyQuickCraft,
   exploreFirst,
   craftPlanner,
+  itemNeeds,
 
   // craftworks
   craftworksAdvisor,
