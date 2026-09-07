@@ -174,6 +174,29 @@ const watchSubtree = (
 
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
+      // Framework7 keeps the page you came from in the DOM and re-shows that
+      // same element on back navigation, so a returned-to page is never an
+      // added node and the childList branch below never sees it. What changes
+      // instead is the element's own class (`page-on-left` ->
+      // `page-on-center`), which is an attribute mutation. Without this branch
+      // nothing runs on back navigation: the perk manager never re-decides,
+      // and any feature that paints on arrival paints only the first time you
+      // ever arrive.
+      if (mutation.type === "attributes") {
+        const element = mutation.target as HTMLElement;
+        // Only the moment it becomes the visible page -- not the moment it
+        // stops being one, and not the class changes our own features make.
+        if (
+          filter &&
+          element.matches?.(filter) &&
+          [...element.classList].some(
+            (name) => name.endsWith("-on-center") || name.endsWith("-to-center")
+          )
+        ) {
+          handle();
+        }
+        continue;
+      }
       // only respond to tree changes
       if (mutation.type !== "childList") {
         continue;
@@ -198,7 +221,12 @@ const watchSubtree = (
       }
     }
   });
-  observer.observe(target, { childList: true, subtree: true });
+  observer.observe(target, {
+    attributeFilter: ["class"],
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
   handle();
 };
 
