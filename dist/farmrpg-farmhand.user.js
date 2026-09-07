@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.41
+// @version 1.1.42
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -8800,6 +8800,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.renderPerkIndicator = void 0;
 const perks_1 = __webpack_require__(5543);
 const settings_1 = __webpack_require__(126);
+const layout_1 = __webpack_require__(6253);
 // A small "● Crafting" pill in the bottom stats bar, right of the currency
 // counts and the cap tracker, showing which perk set is equipped right now.
 //
@@ -8923,7 +8924,11 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
         duplicate.remove();
     }
     let pill = pillElement;
-    if (!settings[settings_1.SettingId.PERK_MANAGER] || !status.name) {
+    // Not on a phone. The bottom bar there holds the currency counts and the
+    // game's own home and chat buttons and nothing more, and the panel shows the
+    // equipped set already -- in a surface we control, which is the better place
+    // for it. Same call the cap tracker in this bar already makes.
+    if (!settings[settings_1.SettingId.PERK_MANAGER] || !status.name || (0, layout_1.isMobileLayout)()) {
         pill === null || pill === void 0 ? void 0 : pill.remove();
         return;
     }
@@ -8967,6 +8972,13 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     }
 });
 exports.renderPerkIndicator = renderPerkIndicator;
+// rotating a phone or dragging a window across the breakpoint has to repaint,
+// or the pill keeps whatever shape it happened to mount in
+(0, layout_1.onLayoutChange)(() => {
+    (0, exports.renderPerkIndicator)().catch((error) => {
+        console.error("Failed to render perk indicator", error);
+    });
+});
 // re-render whenever a switch starts or finishes
 (0, perks_1.onPerkStatusChange)(() => {
     (0, exports.renderPerkIndicator)().catch((error) => {
@@ -9975,7 +9987,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.41" !== void 0 ? "1.1.41" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.42" !== void 0 ? "1.1.42" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -10180,8 +10192,10 @@ const watchSubtree = (selector, handler, filter) => {
         console.error(`${selector} not found`);
         return;
     }
+    let lastHandledAt = 0;
     const handle = () => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
+        lastHandledAt = Date.now();
         const settings = yield (0, settings_1.getSettingValues)();
         const [page, parameters] = (0, page_1.getPage)();
         // console.debug(`${selector} Load`, page, parameters);
@@ -10189,6 +10203,26 @@ const watchSubtree = (selector, handler, filter) => {
             (_a = feature[handler]) === null || _a === void 0 ? void 0 : _a.call(feature, settings, page, parameters);
         }
     });
+    // A transition flips several classes in a burst, and mid-transition the hash
+    // has already moved while the page swap has not landed -- dispatching then
+    // hands features a page that is about to stop being true. Waiting for the
+    // burst to settle is what makes the dispatch read one consistent state, and
+    // it is the same 100ms the notifications observer already uses for this.
+    let pending;
+    const scheduleHandle = () => {
+        clearTimeout(pending);
+        pending = setTimeout(() => {
+            // A fresh page arrives as an added node AND flips its class, so the
+            // childList branch has usually dispatched already. Skipping the
+            // redundant one keeps forward navigation behaving exactly as it did
+            // before; back navigation, which adds no node, is the case that gets a
+            // dispatch it never had.
+            if (Date.now() - lastHandledAt < 150) {
+                return;
+            }
+            handle();
+        }, 100);
+    };
     const observer = new MutationObserver((mutations) => {
         var _a, _b, _c;
         for (const mutation of mutations) {
@@ -10202,12 +10236,12 @@ const watchSubtree = (selector, handler, filter) => {
             // ever arrive.
             if (mutation.type === "attributes") {
                 const element = mutation.target;
-                // Only the moment it becomes the visible page -- not the moment it
-                // stops being one, and not the class changes our own features make.
+                // Only the settled class, never the mid-transition -to-center one:
+                // that fires while the hash and the page element disagree.
                 if (filter &&
                     ((_a = element.matches) === null || _a === void 0 ? void 0 : _a.call(element, filter)) &&
-                    [...element.classList].some((name) => name.endsWith("-on-center") || name.endsWith("-to-center"))) {
-                    handle();
+                    [...element.classList].some((name) => name.endsWith("-on-center"))) {
+                    scheduleHandle();
                 }
                 continue;
             }
