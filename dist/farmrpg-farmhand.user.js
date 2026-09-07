@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.43
+// @version 1.1.44
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3747,6 +3747,53 @@ const renderPerkSets = (body, context, reload) => {
     }
     const status = (0, perks_1.getPerkStatus)();
     body.append(makeHeading("Perk sets"));
+    // Auto manage is repeated here, not only on the game's settings page, for two
+    // reasons: that page is genuinely hard to reach on a phone, and this is the
+    // one setting whose being off is indistinguishable from the reconciler being
+    // broken -- manual equipping below still works, because it calls
+    // activatePerkSet directly and never consults the setting.
+    const autoSetting = (0, settings_1.getSettings)().find((setting) => setting.id === settings_1.SettingId.PERK_MANAGER && setting.type === "boolean");
+    if (autoSetting) {
+        const row = document.createElement("div");
+        row.style.alignItems = "center";
+        row.style.display = "flex";
+        row.style.gap = "8px";
+        row.style.marginBottom = "5px";
+        const label = document.createElement("span");
+        label.style.fontSize = "11px";
+        const toggle = document.createElement("a");
+        toggle.href = "#";
+        toggle.style.color = theme_1.TEXT_GRAY;
+        toggle.style.fontSize = "11px";
+        toggle.style.marginLeft = "auto";
+        toggle.style.textDecoration = "underline";
+        const paintAuto = (isOn) => {
+            label.textContent = `Auto manage: ${isOn ? "on" : "off"}`;
+            label.style.color = isOn ? theme_1.TEXT_SUCCESS : theme_1.TEXT_WARNING;
+            toggle.textContent = isOn ? "turn off" : "turn on";
+        };
+        paintAuto(Boolean(autoSetting.defaultValue));
+        (0, settings_1.getSetting)(autoSetting)
+            .then((current) => {
+            paintAuto(Boolean(current.value));
+        })
+            .catch((error) => {
+            console.error("Failed to read the perk auto-manage setting", error);
+        });
+        toggle.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+            event.preventDefault();
+            const current = yield (0, settings_1.getSetting)(autoSetting);
+            const next = !current.value;
+            toggle.textContent = "saving…";
+            yield (0, settings_1.setSetting)(Object.assign(Object.assign({}, autoSetting), { value: next }));
+            paintAuto(next);
+            // turning it on should take effect where you are, not at the next
+            // navigation -- otherwise it reads as not having worked
+            reload();
+        }));
+        row.append(label, toggle);
+        body.append(row);
+    }
     if (status.note) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [status.note]));
     }
@@ -10003,7 +10050,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.43" !== void 0 ? "1.1.43" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.44" !== void 0 ? "1.1.44" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -10208,10 +10255,8 @@ const watchSubtree = (selector, handler, filter) => {
         console.error(`${selector} not found`);
         return;
     }
-    let lastHandledAt = 0;
     const handle = () => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
-        lastHandledAt = Date.now();
         const settings = yield (0, settings_1.getSettingValues)();
         const [page, parameters] = (0, page_1.getPage)();
         // console.debug(`${selector} Load`, page, parameters);
@@ -10219,48 +10264,9 @@ const watchSubtree = (selector, handler, filter) => {
             (_a = feature[handler]) === null || _a === void 0 ? void 0 : _a.call(feature, settings, page, parameters);
         }
     });
-    // A transition flips several classes in a burst, and mid-transition the hash
-    // has already moved while the page swap has not landed -- dispatching then
-    // hands features a page that is about to stop being true. Waiting for the
-    // burst to settle is what makes the dispatch read one consistent state, and
-    // it is the same 100ms the notifications observer already uses for this.
-    let pending;
-    const scheduleHandle = () => {
-        clearTimeout(pending);
-        pending = setTimeout(() => {
-            // A fresh page arrives as an added node AND flips its class, so the
-            // childList branch has usually dispatched already. Skipping the
-            // redundant one keeps forward navigation behaving exactly as it did
-            // before; back navigation, which adds no node, is the case that gets a
-            // dispatch it never had.
-            if (Date.now() - lastHandledAt < 150) {
-                return;
-            }
-            handle();
-        }, 100);
-    };
     const observer = new MutationObserver((mutations) => {
-        var _a, _b, _c;
+        var _a, _b;
         for (const mutation of mutations) {
-            // Framework7 keeps the page you came from in the DOM and re-shows that
-            // same element on back navigation, so a returned-to page is never an
-            // added node and the childList branch below never sees it. What changes
-            // instead is the element's own class (`page-on-left` ->
-            // `page-on-center`), which is an attribute mutation. Without this branch
-            // nothing runs on back navigation: the perk manager never re-decides,
-            // and any feature that paints on arrival paints only the first time you
-            // ever arrive.
-            if (mutation.type === "attributes") {
-                const element = mutation.target;
-                // Only the settled class, never the mid-transition -to-center one:
-                // that fires while the hash and the page element disagree.
-                if (filter &&
-                    ((_a = element.matches) === null || _a === void 0 ? void 0 : _a.call(element, filter)) &&
-                    [...element.classList].some((name) => name.endsWith("-on-center"))) {
-                    scheduleHandle();
-                }
-                continue;
-            }
             // only respond to tree changes
             if (mutation.type !== "childList") {
                 continue;
@@ -10274,7 +10280,7 @@ const watchSubtree = (selector, handler, filter) => {
             }
             if (filter) {
                 for (const node of mutation.addedNodes) {
-                    if ((_c = (_b = node).matches) === null || _c === void 0 ? void 0 : _c.call(_b, filter)) {
+                    if ((_b = (_a = node).matches) === null || _b === void 0 ? void 0 : _b.call(_a, filter)) {
                         handle();
                     }
                 }
@@ -10284,12 +10290,7 @@ const watchSubtree = (selector, handler, filter) => {
             }
         }
     });
-    observer.observe(target, {
-        attributeFilter: ["class"],
-        attributes: true,
-        childList: true,
-        subtree: true,
-    });
+    observer.observe(target, { childList: true, subtree: true });
     handle();
 };
 // eslint-disable-next-line unicorn/prefer-top-level-await
