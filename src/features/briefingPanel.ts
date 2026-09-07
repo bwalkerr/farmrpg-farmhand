@@ -1,4 +1,11 @@
 import {
+  activatePerkSet,
+  getPerkStatus,
+  onPerkStatusChange,
+  PerkSet,
+  perksState,
+} from "~/api/farmrpg/apis/perks";
+import {
   activateSet,
   CraftworksSnapshot,
   craftworksState,
@@ -379,6 +386,7 @@ interface Context {
   here?: { location: LocationRef; stamina?: number };
   itemNames: string[];
   mastery: MasteryEntry[];
+  perks?: { currentPerkSetId?: number; perkSets: PerkSet[] };
   questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
   statuses: ReturnType<typeof getGoalStatuses>;
   unlimited: UnlimitedItems;
@@ -498,6 +506,7 @@ const loadContext = async (force: boolean): Promise<Context> => {
     inventory,
     itemNames: (basicItems ?? []).map((item) => item.name),
     mastery: mastery?.entries ?? [],
+    perks: await orUndefined(perksState.get()),
     questGoals,
     statuses: getGoalStatuses(
       graph,
@@ -1125,6 +1134,61 @@ const renderSetLoader = (
 // Every saved set, loadable in place. The recommendation alone was too easy to
 // miss: it only appears when a tracked goal happens to share a name with a set,
 // so a queue of location loadouts showed nothing at all.
+// Perk sets live here rather than in a tab of their own: this tab is already
+// the loadouts you switch between, and a fifth tab would not fit the panel's
+// width, let alone a thumb. Switching is forced, because the reason to reach
+// for it by hand is that the automatic switch is not being trusted -- and the
+// fast path would otherwise no-op on the very state in doubt.
+const renderPerkSets = (
+  body: HTMLElement,
+  context: Context,
+  reload: () => void
+): void => {
+  const perkSets = context.perks?.perkSets ?? [];
+  if (perkSets.length === 0) {
+    return;
+  }
+  const status = getPerkStatus();
+  body.append(makeHeading("Perk sets"));
+  if (status.note) {
+    body.append(makeLinkedLine(TEXT_GRAY, [status.note]));
+  }
+  for (const set of perkSets) {
+    const isOn = status.isConfirmed && status.name === set.name;
+    const row = document.createElement("div");
+    row.className = "fh-goal-top";
+    row.style.marginBottom = "5px";
+    const label = makeLinkedLine(isOn ? TEXT_SUCCESS : TEXT_GRAY, [
+      `${set.name}${isOn ? " · on" : ""}`,
+    ]);
+    label.style.marginBottom = "0";
+    row.append(label);
+    if (!isOn) {
+      const action = document.createElement("a");
+      action.href = "#";
+      action.style.color = TEXT_SUCCESS;
+      action.style.fontSize = "12px";
+      action.style.textDecoration = "underline";
+      action.textContent = "equip";
+      action.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        action.textContent = "equipping…";
+        action.style.color = TEXT_GRAY;
+        try {
+          await activatePerkSet(set, { force: true, settle: true });
+          reload();
+        } catch {
+          action.textContent = "failed — try again";
+          action.style.color = TEXT_ERROR;
+        }
+      });
+      row.append(action);
+    }
+    body.append(row);
+  }
+};
+
 const renderSets = (
   body: HTMLElement,
   context: Context,
@@ -1137,6 +1201,10 @@ const renderSets = (
       makeLinkedLine(TEXT_GRAY, ["No saved sets found on the Craftworks page."])
     );
     return;
+  }
+  renderPerkSets(body, context, reload);
+  if (sets.length > 0) {
+    body.append(makeHeading("Craftworks sets"));
   }
   const recommended = getRecommendedSet(goals, sets, itemNames);
   for (const set of sets) {
@@ -1194,14 +1262,51 @@ const ensurePanel = (): void => {
 
   const head = document.createElement("div");
   head.className = "fh-briefing-head";
+  const heading = document.createElement("div");
+  heading.style.alignItems = "center";
+  heading.style.display = "flex";
+  heading.style.gap = "6px";
+  // Which perk set the manager believes is on, in the same shape as the marker
+  // in the stats bar. On a phone that bar has no room for it and there is no
+  // console either, so without this there is no way to tell whether switching
+  // is working at all.
+  const perkDot = document.createElement("span");
+  perkDot.style.borderRadius = "50%";
+  perkDot.style.flexShrink = "0";
+  perkDot.style.height = "8px";
+  perkDot.style.width = "8px";
+  const perkLabel = document.createElement("span");
+  perkLabel.style.fontSize = "11px";
+  perkLabel.style.whiteSpace = "nowrap";
+  const paintPerk = (): void => {
+    const status = getPerkStatus();
+    let colour = TEXT_GRAY;
+    if (status.isConfirmed) {
+      colour = TEXT_SUCCESS;
+    } else if (status.isPending) {
+      colour = TEXT_WARNING;
+    }
+    perkDot.style.backgroundColor = colour;
+    perkLabel.style.color = colour;
+    perkLabel.textContent = status.name ?? "no set";
+    // the note says which page was recognised and whether the switch landed --
+    // the only diagnostic there is without a console
+    heading.title = status.note
+      ? `Perks: ${status.name ?? "none"} — ${status.note}`
+      : `Perks: ${status.name ?? "none"}`;
+  };
+  paintPerk();
+  onPerkStatusChange(paintPerk);
+  heading.append(perkDot, perkLabel);
   const title = document.createElement("div");
   title.textContent = "Briefing";
   title.style.color = TEXT_WHITE;
   title.style.fontWeight = "bold";
+  heading.append(title);
   const refresh = document.createElement("span");
   refresh.className = "fh-briefing-refresh";
   refresh.textContent = "refresh";
-  head.append(title, refresh);
+  head.append(heading, refresh);
 
   const tabs = document.createElement("div");
   tabs.className = "fh-briefing-tabs";
