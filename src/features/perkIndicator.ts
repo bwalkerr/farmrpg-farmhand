@@ -1,5 +1,6 @@
 import { getPerkStatus, onPerkStatusChange } from "~/api/farmrpg/apis/perks";
 import { getSettingValues, SettingId } from "~/utils/settings";
+import { isMobileLayout, onLayoutChange } from "~/utils/layout";
 
 // A small "● Crafting" pill in the bottom stats bar, right of the currency
 // counts and the cap tracker, showing which perk set is equipped right now.
@@ -145,7 +146,11 @@ export const renderPerkIndicator = async (): Promise<void> => {
   }
   let pill = pillElement;
 
-  if (!settings[SettingId.PERK_MANAGER] || !status.name) {
+  // Not on a phone. The bottom bar there holds the currency counts and the
+  // game's own home and chat buttons and nothing more, and the panel shows the
+  // equipped set already -- in a surface we control, which is the better place
+  // for it. Same call the cap tracker in this bar already makes.
+  if (!settings[SettingId.PERK_MANAGER] || !status.name || isMobileLayout()) {
     pill?.remove();
     return;
   }
@@ -190,6 +195,14 @@ export const renderPerkIndicator = async (): Promise<void> => {
     pill.title = `${status.name} perk set selected (not verified this session)`;
   }
 };
+
+// rotating a phone or dragging a window across the breakpoint has to repaint,
+// or the pill keeps whatever shape it happened to mount in
+onLayoutChange(() => {
+  renderPerkIndicator().catch((error) => {
+    console.error("Failed to render perk indicator", error);
+  });
+});
 
 // re-render whenever a switch starts or finishes
 onPerkStatusChange(() => {
