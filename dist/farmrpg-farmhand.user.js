@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.47
+// @version 1.1.48
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2921,9 +2921,11 @@ const craftworks_1 = __webpack_require__(920);
 const goals_1 = __webpack_require__(1267);
 const craftworks_2 = __webpack_require__(7831);
 const theme_1 = __webpack_require__(1178);
+const needAdapters_1 = __webpack_require__(1903);
 const recipes_1 = __webpack_require__(498);
 const api_1 = __webpack_require__(3413);
 const page_1 = __webpack_require__(7952);
+const needs_1 = __webpack_require__(2538);
 const suggestions_1 = __webpack_require__(9262);
 const focus_1 = __webpack_require__(7167);
 const requests_1 = __webpack_require__(3300);
@@ -3345,7 +3347,7 @@ const getHere = () => __awaiter(void 0, void 0, void 0, function* () {
 // Everything the three tabs need, gathered once. Switching tabs re-renders from
 // this rather than re-fetching, so only the refresh control costs requests.
 const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     const settings = yield (0, settings_1.getSettingValues)();
     const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_a = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _a !== void 0 ? _a : ""));
     const [snapshot, craftworks, quests, goals, mastery, basicItems] = yield Promise.all([
@@ -3380,10 +3382,30 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         mastery: (_e = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _e !== void 0 ? _e : [],
         perks: yield (0, promise_1.orUndefined)(perks_1.perksState.get()),
         questGoals,
-        statuses: (0, focus_1.getGoalStatuses)(graph, (_f = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _f !== void 0 ? _f : [], inventory, unlimited),
+        resolved: (0, needs_1.resolveNeeds)(graph, (0, needAdapters_1.buildNeeds)({
+            craftworksRoots: (_f = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _f !== void 0 ? _f : [],
+            questGoals: (_g = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _g !== void 0 ? _g : [],
+            trackedGoals: goals,
+        }), inventory, unlimited, (_h = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _h !== void 0 ? _h : []),
+        statuses: (0, focus_1.getGoalStatuses)(graph, (_j = questGoals === null || questGoals === void 0 ? void 0 : questGoals.goals) !== null && _j !== void 0 ? _j : [], inventory, unlimited),
         unlimited,
     };
 });
+// The item names the backlog wants, for matching Craftworks set names against.
+// Everything outstanding, not only what was tracked by hand: a set that makes
+// an intermediate a request needs is worth offering too.
+const getWantedNames = (context) => {
+    const names = new Set();
+    for (const status of context.resolved.statuses) {
+        if (status.need.kind === "item" && !status.isReady) {
+            names.add(status.need.item);
+        }
+    }
+    for (const entry of context.resolved.missing) {
+        names.add(entry.name);
+    }
+    return [...names];
+};
 // Takes exactly what to source. It used to fold in quest bottlenecks itself
 // regardless of caller, which meant the Goals tab quoted trips for items no
 // tracked goal wanted — each tab now decides what its own list means.
@@ -3652,7 +3674,7 @@ const makeQueueToggle = (craftworks, reload) => {
 };
 const renderCraftworks = (body, context, reload) => {
     var _a, _b, _c;
-    const { advice, cap, craftworks, goals, graph, inventory, mastery, unlimited, } = context;
+    const { advice, cap, craftworks, graph, inventory, mastery, resolved, unlimited, } = context;
     if (!advice || !craftworks) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Could not read the Craftworks queue."]));
         return;
@@ -3721,11 +3743,12 @@ const renderCraftworks = (body, context, reload) => {
     }
     // Suggestions are goal-driven when there are goals; otherwise the queue's own
     // stalled slots are the only thing there is to reason from.
-    const desired = goals.length > 0
-        ? (0, goals_1.getDesiredQueue)(graph, goals, inventory, unlimited)
-        : advice.roots
-            .filter((root) => { var _a; return (_a = graph.nodes.get(root.name)) === null || _a === void 0 ? void 0 : _a.canCraft; })
-            .map((root) => ({ name: root.name, quantity: 1 }));
+    // Everything that wants something, at the quantity it wants: tracked goals,
+    // open requests and the queue's own stalled slots. The old list was tracked
+    // goals alone, falling back to ONE of each thing a slot was stalled on --
+    // which is how the queue filled up with single units of things nothing
+    // actually needed much of.
+    const desired = (0, needs_1.getDesiredQueueForNeeds)(graph, resolved, inventory, unlimited);
     const suggestions = (0, craftworks_2.suggestQueueChanges)(desired, craftworks.slots, inventory, cap, maxSlots, unlimited);
     if (suggestions.length > 0) {
         body.append(makeHeading("Suggested changes"));
@@ -3737,7 +3760,9 @@ const renderCraftworks = (body, context, reload) => {
                 ` — ${suggestion.reason}`,
             ]));
         }
-        if (goals.length === 0) {
+        // only when there is genuinely nothing to aim at -- suggestions now come
+        // from open requests and stalled slots too, not tracked goals alone
+        if (resolved.scopes.length === 0) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
                 "Track a goal to get suggestions aimed at something.",
             ]));
@@ -3791,11 +3816,11 @@ const makeSetLoadControl = (set, context, reload, onFailure) => {
 };
 const renderSetLoader = (body, context, reload) => {
     var _a;
-    const { craftworks, goals, itemNames } = context;
+    const { craftworks, itemNames } = context;
     if (!craftworks) {
         return;
     }
-    const recommended = (0, suggestions_1.getRecommendedSet)(goals, (_a = craftworks.sets) !== null && _a !== void 0 ? _a : [], itemNames);
+    const recommended = (0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_a = craftworks.sets) !== null && _a !== void 0 ? _a : [], itemNames);
     if (!recommended) {
         return;
     }
@@ -3929,7 +3954,7 @@ const renderPerkSets = (body, context, reload) => {
 };
 const renderSets = (body, context, reload) => {
     var _a;
-    const { craftworks, goals, itemNames } = context;
+    const { craftworks, itemNames } = context;
     const sets = (_a = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _a !== void 0 ? _a : [];
     if (!craftworks || sets.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["No saved sets found on the Craftworks page."]));
@@ -3939,7 +3964,7 @@ const renderSets = (body, context, reload) => {
     if (sets.length > 0) {
         body.append(makeHeading("Craftworks sets"));
     }
-    const recommended = (0, suggestions_1.getRecommendedSet)(goals, sets, itemNames);
+    const recommended = (0, suggestions_1.getRecommendedSet)(getWantedNames(context), sets, itemNames);
     for (const set of sets) {
         const row = document.createElement("div");
         row.className = "fh-goal-top";
@@ -5398,7 +5423,7 @@ const renderSetRecommendation = (container) => __awaiter(void 0, void 0, void 0,
         return;
     }
     const [goals, items] = yield Promise.all([(0, goals_1.getGoals)(), (0, api_1.getBasicItems)()]);
-    const recommended = (0, suggestions_1.getRecommendedSet)(goals, sets, items.map((item) => item.name));
+    const recommended = (0, suggestions_1.getRecommendedSet)(goals.map((goal) => goal.name), sets, items.map((item) => item.name));
     if (!recommended) {
         return;
     }
@@ -10210,7 +10235,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.47" !== void 0 ? "1.1.47" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.48" !== void 0 ? "1.1.48" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -12010,7 +12035,7 @@ exports.buildNeeds = buildNeeds;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getNearlyDoneScopes = exports.rankNeedBottlenecks = exports.resolveNeeds = exports.getScopeRoots = exports.MAX_NEED_DEPTH = void 0;
+exports.getDesiredQueueForNeeds = exports.getNearlyDoneScopes = exports.rankNeedBottlenecks = exports.resolveNeeds = exports.getScopeRoots = exports.MAX_NEED_DEPTH = void 0;
 const craftPlanner_1 = __webpack_require__(5825);
 const unlimited_1 = __webpack_require__(4808);
 // Deep enough for any real chain of goals, and a stop for a malformed one.
@@ -12063,6 +12088,7 @@ const READY = {
     have: 0,
     isReady: true,
     missing: [],
+    outstanding: 0,
     ratio: 1,
 };
 // Cost one item need against a pool, spending what it takes out of that pool.
@@ -12095,6 +12121,7 @@ const costAgainstPool = (need, graph, pool, unlimited, mastery) => {
             have,
             isReady: false,
             missing: plan.missing,
+            outstanding: remaining,
             ratio: required > 0 ? Math.min(1, have / required) : 0,
         };
     }
@@ -12114,6 +12141,7 @@ const costAgainstPool = (need, graph, pool, unlimited, mastery) => {
             have,
             isReady: false,
             missing: [{ name: need.item, quantity: outstanding }],
+            outstanding,
             ratio: have / need.quantity,
         };
     }
@@ -12128,6 +12156,7 @@ const costAgainstPool = (need, graph, pool, unlimited, mastery) => {
         have,
         isReady: false,
         missing: plan.missing,
+        outstanding,
         ratio: Math.min(1, (have + canMakeNow) / need.quantity),
     };
 };
@@ -12155,6 +12184,7 @@ const costAsMilestone = (need, graph, inventory, unlimited) => {
         have,
         isReady: false,
         missing: [],
+        outstanding,
         ratio: Math.min(1, (have + canMakeNow) / need.quantity),
     };
 };
@@ -12290,6 +12320,44 @@ exports.rankNeedBottlenecks = rankNeedBottlenecks;
 // makes them the highest-leverage thing on the board.
 const getNearlyDoneScopes = (resolved) => resolved.scopes.filter((scope) => !scope.isReady && scope.missing.length === 1);
 exports.getNearlyDoneScopes = getNearlyDoneScopes;
+// What the Craftworks queue should be making, across the whole backlog.
+//
+// The old queue advice reasoned from tracked goals alone, so a quest wanting
+// forty of something never reached it and the fallback asked for ONE of each
+// thing a slot happened to be stalled on -- which is how a queue full of
+// single units happens. Every need is in here now, at the quantity it actually
+// wants, and an item two undertakings both need keeps the deeper of its two
+// positions so the order still builds bottom-up.
+const getDesiredQueueForNeeds = (graph, resolved, inventory, unlimited = unlimited_1.NO_UNLIMITED) => {
+    var _a, _b;
+    const byName = new Map();
+    for (const status of resolved.statuses) {
+        // a milestone is already inside its parent's plan; costing it again would
+        // ask the queue for the same materials twice
+        if (status.need.kind !== "item" ||
+            status.isReady ||
+            status.coveredByParent ||
+            status.outstanding <= 0) {
+            continue;
+        }
+        const node = graph.nodes.get(status.need.item);
+        if (!(node === null || node === void 0 ? void 0 : node.canCraft) || node.ingredients.length === 0) {
+            continue;
+        }
+        const plan = (0, craftPlanner_1.planCraft)(graph, status.need.item, status.outstanding, Object.assign(Object.assign({}, inventory), { [status.need.item]: 0 }), unlimited);
+        for (const step of plan.steps) {
+            const existing = byName.get(step.name);
+            byName.set(step.name, {
+                depth: Math.max((_a = existing === null || existing === void 0 ? void 0 : existing.depth) !== null && _a !== void 0 ? _a : 0, step.depth),
+                quantity: ((_b = existing === null || existing === void 0 ? void 0 : existing.quantity) !== null && _b !== void 0 ? _b : 0) + step.quantity,
+            });
+        }
+    }
+    return [...byName.entries()]
+        .sort((a, b) => b[1].depth - a[1].depth)
+        .map(([name, entry]) => ({ name, quantity: entry.quantity }));
+};
+exports.getDesiredQueueForNeeds = getDesiredQueueForNeeds;
 
 
 /***/ }),
@@ -13403,9 +13471,13 @@ exports.getSetSuggestions = getSetSuggestions;
 // player named a set after the thing it builds, so a goal for that thing means
 // that set is the one to load. The active set is excluded because recommending
 // it would be advice to re-run a destructive activation for no change.
-const getRecommendedSet = (goals, sets, itemNames) => {
+// Takes the item names the backlog wants rather than the tracked goals, so a
+// set that makes something a QUEST needs -- or an intermediate two
+// undertakings both need -- is recommendable too. Matching only literal
+// tracked-goal names meant the loader stayed silent on almost everything.
+const getRecommendedSet = (wantedNames, sets, itemNames) => {
     const names = [...itemNames];
-    const wanted = new Set(goals.map((goal) => goal.name.toLowerCase()));
+    const wanted = new Set([...wantedNames].map((name) => name.toLowerCase()));
     for (const set of sets) {
         if (set.isActive) {
             continue;
