@@ -13,6 +13,10 @@ const GOALS_KEY = "farmhandGoals";
 
 export interface TrackedGoal {
   addedAt: number;
+  // "mastery" goals are measured against mastery progress rather than the
+  // inventory: mastery counts everything ever acquired, so holding 99 of
+  // something says nothing about how much of its tier is left.
+  kind?: "mastery";
   name: string;
   quantity: number;
 }
@@ -34,13 +38,16 @@ export const setGoals = async (goals: TrackedGoal[]): Promise<void> => {
 // stacking a second entry, so the item page's button is idempotent.
 export const addGoal = async (
   name: string,
-  quantity: number
+  quantity: number,
+  kind?: TrackedGoal["kind"]
 ): Promise<TrackedGoal[]> => {
   const goals = await getGoals();
   const existing = goals.find((goal) => goal.name === name);
   const next = existing
-    ? goals.map((goal) => (goal.name === name ? { ...goal, quantity } : goal))
-    : [...goals, { addedAt: Date.now(), name, quantity }];
+    ? goals.map((goal) =>
+        goal.name === name ? { ...goal, kind, quantity } : goal
+      )
+    : [...goals, { addedAt: Date.now(), kind, name, quantity }];
   await setGoals(next);
   return next;
 };
@@ -73,8 +80,41 @@ export const getGoalProgress = (
   graph: RecipeGraph,
   goal: TrackedGoal,
   inventory: Record<string, number>,
-  unlimited: UnlimitedItems = NO_UNLIMITED
+  unlimited: UnlimitedItems = NO_UNLIMITED,
+  mastery: {
+    name: string;
+    remaining: number;
+    required: number;
+    value: number;
+  }[] = []
 ): GoalProgress => {
+  // A mastery goal is "acquire N more", not "hold N". Measuring it against the
+  // inventory reported it finished the moment the shelf held more than the
+  // remainder -- 99 Cave Paste read as done when the tier still wanted one more
+  // to be made. Mastery progress is the only thing that answers it, and reading
+  // it live means the figure keeps up as the tier fills.
+  if (goal.kind === "mastery") {
+    const entry = mastery.find((item) => item.name === goal.name);
+    if (entry) {
+      const plan = planCraft(
+        graph,
+        goal.name,
+        entry.remaining,
+        inventory,
+        unlimited
+      );
+      return {
+        canMakeNow: Math.min(
+          entry.remaining,
+          getMaxCraftable(graph, goal.name, inventory, unlimited)
+        ),
+        goal,
+        have: entry.value,
+        missing: entry.remaining > 0 ? plan.missing : [],
+        ratio: Math.min(1, entry.value / entry.required),
+      };
+    }
+  }
   const have = inventory[goal.name] ?? 0;
   const outstanding = Math.max(0, goal.quantity - have);
   if (outstanding === 0) {
@@ -109,7 +149,8 @@ export const getDesiredQueue = (
 ): { name: string; quantity: number }[] => {
   const byName = new Map<string, { depth: number; quantity: number }>();
   for (const goal of goals) {
-    const have = inventory[goal.name] ?? 0;
+    // a mastery goal always wants more made, whatever is on the shelf
+    const have = goal.kind === "mastery" ? 0 : inventory[goal.name] ?? 0;
     const outstanding = Math.max(0, goal.quantity - have);
     if (outstanding === 0) {
       continue;

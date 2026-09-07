@@ -19,6 +19,7 @@ import {
   getSetSuggestions,
   matchSetNameToItem,
 } from "./suggestions";
+import { getGoalProgress } from "./goals";
 import {
   getGoalStatuses,
   getNearlyDone,
@@ -892,6 +893,50 @@ console.info("location advisor: Mount Banon, cap 1044");
     findLocationSet("Forest", sets, allNames),
     undefined
   );
+}
+
+console.info("a mastery goal is measured by acquisition, not by the shelf");
+{
+  // Cave Paste: 99 of 100 toward the tier, and 99 already on the shelf
+  const mastery = [
+    { name: "Cave Paste", remaining: 1, required: 100, value: 99 },
+  ];
+  const graph = makeGraph({
+    "Cave Paste": { drops: [{ location: "Small Cave", rate: 3 }] },
+  });
+  const goal = {
+    addedAt: 0,
+    kind: "mastery" as const,
+    name: "Cave Paste",
+    quantity: 1,
+  };
+  const progress = getGoalProgress(
+    graph,
+    goal,
+    { "Cave Paste": 99 },
+    undefined,
+    mastery
+  );
+  // holding 99 says nothing about the tier: one more still has to be acquired
+  check(
+    "not finished just because the shelf is full",
+    progress.ratio < 1,
+    true
+  );
+  check("progress is the mastery figure", progress.have, 99);
+  check(
+    "still short of the last one",
+    progress.missing.map((entry) => `${entry.quantity}x${entry.name}`),
+    ["1xCave Paste"]
+  );
+
+  // the same goal without the mastery flag is a plain "hold N", and 99 >= 1
+  const plain = getGoalProgress(
+    graph,
+    { addedAt: 0, name: "Cave Paste", quantity: 1 },
+    { "Cave Paste": 99 }
+  );
+  check("a plain goal for 1 is satisfied by 99 on hand", plain.ratio, 1);
 }
 
 if (failures > 0) {
