@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.35
+// @version 1.1.36
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3166,6 +3166,7 @@ const summarizeAttention = (advice, readyRequests) => {
         parts,
     };
 };
+const currentRoute = () => (window.location.hash || window.location.pathname).split("?")[0];
 const setBadge = (count, parts, isStale = false) => {
     const button = document.querySelector(`#${BUTTON_ID}`);
     if (!button) {
@@ -3823,6 +3824,7 @@ const ensurePanel = () => {
     const load = (force) => __awaiter(void 0, void 0, void 0, function* () {
         body.textContent = "";
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Reading your farm…"]));
+        loadedRoute = currentRoute();
         context = yield loadContext(force);
         const attention = summarizeAttention(context.advice, context.statuses.filter((status) => status.isReady).length);
         setBadge(attention.count, attention.parts);
@@ -3848,14 +3850,41 @@ const ensurePanel = () => {
     // minute while a meal cooks, so an eager panel would become a steady
     // background load.
     let hasLoaded = false;
+    let loadedRoute = "";
     const setOpen = (open) => {
         panel.dataset.open = String(open);
         button.dataset.open = String(open);
-        if (open && !hasLoaded) {
+        if (!open) {
+            return;
+        }
+        if (!hasLoaded) {
             hasLoaded = true;
+            loadedRoute = currentRoute();
             load(false);
+            return;
+        }
+        // The panel outlives page navigation, so what it knows about where you are
+        // standing goes stale the moment you walk somewhere else. Re-deriving that
+        // costs nothing -- both lookups behind it are cached -- so refresh it on
+        // reopen rather than making the whole context reload.
+        if (currentRoute() !== loadedRoute) {
+            loadedRoute = currentRoute();
+            refreshHere();
         }
     };
+    const refreshHere = () => __awaiter(void 0, void 0, void 0, function* () {
+        const previous = context;
+        if (!previous) {
+            return;
+        }
+        const here = yield getHere();
+        // a full reload may have replaced the context while this was in flight;
+        // its `here` is already current, so leave it alone
+        if (context === previous) {
+            context = Object.assign(Object.assign({}, previous), { here });
+            draw();
+        }
+    });
     button.addEventListener("click", (event) => {
         event.stopPropagation();
         setOpen(panel.dataset.open !== "true");
@@ -3872,7 +3901,9 @@ const ensurePanel = () => {
         }
         event.stopPropagation();
     });
-    document.addEventListener("click", () => setOpen(false));
+    // Deliberately not closed by clicks elsewhere on the page. The whole point
+    // while exploring is to read the advice and keep pressing Continue, and an
+    // outside-click-to-close made the panel vanish on the first press.
     document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
             setOpen(false);
@@ -9622,7 +9653,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.35" !== void 0 ? "1.1.35" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.36" !== void 0 ? "1.1.36" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
