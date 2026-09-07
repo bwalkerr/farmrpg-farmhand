@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.32
+// @version 1.1.34
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3236,7 +3236,7 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         advice,
         cap,
         craftworks,
-        goalProgress: goals.map((goal) => (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited)),
+        goalProgress: goals.map((goal) => { var _a; return (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited, (_a = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _a !== void 0 ? _a : []); }),
         goals,
         graph,
         inventory,
@@ -3453,7 +3453,7 @@ const renderSuggestions = (body, context, rerender) => {
             add.title = `Track ${suggestion.name}`;
             add.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
                 event.stopPropagation();
-                yield (0, goals_1.addGoal)(suggestion.name, suggestion.quantity);
+                yield (0, goals_1.addGoal)(suggestion.name, suggestion.quantity, suggestion.source === "mastery" ? "mastery" : undefined);
                 rerender();
             }));
             row.append(text, add);
@@ -3514,7 +3514,7 @@ const makeQueueToggle = (craftworks, reload) => {
     return toggle;
 };
 const renderCraftworks = (body, context, reload) => {
-    var _a, _b;
+    var _a, _b, _c;
     const { advice, cap, craftworks, goals, graph, inventory, mastery, unlimited, } = context;
     if (!advice || !craftworks) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Could not read the Craftworks queue."]));
@@ -3560,7 +3560,7 @@ const renderCraftworks = (body, context, reload) => {
         }
         body.append((0, gameLinks_1.makeLinkedLine)(color, parts));
     }
-    const active = craftworks.sets.find((set) => set.isActive);
+    const active = ((_b = craftworks.sets) !== null && _b !== void 0 ? _b : []).find((set) => set.isActive);
     if (active) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`active set: ${active.name}`]));
     }
@@ -3596,7 +3596,7 @@ const renderCraftworks = (body, context, reload) => {
             const color = suggestion.action === "drop" ? theme_1.TEXT_ERROR : theme_1.TEXT_SUCCESS;
             body.append((0, gameLinks_1.makeLinkedLine)(color, [
                 suggestion.action === "drop" ? "remove " : "add ",
-                (0, gameLinks_1.makeItemLink)(suggestion.name, (_b = graph.nodes.get(suggestion.name)) === null || _b === void 0 ? void 0 : _b.id, color),
+                (0, gameLinks_1.makeItemLink)(suggestion.name, (_c = graph.nodes.get(suggestion.name)) === null || _c === void 0 ? void 0 : _c.id, color),
                 ` — ${suggestion.reason}`,
             ]));
         }
@@ -3653,11 +3653,12 @@ const makeSetLoadControl = (set, context, reload, onFailure) => {
     return action;
 };
 const renderSetLoader = (body, context, reload) => {
+    var _a;
     const { craftworks, goals, itemNames } = context;
     if (!craftworks) {
         return;
     }
-    const recommended = (0, suggestions_1.getRecommendedSet)(goals, craftworks.sets, itemNames);
+    const recommended = (0, suggestions_1.getRecommendedSet)(goals, (_a = craftworks.sets) !== null && _a !== void 0 ? _a : [], itemNames);
     if (!recommended) {
         return;
     }
@@ -3671,13 +3672,15 @@ const renderSetLoader = (body, context, reload) => {
 // miss: it only appears when a tracked goal happens to share a name with a set,
 // so a queue of location loadouts showed nothing at all.
 const renderSets = (body, context, reload) => {
+    var _a;
     const { craftworks, goals, itemNames } = context;
-    if (!craftworks || craftworks.sets.length === 0) {
+    const sets = (_a = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _a !== void 0 ? _a : [];
+    if (!craftworks || sets.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["No saved sets found on the Craftworks page."]));
         return;
     }
-    const recommended = (0, suggestions_1.getRecommendedSet)(goals, craftworks.sets, itemNames);
-    for (const set of craftworks.sets) {
+    const recommended = (0, suggestions_1.getRecommendedSet)(goals, sets, itemNames);
+    for (const set of sets) {
         const row = document.createElement("div");
         row.className = "fh-goal-top";
         row.style.marginBottom = "5px";
@@ -7574,22 +7577,39 @@ const makeRow = (image, title, detail, after, color) => {
     return row;
 };
 const render = (currentPage, settings) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
-    // the page prints no location name; the header picture is the only identifier
-    const header = currentPage.querySelector("img[src*='/img/items/']");
-    if (!header) {
-        return;
-    }
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x;
     const locations = yield (0, api_1.getLocationEntries)();
-    const name = (0, locationAdvice_1.matchLocationByImage)((_a = header.getAttribute("src")) !== null && _a !== void 0 ? _a : "", locations);
+    // The navbar holds the name — "Mount Banon&nbsp;<a …>info</a>" — so take its
+    // leading text node, which excludes the info link's own label. The header
+    // picture is the fallback; it costs nothing, since buddy.farm's search index
+    // already carries an image per location, but it cannot separate places that
+    // share one (pond.png is both Small Pond and Farm Pond).
+    const centre = document.querySelector(".navbar-on-center .center");
+    const title = (_f = (_d = (_c = (_b = [...((_a = centre === null || centre === void 0 ? void 0 : centre.childNodes) !== null && _a !== void 0 ? _a : [])]
+        .find((node) => node.nodeType === Node.TEXT_NODE)) === null || _b === void 0 ? void 0 : _b.textContent) === null || _c === void 0 ? void 0 : _c.trim()) !== null && _d !== void 0 ? _d : (_e = centre === null || centre === void 0 ? void 0 : centre.textContent) === null || _e === void 0 ? void 0 : _e.trim()) !== null && _f !== void 0 ? _f : "";
+    const header = currentPage.querySelector("img[src*='/img/items/']");
+    const name = (_g = (0, locationAdvice_1.matchLocationName)(title, locations.map((entry) => entry.name))) !== null && _g !== void 0 ? _g : (header
+        ? (0, locationAdvice_1.matchLocationByImage)((_h = header.getAttribute("src")) !== null && _h !== void 0 ? _h : "", locations)
+        : undefined);
     if (!name) {
+        console.debug("[Farmhand] could not identify location from", {
+            image: header === null || header === void 0 ? void 0 : header.getAttribute("src"),
+            title,
+        });
         return;
     }
-    const location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name }));
-    if (!location || location.drops.length === 0) {
+    let location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name }));
+    // Entries cached by a build that predates drop tables carry no `drops`, and
+    // the cache lives a week, so without this the advisor stays silently dead
+    // until it expires. Refetch once when the shape is old.
+    if (location && !location.drops) {
+        location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name, ignoreCache: true }));
+    }
+    if (!((_j = location === null || location === void 0 ? void 0 : location.drops) === null || _j === void 0 ? void 0 : _j.length)) {
+        console.debug("[Farmhand] no drop data for location", name, location);
         return;
     }
-    const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_b = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _b !== void 0 ? _b : ""));
+    const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_k = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _k !== void 0 ? _k : ""));
     // Everything here is cached or local. Quests are deliberately left out: this
     // page is clicked over and over, and costing them means fetching quests.php
     // each time, which the briefing panel already does on demand.
@@ -7599,23 +7619,23 @@ const render = (currentPage, settings) => __awaiter(void 0, void 0, void 0, func
         (0, promise_1.orUndefined)(mastery_1.masteryState.get({ doNotFetch: true })),
         (0, goals_1.getGoals)(),
     ]);
-    const inventory = (_c = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _c !== void 0 ? _c : {};
+    const inventory = (_l = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _l !== void 0 ? _l : {};
     const cap = snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap;
     const advice = craftworks
         ? (0, craftworks_1.adviseOnSlots)(craftworks.slots, cap, unlimited)
         : undefined;
-    const blockers = (_d = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _d !== void 0 ? _d : [];
+    const blockers = (_m = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _m !== void 0 ? _m : [];
     const graph = yield (0, recipes_1.gatherRecipeGraph)([
         ...goals.map((goal) => goal.name),
         ...blockers.map((blocker) => blocker.name),
     ]);
     const reasons = new Map();
     const goalMissing = goals.map((goal) => {
-        var _a;
-        const progress = (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited);
+        var _a, _b;
+        const progress = (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited, (_a = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _a !== void 0 ? _a : []);
         for (const entry of progress.missing) {
             reasons.set(entry.name, [
-                ...((_a = reasons.get(entry.name)) !== null && _a !== void 0 ? _a : []),
+                ...((_b = reasons.get(entry.name)) !== null && _b !== void 0 ? _b : []),
                 `for ${goal.name}`,
             ]);
         }
@@ -7623,19 +7643,27 @@ const render = (currentPage, settings) => __awaiter(void 0, void 0, void 0, func
     });
     for (const blocker of blockers) {
         reasons.set(blocker.name, [
-            ...((_e = reasons.get(blocker.name)) !== null && _e !== void 0 ? _e : []),
+            ...((_o = reasons.get(blocker.name)) !== null && _o !== void 0 ? _o : []),
             `blocks ${blocker.slots.map((slot) => slot.name).join(", ")}`,
         ]);
     }
-    const { needed, wasted } = (0, locationAdvice_1.getLocationAdvice)(location.drops, (0, focus_1.mergeMissing)(...goalMissing, blockers.map((blocker) => ({ name: blocker.name, quantity: 1 }))), reasons, inventory, cap, (_f = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _f !== void 0 ? _f : []);
+    const { needed, wasted } = (0, locationAdvice_1.getLocationAdvice)(location.drops, (0, focus_1.mergeMissing)(...goalMissing, blockers.map((blocker) => ({ name: blocker.name, quantity: 1 }))), reasons, inventory, cap, (_p = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _p !== void 0 ? _p : []);
     if (needed.length === 0 && wasted.length === 0) {
+        console.debug("[Farmhand] nothing to report here", {
+            atCap: Object.entries(inventory).filter(([, count]) => cap !== undefined && count >= cap).length,
+            blockers: blockers.length,
+            cap,
+            drops: location.drops.length,
+            goals: goals.length,
+            location: name,
+        });
         return;
     }
     // the page gives the banked figure its own element; the text form is the
     // fallback for anywhere that does not
-    const staminaText = (_h = (_g = currentPage.querySelector("#stamina")) === null || _g === void 0 ? void 0 : _g.textContent) !== null && _h !== void 0 ? _h : "";
+    const staminaText = (_r = (_q = currentPage.querySelector("#stamina")) === null || _q === void 0 ? void 0 : _q.textContent) !== null && _r !== void 0 ? _r : "";
     const stamina = Number(staminaText.replaceAll(",", "").trim()) ||
-        (0, locationAdvice_1.parseStamina)((_j = currentPage.textContent) !== null && _j !== void 0 ? _j : "");
+        (0, locationAdvice_1.parseStamina)((_s = currentPage.textContent) !== null && _s !== void 0 ? _s : "");
     // mirror the page's own card > card-content > list-block > ul nesting so this
     // sits in the layout rather than on top of it
     const block = document.createElement("div");
@@ -7658,7 +7686,7 @@ const render = (currentPage, settings) => __awaiter(void 0, void 0, void 0, func
     }
     for (const entry of wasted.slice(0, MAX_ROWS)) {
         list.append(makeRow(undefined, `${entry.name} — at cap, drops discarded`, entry.masteryRemaining
-            ? `mastery frozen at ${(_k = entry.masteryValue) === null || _k === void 0 ? void 0 : _k.toLocaleString()}/${(_l = entry.masteryRequired) === null || _l === void 0 ? void 0 : _l.toLocaleString()}`
+            ? `mastery frozen at ${(_t = entry.masteryValue) === null || _t === void 0 ? void 0 : _t.toLocaleString()}/${(_u = entry.masteryRequired) === null || _u === void 0 ? void 0 : _u.toLocaleString()}`
             : "", entry.count.toLocaleString(), theme_1.TEXT_ERROR));
     }
     const heading = document.createElement("div");
@@ -7667,18 +7695,18 @@ const render = (currentPage, settings) => __awaiter(void 0, void 0, void 0, func
     heading.textContent = stamina
         ? `Here for you (${stamina.toLocaleString()} stamina)`
         : "Here for you";
-    const set = (0, locationAdvice_1.findLocationSet)(name, (_m = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _m !== void 0 ? _m : [], locations.map((entry) => entry.name));
+    const set = (0, locationAdvice_1.findLocationSet)(name, (_v = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _v !== void 0 ? _v : [], locations.map((entry) => entry.name));
     if (set && !set.isActive) {
         list.append(makeRow(undefined, `Your “${set.name}” set isn't loaded`, "open the briefing panel's Sets tab to switch", "", theme_1.TEXT_GRAY));
     }
     // sit directly under the Continue / Eat / Drink card
-    const actions = (_o = currentPage
-        .querySelector("#exploreoptions")) === null || _o === void 0 ? void 0 : _o.closest(".card");
+    const actions = (_w = currentPage
+        .querySelector("#exploreoptions")) === null || _w === void 0 ? void 0 : _w.closest(".card");
     if (actions) {
         actions.after(heading, block);
     }
     else {
-        (_p = currentPage.querySelector(".content-block")) === null || _p === void 0 ? void 0 : _p.append(heading, block);
+        (_x = currentPage.querySelector(".content-block")) === null || _x === void 0 ? void 0 : _x.append(heading, block);
     }
 });
 exports.locationAdvisor = {
@@ -9784,7 +9812,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.32" !== void 0 ? "1.1.32" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.34" !== void 0 ? "1.1.34" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -11205,12 +11233,12 @@ const setGoals = (goals) => __awaiter(void 0, void 0, void 0, function* () {
 exports.setGoals = setGoals;
 // Adding a goal that is already tracked replaces its quantity rather than
 // stacking a second entry, so the item page's button is idempotent.
-const addGoal = (name, quantity) => __awaiter(void 0, void 0, void 0, function* () {
+const addGoal = (name, quantity, kind) => __awaiter(void 0, void 0, void 0, function* () {
     const goals = yield (0, exports.getGoals)();
     const existing = goals.find((goal) => goal.name === name);
     const next = existing
-        ? goals.map((goal) => (goal.name === name ? Object.assign(Object.assign({}, goal), { quantity }) : goal))
-        : [...goals, { addedAt: Date.now(), name, quantity }];
+        ? goals.map((goal) => goal.name === name ? Object.assign(Object.assign({}, goal), { kind, quantity }) : goal)
+        : [...goals, { addedAt: Date.now(), kind, name, quantity }];
     yield (0, exports.setGoals)(next);
     return next;
 });
@@ -11228,8 +11256,26 @@ exports.removeGoal = removeGoal;
 // the player effectively already has — one sitting in the inventory, one a
 // button press away. Counting only finished stock would show no movement at all
 // while a long materials grind was actually being won.
-const getGoalProgress = (graph, goal, inventory, unlimited = unlimited_1.NO_UNLIMITED) => {
+const getGoalProgress = (graph, goal, inventory, unlimited = unlimited_1.NO_UNLIMITED, mastery = []) => {
     var _a;
+    // A mastery goal is "acquire N more", not "hold N". Measuring it against the
+    // inventory reported it finished the moment the shelf held more than the
+    // remainder -- 99 Cave Paste read as done when the tier still wanted one more
+    // to be made. Mastery progress is the only thing that answers it, and reading
+    // it live means the figure keeps up as the tier fills.
+    if (goal.kind === "mastery") {
+        const entry = mastery.find((item) => item.name === goal.name);
+        if (entry) {
+            const plan = (0, craftPlanner_1.planCraft)(graph, goal.name, entry.remaining, inventory, unlimited);
+            return {
+                canMakeNow: Math.min(entry.remaining, (0, craftPlanner_1.getMaxCraftable)(graph, goal.name, inventory, unlimited)),
+                goal,
+                have: entry.value,
+                missing: entry.remaining > 0 ? plan.missing : [],
+                ratio: Math.min(1, entry.value / entry.required),
+            };
+        }
+    }
     const have = (_a = inventory[goal.name]) !== null && _a !== void 0 ? _a : 0;
     const outstanding = Math.max(0, goal.quantity - have);
     if (outstanding === 0) {
@@ -11257,7 +11303,8 @@ const getDesiredQueue = (graph, goals, inventory, unlimited = unlimited_1.NO_UNL
     var _a, _b, _c;
     const byName = new Map();
     for (const goal of goals) {
-        const have = (_a = inventory[goal.name]) !== null && _a !== void 0 ? _a : 0;
+        // a mastery goal always wants more made, whatever is on the shelf
+        const have = goal.kind === "mastery" ? 0 : (_a = inventory[goal.name]) !== null && _a !== void 0 ? _a : 0;
         const outstanding = Math.max(0, goal.quantity - have);
         if (outstanding === 0) {
             continue;
@@ -12830,4 +12877,3 @@ exports.generateGuess = generateGuess;
 /******/ 	
 /******/ })()
 ;
-//# sourceMappingURL=farmrpg-farmhand.user.js.map
