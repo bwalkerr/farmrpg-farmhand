@@ -331,8 +331,77 @@ const reconcilePerksForCurrentPage = async (): Promise<void> => {
   await switchTo(defaultPerks, where);
 };
 
+// Nothing awaits a feature's onPageLoad, so a throw in the reconciler would be
+// an unhandled rejection: silent, and on a phone there is no console to find it
+// in. Every other path through it leaves a note, so this one does too.
+const reconcileSafely = async (): Promise<void> => {
+  try {
+    await reconcilePerksForCurrentPage();
+  } catch (error) {
+    console.error("Failed to reconcile perks", error);
+    setPerkStatusNote(
+      `reconcile failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+};
+
+// Framework7 re-shows a RETAINED page element on back navigation instead of
+// adding one, so the global childList dispatch in index.ts never fires and the
+// reconciler never runs. A phone leans on cached pages and back navigation far
+// harder than a desktop does, which is why auto switching has always worked on
+// a PC and never on mobile.
+//
+// Deliberately LOCAL to this feature. 1.1.41 put this same observer on the
+// global dispatch instead, which re-ran every notification feature against
+// cached state and resurrected harvest and field banners that had already been
+// cleared -- "I needed to plant, after I planted then fields empty when they
+// are not". Same observer shape as utils/notifications.ts, which has run this
+// way since 1.1.16, and the 100ms debounce matters for a second reason here:
+// mid-transition the hash has already moved while the page swap has not landed,
+// and switchTo awaits its settle, so a decision made then can land after the
+// correct one and win.
+let transitionTimeout: number | undefined;
+
+const scheduleReconcile = (): void => {
+  clearTimeout(transitionTimeout);
+  transitionTimeout = setTimeout(() => {
+    reconcileSafely().catch((error) => {
+      console.error("Failed to reconcile perks", error);
+    });
+  }, 100) as unknown as number;
+};
+
+const watchPageTransitions = (): void => {
+  const pages = document.querySelector(".view-main .pages");
+  if (!pages) {
+    console.error("Pages not found");
+    return;
+  }
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      // Only a page's own class, never a descendant's: with subtree watching,
+      // the classes our own features put on the DOM would otherwise schedule
+      // another reconcile, and so on.
+      if ((mutation.target as HTMLElement).matches?.(".page")) {
+        scheduleReconcile();
+        return;
+      }
+    }
+  });
+  observer.observe(pages, {
+    attributeFilter: ["class"],
+    attributes: true,
+    subtree: true,
+  });
+};
+
 export const perkManagment: Feature = {
   settings: [SETTING_PERK_MANAGER],
+  onInitialize: () => {
+    watchPageTransitions();
+  },
   onPageLoad: async (settings) => {
     if (!settings[SettingId.PERK_MANAGER]) {
       // The one silent path there was. With auto manage off nothing switches
@@ -345,21 +414,7 @@ export const perkManagment: Feature = {
 
     // page-scoped perk switching, driven by the live page (idempotent, so the
     // SPA's duplicate onPageLoad calls converge instead of racing)
-    //
-    // Nothing awaits this feature's onPageLoad, so a throw in here would be an
-    // unhandled rejection: silent, and on a phone there is no console to find
-    // it in. Every other path through the reconciler leaves a note, so this one
-    // does too.
-    try {
-      await reconcilePerksForCurrentPage();
-    } catch (error) {
-      console.error("Failed to reconcile perks", error);
-      setPerkStatusNote(
-        `reconcile failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
+    await reconcileSafely();
 
     // Mount/refresh the equipped-set indicator AFTER the reconcile, never
     // before: the game rebuilds the bottom bar as you navigate, and the perk
