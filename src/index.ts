@@ -165,13 +165,36 @@ const watchSubtree = (
     console.error(`${selector} not found`);
     return;
   }
+  let lastHandledAt = 0;
   const handle = async (): Promise<void> => {
+    lastHandledAt = Date.now();
     const settings = await getSettingValues();
     const [page, parameters] = getPage();
     // console.debug(`${selector} Load`, page, parameters);
     for (const feature of FEATURES) {
       feature[handler]?.(settings, page, parameters);
     }
+  };
+
+  // A transition flips several classes in a burst, and mid-transition the hash
+  // has already moved while the page swap has not landed -- dispatching then
+  // hands features a page that is about to stop being true. Waiting for the
+  // burst to settle is what makes the dispatch read one consistent state, and
+  // it is the same 100ms the notifications observer already uses for this.
+  let pending: number | undefined;
+  const scheduleHandle = (): void => {
+    clearTimeout(pending);
+    pending = setTimeout(() => {
+      // A fresh page arrives as an added node AND flips its class, so the
+      // childList branch has usually dispatched already. Skipping the
+      // redundant one keeps forward navigation behaving exactly as it did
+      // before; back navigation, which adds no node, is the case that gets a
+      // dispatch it never had.
+      if (Date.now() - lastHandledAt < 150) {
+        return;
+      }
+      handle();
+    }, 100) as unknown as number;
   };
 
   const observer = new MutationObserver((mutations) => {
@@ -186,16 +209,14 @@ const watchSubtree = (
       // ever arrive.
       if (mutation.type === "attributes") {
         const element = mutation.target as HTMLElement;
-        // Only the moment it becomes the visible page -- not the moment it
-        // stops being one, and not the class changes our own features make.
+        // Only the settled class, never the mid-transition -to-center one:
+        // that fires while the hash and the page element disagree.
         if (
           filter &&
           element.matches?.(filter) &&
-          [...element.classList].some(
-            (name) => name.endsWith("-on-center") || name.endsWith("-to-center")
-          )
+          [...element.classList].some((name) => name.endsWith("-on-center"))
         ) {
-          handle();
+          scheduleHandle();
         }
         continue;
       }
