@@ -1274,6 +1274,7 @@ const ensurePanel = (): void => {
   perkDot.style.borderRadius = "50%";
   perkDot.style.flexShrink = "0";
   perkDot.style.height = "8px";
+  perkDot.style.marginLeft = "4px";
   perkDot.style.width = "8px";
   const perkLabel = document.createElement("span");
   perkLabel.style.fontSize = "11px";
@@ -1297,12 +1298,14 @@ const ensurePanel = (): void => {
   };
   paintPerk();
   onPerkStatusChange(paintPerk);
-  heading.append(perkDot, perkLabel);
   const title = document.createElement("div");
   title.textContent = "Briefing";
   title.style.color = TEXT_WHITE;
   title.style.fontWeight = "bold";
-  heading.append(title);
+  // name first, then the perk state: the title is what identifies the panel,
+  // and the indicator reads as a status attached to it rather than a label
+  // competing with it
+  heading.append(title, perkDot, perkLabel);
   const refresh = document.createElement("span");
   refresh.className = "fh-briefing-refresh";
   refresh.textContent = "refresh";
