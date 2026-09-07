@@ -2,6 +2,7 @@ import {
   activatePerkSet,
   getPerkStatus,
   onPerkStatusChange,
+  PerkActivity,
   PerkSet,
   perksState,
 } from "~/api/farmrpg/apis/perks";
@@ -1215,13 +1216,45 @@ const renderPerkSets = (
   if (status.note) {
     body.append(makeLinkedLine(TEXT_GRAY, [status.note]));
   }
+
+  // Activity sets are matched by NAME, case-insensitively and exactly, so a set
+  // called "explore" or "def" is invisible to the reconciler while still being
+  // perfectly equippable by hand below. Without a set named "Default" the
+  // reconciler bails before it switches anything at all, which looks exactly
+  // like auto manage being broken -- so say so here rather than leave it to be
+  // deduced.
+  const activityNames = new Set(
+    Object.values(PerkActivity)
+      .filter((activity) => activity !== PerkActivity.UNKNOWN)
+      .map((activity) => activity.toLowerCase())
+  );
+  const isActivityName = (name: string): boolean =>
+    activityNames.has(name.trim().toLowerCase());
+  if (!perkSets.some((set) => isActivityName(set.name))) {
+    body.append(
+      makeLinkedLine(TEXT_ERROR, [
+        "none of these names match an activity — nothing can auto-switch",
+      ])
+    );
+  } else if (
+    !perkSets.some((set) => set.name.trim().toLowerCase() === "default")
+  ) {
+    body.append(
+      makeLinkedLine(TEXT_ERROR, [
+        'no set named "Default" — the reconciler stops before it switches',
+      ])
+    );
+  }
+
   for (const set of perkSets) {
     const isOn = status.isConfirmed && status.name === set.name;
     const row = document.createElement("div");
     row.className = "fh-goal-top";
     row.style.marginBottom = "5px";
     const label = makeLinkedLine(isOn ? TEXT_SUCCESS : TEXT_GRAY, [
-      `${set.name}${isOn ? " · on" : ""}`,
+      `${set.name}${isOn ? " · on" : ""}${
+        isActivityName(set.name) ? "" : " · manual only"
+      }`,
     ]);
     label.style.marginBottom = "0";
     row.append(label);
