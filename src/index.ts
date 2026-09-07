@@ -165,9 +165,7 @@ const watchSubtree = (
     console.error(`${selector} not found`);
     return;
   }
-  let lastHandledAt = 0;
   const handle = async (): Promise<void> => {
-    lastHandledAt = Date.now();
     const settings = await getSettingValues();
     const [page, parameters] = getPage();
     // console.debug(`${selector} Load`, page, parameters);
@@ -176,50 +174,8 @@ const watchSubtree = (
     }
   };
 
-  // A transition flips several classes in a burst, and mid-transition the hash
-  // has already moved while the page swap has not landed -- dispatching then
-  // hands features a page that is about to stop being true. Waiting for the
-  // burst to settle is what makes the dispatch read one consistent state, and
-  // it is the same 100ms the notifications observer already uses for this.
-  let pending: number | undefined;
-  const scheduleHandle = (): void => {
-    clearTimeout(pending);
-    pending = setTimeout(() => {
-      // A fresh page arrives as an added node AND flips its class, so the
-      // childList branch has usually dispatched already. Skipping the
-      // redundant one keeps forward navigation behaving exactly as it did
-      // before; back navigation, which adds no node, is the case that gets a
-      // dispatch it never had.
-      if (Date.now() - lastHandledAt < 150) {
-        return;
-      }
-      handle();
-    }, 100) as unknown as number;
-  };
-
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-      // Framework7 keeps the page you came from in the DOM and re-shows that
-      // same element on back navigation, so a returned-to page is never an
-      // added node and the childList branch below never sees it. What changes
-      // instead is the element's own class (`page-on-left` ->
-      // `page-on-center`), which is an attribute mutation. Without this branch
-      // nothing runs on back navigation: the perk manager never re-decides,
-      // and any feature that paints on arrival paints only the first time you
-      // ever arrive.
-      if (mutation.type === "attributes") {
-        const element = mutation.target as HTMLElement;
-        // Only the settled class, never the mid-transition -to-center one:
-        // that fires while the hash and the page element disagree.
-        if (
-          filter &&
-          element.matches?.(filter) &&
-          [...element.classList].some((name) => name.endsWith("-on-center"))
-        ) {
-          scheduleHandle();
-        }
-        continue;
-      }
       // only respond to tree changes
       if (mutation.type !== "childList") {
         continue;
@@ -244,12 +200,7 @@ const watchSubtree = (
       }
     }
   });
-  observer.observe(target, {
-    attributeFilter: ["class"],
-    attributes: true,
-    childList: true,
-    subtree: true,
-  });
+  observer.observe(target, { childList: true, subtree: true });
   handle();
 };
 
