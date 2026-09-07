@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.40
+// @version 1.1.41
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -7505,6 +7505,203 @@ exports.inventoryCapWarnings = {
 
 /***/ }),
 
+/***/ 8525:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.itemNeeds = void 0;
+const craftworks_1 = __webpack_require__(7831);
+const theme_1 = __webpack_require__(1178);
+const needAdapters_1 = __webpack_require__(1903);
+const craftworks_2 = __webpack_require__(920);
+const recipes_1 = __webpack_require__(498);
+const page_1 = __webpack_require__(7952);
+const goals_1 = __webpack_require__(1267);
+const requests_1 = __webpack_require__(3300);
+const quests_1 = __webpack_require__(303);
+const inventory_1 = __webpack_require__(4514);
+const mastery_1 = __webpack_require__(283);
+const needs_1 = __webpack_require__(2538);
+const promise_1 = __webpack_require__(6762);
+const unlimited_1 = __webpack_require__(4808);
+const settings_1 = __webpack_require__(126);
+const CONTAINER_ID = "fh-item-needs";
+// The quest list is the one source here with no cached state behind it, and an
+// item page is somewhere you land constantly -- browsing twenty items would be
+// twenty requests for a list that changes a few times a day. Farm RPG's whole
+// objection to scripting is server load, so this is memoised and the panel's
+// own refresh stays the way you force it.
+const QUESTS_TTL = 5 * 60 * 1000;
+// the promise rather than the value, so two item pages opened at once share one
+// request instead of racing to make two
+let questCache;
+const fetchQuestGoals = (previous) => __awaiter(void 0, void 0, void 0, function* () {
+    const response = yield (0, promise_1.orUndefined)((0, requests_1.getHTML)(page_1.Page.QUESTS, new URLSearchParams()));
+    if (!response) {
+        // a failed refresh keeps the last good answer rather than blanking the card
+        return previous;
+    }
+    const quests = yield (0, quests_1.getQuestGoals)((0, quests_1.parseActiveQuests)(response.body));
+    return quests.goals;
+});
+const getCachedQuestGoals = () => {
+    var _a;
+    if (!questCache || Date.now() - questCache.at >= QUESTS_TTL) {
+        questCache = {
+            at: Date.now(),
+            goals: fetchQuestGoals((_a = questCache === null || questCache === void 0 ? void 0 : questCache.goals) !== null && _a !== void 0 ? _a : Promise.resolve([])),
+        };
+    }
+    return questCache.goals;
+};
+const SETTING_ITEM_NEEDS = {
+    id: settings_1.SettingId.ITEM_NEEDS,
+    title: "Show what an item is needed for",
+    description: "On an item page, show how many you are still short and which goals, " +
+        "requests and Craftworks slots are waiting on it",
+    type: "boolean",
+    defaultValue: true,
+};
+// Where the item in view sits in everything you are working toward.
+//
+// The math for this already existed; it just wasn't where the decision is. You
+// had to open the panel and go looking to find out whether the thing on screen
+// mattered. Raw drops are the important case and the craft-plan card skips
+// them, because a raw has no plan -- but "12 of the 20 Glass the Lanterns
+// want" is exactly the sentence worth reading on a raw's page.
+exports.itemNeeds = {
+    settings: [SETTING_ITEM_NEEDS],
+    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f, _g, _h;
+        if (page !== page_1.Page.ITEM || !settings[settings_1.SettingId.ITEM_NEEDS]) {
+            return;
+        }
+        const currentPage = (0, page_1.getCurrentPage)();
+        if (!currentPage) {
+            return;
+        }
+        const itemName = (_b = (_a = currentPage
+            .querySelector(".sharelink")) === null || _a === void 0 ? void 0 : _a.textContent) === null || _b === void 0 ? void 0 : _b.trim();
+        if (!itemName) {
+            return;
+        }
+        // the page is re-rendered on navigation, and re-shown on back navigation:
+        // never stack two cards
+        (_c = currentPage.querySelector(`#${CONTAINER_ID}`)) === null || _c === void 0 ? void 0 : _c.remove();
+        const unlimited = (0, unlimited_1.parseUnlimitedItems)(String((_d = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _d !== void 0 ? _d : ""));
+        const [snapshot, trackedGoals, mastery, craftworks, questGoals] = yield Promise.all([
+            (0, promise_1.orUndefined)(inventory_1.inventoryState.get()),
+            (0, goals_1.getGoals)(),
+            (0, promise_1.orUndefined)(mastery_1.masteryState.get()),
+            (0, promise_1.orUndefined)(craftworks_2.craftworksState.get()),
+            getCachedQuestGoals(),
+        ]);
+        const inventory = (_e = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _e !== void 0 ? _e : {};
+        const craftworksRoots = craftworks
+            ? (0, craftworks_1.adviseOnSlots)(craftworks.slots, snapshot === null || snapshot === void 0 ? void 0 : snapshot.cap, unlimited).roots
+            : [];
+        const needs = (0, needAdapters_1.buildNeeds)({ craftworksRoots, questGoals, trackedGoals });
+        if (needs.length === 0) {
+            return;
+        }
+        const graph = yield (0, recipes_1.gatherRecipeGraph)([
+            itemName,
+            ...needs.flatMap((need) => (need.kind === "item" ? [need.item] : [])),
+        ]);
+        const resolved = (0, needs_1.resolveNeeds)(graph, needs, inventory, unlimited, (_f = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _f !== void 0 ? _f : []);
+        // Every undertaking whose shortfall names this item, plus every place it
+        // appears as a milestone inside one.
+        const shortfalls = [];
+        for (const scope of resolved.scopes) {
+            const entry = scope.missing.find((item) => item.name === itemName);
+            if (entry) {
+                shortfalls.push({ quantity: entry.quantity, scope });
+            }
+        }
+        const milestones = resolved.statuses.filter((status) => status.need.kind === "item" &&
+            status.need.item === itemName &&
+            status.coveredByParent);
+        if (shortfalls.length === 0 && milestones.length === 0) {
+            return;
+        }
+        const card = document.createElement("div");
+        card.id = CONTAINER_ID;
+        card.className = "card";
+        const content = document.createElement("div");
+        content.className = "card-content";
+        const inner = document.createElement("div");
+        inner.className = "card-content-inner";
+        inner.style.borderLeft = `3px solid ${theme_1.BORDER_GRAY}`;
+        inner.style.paddingLeft = "10px";
+        const title = document.createElement("div");
+        title.textContent = "Needed for";
+        title.style.color = theme_1.TEXT_WHITE;
+        title.style.fontWeight = "bold";
+        title.style.marginBottom = "6px";
+        inner.append(title);
+        const held = (_g = inventory[itemName]) !== null && _g !== void 0 ? _g : 0;
+        // The largest single ask, not the sum: these are competing undertakings,
+        // and covering the biggest covers the rest.
+        const worst = Math.max(0, ...shortfalls.map((entry) => entry.quantity));
+        const headline = document.createElement("div");
+        headline.style.fontSize = "13px";
+        headline.style.marginBottom = "6px";
+        headline.style.color = worst > 0 ? theme_1.TEXT_WARNING : theme_1.TEXT_SUCCESS;
+        headline.textContent =
+            worst > 0
+                ? `${worst} more needed — you hold ${held}`
+                : `You hold ${held}; nothing is short of it`;
+        inner.append(headline);
+        const list = document.createElement("div");
+        list.style.display = "flex";
+        list.style.flexDirection = "column";
+        list.style.gap = "3px";
+        const addRow = (text, href) => {
+            const row = href
+                ? document.createElement("a")
+                : document.createElement("div");
+            if (href && row instanceof HTMLAnchorElement) {
+                row.href = href;
+            }
+            row.style.color = href ? theme_1.TEXT_WHITE : theme_1.TEXT_GRAY;
+            row.style.fontSize = "12px";
+            row.textContent = text;
+            list.append(row);
+        };
+        for (const { quantity, scope } of shortfalls.sort((a, b) => b.quantity - a.quantity)) {
+            const root = scope.needs.find((status) => status.need.id === scope.rootId);
+            addRow(`${quantity}x — ${scope.label}`, root === null || root === void 0 ? void 0 : root.need.href);
+        }
+        for (const status of milestones) {
+            const percent = Math.round(status.ratio * 100);
+            addRow(`${status.have}/${status.need.kind === "item" ? status.need.quantity : 0} toward ${status.need.label} (${percent}%)`, status.need.href);
+        }
+        inner.append(list);
+        content.append(inner);
+        card.append(content);
+        const anchor = currentPage.querySelector(".card");
+        if (anchor) {
+            anchor.after(card);
+        }
+        else {
+            (_h = currentPage.querySelector(".page-content")) === null || _h === void 0 ? void 0 : _h.prepend(card);
+        }
+    }),
+};
+
+
+/***/ }),
+
 /***/ 9737:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -9778,7 +9975,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.40" !== void 0 ? "1.1.40" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.41" !== void 0 ? "1.1.41" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -9881,6 +10078,7 @@ const settings_1 = __webpack_require__(126);
 const highlightSelfInChat_1 = __webpack_require__(5454);
 const improvedInputs_1 = __webpack_require__(1108);
 const inventoryCapWarnings_1 = __webpack_require__(6660);
+const itemNeeds_1 = __webpack_require__(8525);
 const kitchenNotifications_1 = __webpack_require__(9737);
 const linkifyQuickCraft_1 = __webpack_require__(7092);
 const mailboxNotifications_1 = __webpack_require__(6297);
@@ -9931,6 +10129,7 @@ const FEATURES = [
     linkifyQuickCraft_1.linkifyQuickCraft,
     exploreFirst_1.exploreFirst,
     craftPlanner_1.craftPlanner,
+    itemNeeds_1.itemNeeds,
     // craftworks
     craftworksAdvisor_1.craftworksAdvisor,
     // inventory
@@ -9991,8 +10190,27 @@ const watchSubtree = (selector, handler, filter) => {
         }
     });
     const observer = new MutationObserver((mutations) => {
-        var _a, _b;
+        var _a, _b, _c;
         for (const mutation of mutations) {
+            // Framework7 keeps the page you came from in the DOM and re-shows that
+            // same element on back navigation, so a returned-to page is never an
+            // added node and the childList branch below never sees it. What changes
+            // instead is the element's own class (`page-on-left` ->
+            // `page-on-center`), which is an attribute mutation. Without this branch
+            // nothing runs on back navigation: the perk manager never re-decides,
+            // and any feature that paints on arrival paints only the first time you
+            // ever arrive.
+            if (mutation.type === "attributes") {
+                const element = mutation.target;
+                // Only the moment it becomes the visible page -- not the moment it
+                // stops being one, and not the class changes our own features make.
+                if (filter &&
+                    ((_a = element.matches) === null || _a === void 0 ? void 0 : _a.call(element, filter)) &&
+                    [...element.classList].some((name) => name.endsWith("-on-center") || name.endsWith("-to-center"))) {
+                    handle();
+                }
+                continue;
+            }
             // only respond to tree changes
             if (mutation.type !== "childList") {
                 continue;
@@ -10006,7 +10224,7 @@ const watchSubtree = (selector, handler, filter) => {
             }
             if (filter) {
                 for (const node of mutation.addedNodes) {
-                    if ((_b = (_a = node).matches) === null || _b === void 0 ? void 0 : _b.call(_a, filter)) {
+                    if ((_c = (_b = node).matches) === null || _c === void 0 ? void 0 : _c.call(_b, filter)) {
                         handle();
                     }
                 }
@@ -10016,7 +10234,12 @@ const watchSubtree = (selector, handler, filter) => {
             }
         }
     });
-    observer.observe(target, { childList: true, subtree: true });
+    observer.observe(target, {
+        attributeFilter: ["class"],
+        attributes: true,
+        childList: true,
+        subtree: true,
+    });
     handle();
 };
 // eslint-disable-next-line unicorn/prefer-top-level-await
@@ -11477,6 +11700,389 @@ exports.parseStamina = parseStamina;
 
 /***/ }),
 
+/***/ 1903:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.buildNeeds = exports.needFromBlocker = exports.composeNeed = exports.needsFromGoals = exports.needsFromGoal = exports.needsFromTrackedGoals = exports.needFromTrackedGoal = void 0;
+// Bridges from the two goal models onto `Need`, so the panel and the item page
+// can move over one surface at a time. These go away once nothing reads
+// `Goal` or `TrackedGoal` directly.
+// A declared goal is its own undertaking: the player asked for this thing on
+// purpose, and it competes with the others for the same shelf.
+const needFromTrackedGoal = (goal) => ({
+    id: `declared:${goal.name}`,
+    item: goal.name,
+    kind: "item",
+    label: goal.name,
+    measure: goal.kind === "mastery" ? "acquire" : "hold",
+    quantity: goal.quantity,
+    source: goal.kind === "mastery" ? "mastery" : "declared",
+});
+exports.needFromTrackedGoal = needFromTrackedGoal;
+const needsFromTrackedGoals = (goals) => goals.map((goal) => (0, exports.needFromTrackedGoal)(goal));
+exports.needsFromTrackedGoals = needsFromTrackedGoals;
+// A derived goal becomes a group with one child per item it consumes.
+//
+// The group is what makes this different from `getGoalStatuses`: a quest that
+// wants two items both made of Steel used to cost each against the full
+// inventory and so claimed the same Steel twice. As children of one scope they
+// share a pool and the quest's shortfall is what it would actually take.
+const needsFromGoal = (goal, index = 0) => {
+    const id = `${goal.kind}:${index}:${goal.label}`;
+    const source = goal.kind === "quest" ? "quest" : "craftworks";
+    const group = {
+        href: goal.href,
+        id,
+        kind: "group",
+        label: goal.label,
+        source,
+    };
+    return [
+        group,
+        ...goal.needs.map((need) => ({
+            href: goal.href,
+            id: `${id}/${need.name}`,
+            item: need.name,
+            kind: "item",
+            label: need.name,
+            measure: "hold",
+            parent: id,
+            quantity: need.quantity,
+            source,
+        })),
+    ];
+};
+exports.needsFromGoal = needsFromGoal;
+const needsFromGoals = (goals) => goals.flatMap((goal, index) => (0, exports.needsFromGoal)(goal, index));
+exports.needsFromGoals = needsFromGoals;
+// Make one need the child of another: the composition the panel's "goalise"
+// action performs. Returns a new list; the tree is only ever a parent id, so
+// re-parenting is a field assignment and never a data migration.
+const composeNeed = (needs, childId, parentId) => needs.map((need) => need.id === childId ? Object.assign(Object.assign({}, need), { parent: parentId }) : need);
+exports.composeNeed = composeNeed;
+// A Craftworks slot stalled on something nothing else in the queue makes.
+//
+// The queue reports what a slot is waiting for but never how many, so this is
+// deliberately a need for one: enough to say "the queue is stuck on this and
+// going out for it unsticks it", which is the whole claim the data supports.
+const needFromBlocker = (blocker) => ({
+    id: `craftworks:${blocker.name}`,
+    item: blocker.name,
+    kind: "item",
+    label: blocker.slots.length > 0
+        ? `Craftworks: ${blocker.slots.length} slot${blocker.slots.length === 1 ? "" : "s"} stalled`
+        : "Craftworks",
+    measure: "hold",
+    quantity: 1,
+    source: "craftworks",
+});
+exports.needFromBlocker = needFromBlocker;
+// Every demand on the player, from every source, as one list.
+//
+// This is the single entry point the surfaces should use: the item page, the
+// panel and the location advisor all asking the same question of the same data
+// is the point of the model.
+const buildNeeds = ({ craftworksRoots = [], questGoals = [], trackedGoals = [], }) => [
+    ...(0, exports.needsFromTrackedGoals)(trackedGoals),
+    ...(0, exports.needsFromGoals)(questGoals),
+    ...craftworksRoots.map((blocker) => (0, exports.needFromBlocker)(blocker)),
+];
+exports.buildNeeds = buildNeeds;
+
+
+/***/ }),
+
+/***/ 2538:
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getNearlyDoneScopes = exports.rankNeedBottlenecks = exports.resolveNeeds = exports.getScopeRoots = exports.MAX_NEED_DEPTH = void 0;
+const craftPlanner_1 = __webpack_require__(5825);
+const unlimited_1 = __webpack_require__(4808);
+// Deep enough for any real chain of goals, and a stop for a malformed one.
+// Mirrors craftPlanner's MAX_DEPTH for the same reason: a cycle should degrade,
+// not hang the page.
+exports.MAX_NEED_DEPTH = 12;
+// Walk each need up to the root of its tree. A parent that isn't in the list,
+// or a cycle, leaves the need standing as its own root rather than throwing:
+// bad data should cost you composition, not the panel.
+const getScopeRoots = (needs) => {
+    const byId = new Map(needs.map((need) => [need.id, need]));
+    const roots = new Map();
+    for (const need of needs) {
+        let current = need;
+        let depth = 0;
+        while (current.parent && depth < exports.MAX_NEED_DEPTH) {
+            const parent = byId.get(current.parent);
+            if (!parent || parent.id === current.id) {
+                break;
+            }
+            current = parent;
+            depth += 1;
+        }
+        roots.set(need.id, current.id);
+    }
+    return roots;
+};
+exports.getScopeRoots = getScopeRoots;
+// Depth of a need in its tree, used only to order resolution parents-first.
+const getDepth = (need, byId) => {
+    let current = need;
+    let depth = 0;
+    while (current.parent && depth < exports.MAX_NEED_DEPTH) {
+        const parent = byId.get(current.parent);
+        if (!parent || parent.id === current.id) {
+            break;
+        }
+        current = parent;
+        depth += 1;
+    }
+    return depth;
+};
+const toList = (byName) => [...byName.entries()]
+    .filter(([, quantity]) => quantity > 0)
+    .map(([name, quantity]) => ({ name, quantity }))
+    .sort((a, b) => b.quantity - a.quantity);
+const READY = {
+    canMakeNow: 0,
+    coveredByParent: false,
+    have: 0,
+    isReady: true,
+    missing: [],
+    ratio: 1,
+};
+// Cost one item need against a pool, spending what it takes out of that pool.
+//
+// `spend` is deducted so the next need in the same scope sees a shelf that has
+// already been drawn down — the thing that makes a parent and its children add
+// up to one shopping list instead of two.
+const costAgainstPool = (need, graph, pool, unlimited, mastery) => {
+    var _a, _b, _c, _d;
+    if ((0, unlimited_1.isUnlimited)(unlimited, need.item)) {
+        return Object.assign({}, READY);
+    }
+    if (need.measure === "acquire") {
+        // Mastery counts what has been made, never what is held, so nothing comes
+        // off the shelf as credit — but the materials to make the remainder do.
+        const entry = mastery.find((item) => item.name === need.item);
+        const remaining = entry ? entry.remaining : need.quantity;
+        const have = entry ? entry.value : 0;
+        const required = entry ? entry.required : need.quantity;
+        if (remaining <= 0) {
+            return Object.assign(Object.assign({}, READY), { have });
+        }
+        const plan = (0, craftPlanner_1.planCraft)(graph, need.item, remaining, pool, unlimited);
+        for (const [name, quantity] of Object.entries(plan.spend)) {
+            pool[name] = Math.max(0, ((_a = pool[name]) !== null && _a !== void 0 ? _a : 0) - quantity);
+        }
+        return {
+            canMakeNow: Math.min(remaining, (0, craftPlanner_1.getMaxCraftable)(graph, need.item, pool, unlimited)),
+            coveredByParent: false,
+            have,
+            isReady: false,
+            missing: plan.missing,
+            ratio: required > 0 ? Math.min(1, have / required) : 0,
+        };
+    }
+    const have = Math.min(need.quantity, (_b = pool[need.item]) !== null && _b !== void 0 ? _b : 0);
+    const outstanding = need.quantity - have;
+    // the finished ones just claimed are no longer raw material for the rest
+    pool[need.item] = Math.max(0, ((_c = pool[need.item]) !== null && _c !== void 0 ? _c : 0) - have);
+    if (outstanding <= 0) {
+        return Object.assign(Object.assign({}, READY), { have });
+    }
+    const node = graph.nodes.get(need.item);
+    if (!(node === null || node === void 0 ? void 0 : node.canCraft) || node.ingredients.length === 0) {
+        // a raw drop: nothing to plan, you go and get it
+        return {
+            canMakeNow: 0,
+            coveredByParent: false,
+            have,
+            isReady: false,
+            missing: [{ name: need.item, quantity: outstanding }],
+            ratio: have / need.quantity,
+        };
+    }
+    const canMakeNow = Math.min(outstanding, (0, craftPlanner_1.getMaxCraftable)(graph, need.item, pool, unlimited));
+    const plan = (0, craftPlanner_1.planCraft)(graph, need.item, outstanding, pool, unlimited);
+    for (const [name, quantity] of Object.entries(plan.spend)) {
+        pool[name] = Math.max(0, ((_d = pool[name]) !== null && _d !== void 0 ? _d : 0) - quantity);
+    }
+    return {
+        canMakeNow,
+        coveredByParent: false,
+        have,
+        isReady: false,
+        missing: plan.missing,
+        ratio: Math.min(1, (have + canMakeNow) / need.quantity),
+    };
+};
+// Read a child's progress off an ancestor's plan without adding to the bill.
+//
+// The child names an item the ancestor is already going to need, so it is a
+// checkpoint inside that work — "you have 12 of the 20 Glass the Lanterns
+// want". Counting it again would inflate the scope's shopping list for exactly
+// the materials that matter most.
+const costAsMilestone = (need, graph, inventory, unlimited) => {
+    var _a;
+    if ((0, unlimited_1.isUnlimited)(unlimited, need.item)) {
+        return Object.assign(Object.assign({}, READY), { coveredByParent: true });
+    }
+    const have = Math.min(need.quantity, (_a = inventory[need.item]) !== null && _a !== void 0 ? _a : 0);
+    const outstanding = need.quantity - have;
+    if (outstanding <= 0) {
+        return Object.assign(Object.assign({}, READY), { coveredByParent: true, have });
+    }
+    const pool = Object.assign(Object.assign({}, inventory), { [need.item]: 0 });
+    const canMakeNow = Math.min(outstanding, (0, craftPlanner_1.getMaxCraftable)(graph, need.item, pool, unlimited));
+    return {
+        canMakeNow,
+        coveredByParent: true,
+        have,
+        isReady: false,
+        missing: [],
+        ratio: Math.min(1, (have + canMakeNow) / need.quantity),
+    };
+};
+// True when one of the need's ancestors already plans for this item, which
+// makes the need a checkpoint inside that work rather than another trip.
+//
+// Deliberately ancestors only: two siblings both wanting Stone are two real
+// demands on one shelf and have to sum.
+const isClaimedByAncestor = (need, byId, claimsByNeed) => {
+    var _a;
+    if (need.kind !== "item") {
+        return false;
+    }
+    let current = need;
+    let depth = 0;
+    while ((current === null || current === void 0 ? void 0 : current.parent) && depth < exports.MAX_NEED_DEPTH) {
+        const parent = byId.get(current.parent);
+        if (!parent || parent.id === current.id) {
+            return false;
+        }
+        if ((_a = claimsByNeed.get(parent.id)) === null || _a === void 0 ? void 0 : _a.has(need.item)) {
+            return true;
+        }
+        current = parent;
+        depth += 1;
+    }
+    return false;
+};
+// Work out what every need is short of, once.
+//
+// Needs in the same scope draw from one pool in parent-first order: they are
+// one undertaking, and a material spent on the parent is not still on the shelf
+// for the child. Needs in different scopes are alternatives competing for the
+// same shelf, so each scope starts from the full inventory — that is the call
+// `focus.ts` made deliberately and it stays right for "which of these should I
+// do next".
+const resolveNeeds = (graph, needs, inventory, unlimited = unlimited_1.NO_UNLIMITED, mastery = []) => {
+    var _a, _b, _c, _d, _e;
+    const byId = new Map(needs.map((need) => [need.id, need]));
+    const roots = (0, exports.getScopeRoots)(needs);
+    const statusById = new Map();
+    const scopes = [];
+    const grouped = new Map();
+    for (const need of needs) {
+        const root = (_a = roots.get(need.id)) !== null && _a !== void 0 ? _a : need.id;
+        grouped.set(root, [...((_b = grouped.get(root)) !== null && _b !== void 0 ? _b : []), need]);
+    }
+    for (const [rootId, members] of grouped) {
+        const pool = Object.assign({}, inventory);
+        const ordered = [...members].sort((a, b) => getDepth(a, byId) - getDepth(b, byId));
+        // what each need's own plan accounts for. A need is a milestone only when
+        // one of its ANCESTORS already claimed the item -- two siblings both
+        // wanting Stone are two real demands and have to sum, which is exactly the
+        // shared-pool case, not a duplicate.
+        const claimsByNeed = new Map();
+        const scopeMissing = new Map();
+        const ratios = [];
+        for (const need of ordered) {
+            if (need.kind === "group") {
+                statusById.set(need.id, Object.assign(Object.assign({}, READY), { need }));
+                continue;
+            }
+            const status = isClaimedByAncestor(need, byId, claimsByNeed)
+                ? costAsMilestone(need, graph, inventory, unlimited)
+                : costAgainstPool(need, graph, pool, unlimited, mastery);
+            statusById.set(need.id, Object.assign(Object.assign({}, status), { need }));
+            if (status.coveredByParent) {
+                continue;
+            }
+            // what this need is going to take, so any descendant naming one of those
+            // items reads as a checkpoint inside this work rather than another trip
+            claimsByNeed.set(need.id, new Set([need.item, ...status.missing.map((entry) => entry.name)]));
+            for (const entry of status.missing) {
+                scopeMissing.set(entry.name, ((_c = scopeMissing.get(entry.name)) !== null && _c !== void 0 ? _c : 0) + entry.quantity);
+            }
+            ratios.push(status.ratio);
+        }
+        const root = byId.get(rootId);
+        const scopeNeeds = members.map((need) => statusById.get(need.id));
+        const missing = toList(scopeMissing);
+        scopes.push({
+            isReady: missing.length === 0,
+            label: (_d = root === null || root === void 0 ? void 0 : root.label) !== null && _d !== void 0 ? _d : rootId,
+            missing,
+            needs: scopeNeeds,
+            ratio: ratios.length > 0
+                ? ratios.reduce((total, value) => total + value, 0) / ratios.length
+                : 1,
+            rootId,
+        });
+    }
+    // Across scopes the largest ask wins rather than the sum: a request short of
+    // 40 Steel and a Craftworks slot stalled on Steel are the same trip, not two.
+    const merged = new Map();
+    for (const scope of scopes) {
+        for (const entry of scope.missing) {
+            merged.set(entry.name, Math.max((_e = merged.get(entry.name)) !== null && _e !== void 0 ? _e : 0, entry.quantity));
+        }
+    }
+    return {
+        missing: toList(merged),
+        scopes,
+        statuses: needs.map((need) => statusById.get(need.id)),
+    };
+};
+exports.resolveNeeds = resolveNeeds;
+// Rank raw materials by how much of the backlog they unblock. One item gating
+// five undertakings beats one gating a single undertaking even when the single
+// one needs far more of it.
+const rankNeedBottlenecks = (resolved) => {
+    var _a;
+    const byName = new Map();
+    for (const scope of resolved.scopes) {
+        for (const entry of scope.missing) {
+            const existing = (_a = byName.get(entry.name)) !== null && _a !== void 0 ? _a : {
+                gates: [],
+                gatesCount: 0,
+                maxNeeded: 0,
+                name: entry.name,
+                totalNeeded: 0,
+            };
+            existing.gatesCount += 1;
+            existing.gates.push(scope.label);
+            existing.maxNeeded = Math.max(existing.maxNeeded, entry.quantity);
+            existing.totalNeeded += entry.quantity;
+            byName.set(entry.name, existing);
+        }
+    }
+    return [...byName.values()].sort((a, b) => b.gatesCount - a.gatesCount || b.maxNeeded - a.maxNeeded);
+};
+exports.rankNeedBottlenecks = rankNeedBottlenecks;
+// Undertakings one item short. A single trip finishes them outright, which
+// makes them the highest-leverage thing on the board.
+const getNearlyDoneScopes = (resolved) => resolved.scopes.filter((scope) => !scope.isReady && scope.missing.length === 1);
+exports.getNearlyDoneScopes = getNearlyDoneScopes;
+
+
+/***/ }),
+
 /***/ 6783:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -12123,6 +12729,7 @@ var SettingId;
     SettingId["COLLAPSE_ITEM"] = "collapseItem";
     SettingId["COMPACT_SILVER"] = "compactSilver";
     SettingId["CRAFT_PLANNER"] = "craftPlanner";
+    SettingId["ITEM_NEEDS"] = "itemNeeds";
     SettingId["CRAFTWORKS_ADVISOR"] = "craftworksAdvisor";
     SettingId["EXPLORE_FIRST"] = "exploreFirst";
     SettingId["FOCUS_DASHBOARD"] = "focusDashboard";
