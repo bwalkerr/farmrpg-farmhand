@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.48
+// @version 1.1.49
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2926,6 +2926,7 @@ const recipes_1 = __webpack_require__(498);
 const api_1 = __webpack_require__(3413);
 const page_1 = __webpack_require__(7952);
 const needs_1 = __webpack_require__(2538);
+const focusScope_1 = __webpack_require__(1307);
 const suggestions_1 = __webpack_require__(9262);
 const focus_1 = __webpack_require__(7167);
 const requests_1 = __webpack_require__(3300);
@@ -3108,14 +3109,42 @@ const injectStyles = () => {
         color: ${theme_1.TEXT_WARNING};
       }
 
+      /* The focused undertaking, and the way out of it. Sits under the title
+         so it is present on every tab, not only the one focus was set from. */
+      #${PANEL_ID} .fh-focus-chip {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        padding: 4px 9px;
+        border-radius: 7px;
+        border: 1px solid ${theme_1.TEXT_WARNING};
+        color: ${theme_1.TEXT_WARNING};
+        font-size: 11px;
+      }
+      #${PANEL_ID} .fh-focus-chip[data-on="true"] { display: flex; }
+      #${PANEL_ID} .fh-chip-clear {
+        margin-left: auto;
+        cursor: pointer;
+        opacity: 0.75;
+      }
+      #${PANEL_ID} .fh-chip-clear:hover { opacity: 1; }
+      /* Dimmed, never hidden: a quest that disappeared because you focused
+         another is exactly what you would forget about. */
+      #${PANEL_ID} .fh-dim {
+        opacity: 0.38;
+        transition: opacity 160ms ease;
+      }
+      #${PANEL_ID} .fh-dim:hover { opacity: 0.75; }
+
       /* Wide screens get a two-pane panel: a vertical rail of sections and a
          content pane. The rail is what removes the four-tab ceiling -- a
          column takes as many entries as we want, where the horizontal strip
          could not fit a fifth at 380px. Below this width nothing changes. */
       @media (min-width: 1024px) {
         #${PANEL_ID} {
-          width: 760px;
-          max-height: 78vh;
+          width: 920px;
+          max-height: 82vh;
         }
         #${PANEL_ID} .fh-briefing-main {
           flex-direction: row;
@@ -3490,9 +3519,103 @@ const renderNow = (body, context) => __awaiter(void 0, void 0, void 0, function*
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`not on buddy.farm: ${unmatched.join(", ")}`]));
     }
 });
-const renderGoals = (body, context, rerender) => __awaiter(void 0, void 0, void 0, function* () {
+// The whole-undertaking view: one row per thing you are working toward, with
+// its own roll-up rather than a flat list of items. This is what the scope axis
+// in needs.ts is for -- a quest's items share a pool, so "3 of 5 ready" and the
+// shortfall below it are the real figures for finishing it, not the sum of five
+// independent questions.
+//
+// Non-focused rows are dimmed rather than hidden. The panel's job is stopping
+// you from missing things, and a quest that vanished because you focused
+// another one is exactly the sort of thing you would miss.
+const renderUndertakings = (body, context, focused, onFocus) => {
+    const { graph, resolved } = context;
+    // single-item scopes are tracked goals, which have their own rows below --
+    // this section is for things made of several parts
+    const scopes = resolved.scopes.filter((scope) => {
+        const items = scope.needs.filter((status) => status.need.kind === "item");
+        return items.length > 1;
+    });
+    if (scopes.length === 0) {
+        return;
+    }
+    body.append(makeHeading("Undertakings"));
+    const ordered = [...scopes].sort((a, b) => {
+        if (a.rootId === focused) {
+            return -1;
+        }
+        if (b.rootId === focused) {
+            return 1;
+        }
+        return b.ratio - a.ratio;
+    });
+    for (const scope of ordered) {
+        const isFocused = scope.rootId === focused;
+        const isDimmed = focused !== undefined && !isFocused;
+        const items = scope.needs.filter((status) => status.need.kind === "item");
+        const ready = items.filter((status) => status.isReady).length;
+        const row = document.createElement("div");
+        row.className = isDimmed ? "fh-goal fh-dim" : "fh-goal";
+        const top = document.createElement("div");
+        top.className = "fh-goal-top";
+        const name = document.createElement("div");
+        name.style.fontSize = "12px";
+        let colour = theme_1.TEXT_WHITE;
+        if (scope.isReady) {
+            colour = theme_1.TEXT_SUCCESS;
+        }
+        else if (isFocused) {
+            colour = theme_1.TEXT_WARNING;
+        }
+        const link = document.createElement("span");
+        link.style.color = colour;
+        link.textContent = scope.label;
+        name.append(link);
+        const action = document.createElement("span");
+        action.style.cursor = "pointer";
+        action.style.fontSize = "11px";
+        action.style.color = isFocused ? theme_1.TEXT_WARNING : theme_1.TEXT_GRAY;
+        action.textContent = isFocused ? "focused" : "focus";
+        action.addEventListener("click", (event) => {
+            event.stopPropagation();
+            onFocus(isFocused ? undefined : scope.rootId);
+        });
+        top.append(name, action);
+        row.append(top);
+        const bar = document.createElement("div");
+        bar.className = "fh-bar";
+        const fill = document.createElement("div");
+        fill.style.width = `${Math.round(scope.ratio * 100)}%`;
+        if (!scope.isReady) {
+            fill.style.background = theme_1.TEXT_WARNING;
+        }
+        bar.append(fill);
+        row.append(bar);
+        const detail = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            `${ready}/${items.length} ready`,
+            scope.missing.length > 0 ? " — short " : "",
+            ...scope.missing
+                .slice(0, 3)
+                .flatMap((entry, index) => {
+                var _a;
+                return [
+                    index > 0 ? ", " : "",
+                    (0, gameLinks_1.makeItemLink)(entry.name, (_a = graph.nodes.get(entry.name)) === null || _a === void 0 ? void 0 : _a.id, theme_1.TEXT_GRAY),
+                    ` x${entry.quantity}`,
+                ];
+            }),
+            scope.missing.length > 3 ? `, +${scope.missing.length - 3} more` : "",
+        ]);
+        detail.style.fontSize = "11px";
+        detail.style.marginBottom = "0";
+        row.append(detail);
+        body.append(row);
+    }
+};
+const renderGoals = (body, context, rerender, focused, onFocus) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const { goalProgress, goals, graph } = context;
+    renderUndertakings(body, context, focused, onFocus);
     if (goals.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
             "No goals yet — pick one below, or use “Track as goal” on any item page.",
@@ -3672,7 +3795,7 @@ const makeQueueToggle = (craftworks, reload) => {
     }));
     return toggle;
 };
-const renderCraftworks = (body, context, reload) => {
+const renderCraftworks = (body, context, reload, focused) => {
     var _a, _b, _c;
     const { advice, cap, craftworks, graph, inventory, mastery, resolved, unlimited, } = context;
     if (!advice || !craftworks) {
@@ -3748,7 +3871,9 @@ const renderCraftworks = (body, context, reload) => {
     // goals alone, falling back to ONE of each thing a slot was stalled on --
     // which is how the queue filled up with single units of things nothing
     // actually needed much of.
-    const desired = (0, needs_1.getDesiredQueueForNeeds)(graph, resolved, inventory, unlimited);
+    const desired = (0, needs_1.getDesiredQueueForNeeds)(graph, resolved, inventory, unlimited, 
+    // when an undertaking is focused the queue works on that one alone
+    focused);
     const suggestions = (0, craftworks_2.suggestQueueChanges)(desired, craftworks.slots, inventory, cap, maxSlots, unlimited);
     if (suggestions.length > 0) {
         body.append(makeHeading("Suggested changes"));
@@ -4066,6 +4191,9 @@ const ensurePanel = () => {
     refresh.className = "fh-briefing-refresh";
     refresh.textContent = "refresh";
     head.append(heading, refresh);
+    const chip = document.createElement("div");
+    chip.className = "fh-focus-chip";
+    chip.dataset.on = "false";
     const tabs = document.createElement("div");
     tabs.className = "fh-briefing-tabs";
     const body = document.createElement("div");
@@ -4073,14 +4201,51 @@ const ensurePanel = () => {
     const main = document.createElement("div");
     main.className = "fh-briefing-main";
     main.append(tabs, body);
-    panel.append(head, main);
+    panel.append(head, chip, main);
     document.body.append(button, panel);
     let active = "now";
     let context;
+    let focused;
+    (0, focusScope_1.getFocusedScope)()
+        .then((scopeId) => {
+        focused = scopeId;
+        if (context) {
+            draw();
+        }
+    })
+        .catch((error) => {
+        console.error("Failed to read the focused undertaking", error);
+    });
+    const setFocus = (scopeId) => {
+        focused = scopeId;
+        (0, focusScope_1.setFocusedScope)(scopeId).catch((error) => {
+            console.error("Failed to save the focused undertaking", error);
+        });
+        draw();
+    };
     const draw = () => {
         body.textContent = "";
         if (!context) {
             return;
+        }
+        // The way out of focus has to be visible from every tab, not only the one
+        // you set it from -- otherwise a focus set days ago silently filters the
+        // panel and reads as the panel being wrong.
+        const scope = context.resolved.scopes.find((entry) => entry.rootId === focused);
+        chip.textContent = "";
+        chip.dataset.on = String(Boolean(scope));
+        if (scope) {
+            const chipLabel = document.createElement("span");
+            chipLabel.textContent = `focused: ${scope.label}`;
+            const clear = document.createElement("span");
+            clear.className = "fh-chip-clear";
+            clear.textContent = "✕";
+            clear.title = "Stop focusing this";
+            clear.addEventListener("click", (event) => {
+                event.stopPropagation();
+                setFocus(undefined);
+            });
+            chip.append(chipLabel, clear);
         }
         const counts = getTabCounts(context);
         for (const tab of tabs.children) {
@@ -4101,7 +4266,7 @@ const ensurePanel = () => {
                 renderGoals(body, context, () => {
                     // a removed goal changes the list itself, so reload before redrawing
                     load(false);
-                });
+                }, focused, setFocus);
                 break;
             }
             case "sets": {
@@ -4109,7 +4274,7 @@ const ensurePanel = () => {
                 break;
             }
             default: {
-                renderCraftworks(body, context, () => load(true));
+                renderCraftworks(body, context, () => load(true), focused);
             }
         }
     };
@@ -10235,7 +10400,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.48" !== void 0 ? "1.1.48" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.49" !== void 0 ? "1.1.49" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -11534,6 +11699,44 @@ exports.mergeMissing = mergeMissing;
 
 /***/ }),
 
+/***/ 1307:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.setFocusedScope = exports.getFocusedScope = void 0;
+const settings_1 = __webpack_require__(126);
+// Which undertaking you are working through right now, or none.
+//
+// Its own key rather than a setting: it changes many times a day, it is state
+// rather than preference, and two surfaces read it. Persisted because a quest
+// is days of work, not one sitting -- the panel should come back where you left
+// it rather than making you re-pick every time you open it.
+const FOCUS_KEY = "farmhandFocus";
+const getFocusedScope = () => __awaiter(void 0, void 0, void 0, function* () {
+    const { scopeId } = yield (0, settings_1.getData)(FOCUS_KEY, {});
+    return typeof scopeId === "string" && scopeId.length > 0
+        ? scopeId
+        : undefined;
+});
+exports.getFocusedScope = getFocusedScope;
+const setFocusedScope = (scopeId) => __awaiter(void 0, void 0, void 0, function* () {
+    yield (0, settings_1.setData)(FOCUS_KEY, scopeId ? { scopeId } : {});
+});
+exports.setFocusedScope = setFocusedScope;
+
+
+/***/ }),
+
 /***/ 1616:
 /***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
@@ -11965,8 +12168,13 @@ exports.needsFromTrackedGoals = needsFromTrackedGoals;
 // wants two items both made of Steel used to cost each against the full
 // inventory and so claimed the same Steel twice. As children of one scope they
 // share a pool and the quest's shortfall is what it would actually take.
-const needsFromGoal = (goal, index = 0) => {
-    const id = `${goal.kind}:${index}:${goal.label}`;
+// The id has to be STABLE across sessions, because focus is persisted against
+// it. It was the goal's position in the list, which shifts the moment a request
+// is finished -- focus would silently jump to a different quest. The label is
+// what actually identifies the undertaking; `suffix` only exists to keep two
+// identically-named ones apart.
+const needsFromGoal = (goal, suffix = "") => {
+    const id = `${goal.kind}:${goal.label}${suffix}`;
     const source = goal.kind === "quest" ? "quest" : "craftworks";
     const group = {
         href: goal.href,
@@ -11991,7 +12199,16 @@ const needsFromGoal = (goal, index = 0) => {
     ];
 };
 exports.needsFromGoal = needsFromGoal;
-const needsFromGoals = (goals) => goals.flatMap((goal, index) => (0, exports.needsFromGoal)(goal, index));
+const needsFromGoals = (goals) => {
+    const seen = new Map();
+    return goals.flatMap((goal) => {
+        var _a;
+        const key = `${goal.kind}:${goal.label}`;
+        const count = (_a = seen.get(key)) !== null && _a !== void 0 ? _a : 0;
+        seen.set(key, count + 1);
+        return (0, exports.needsFromGoal)(goal, count === 0 ? "" : `#${count}`);
+    });
+};
 exports.needsFromGoals = needsFromGoals;
 // Make one need the child of another: the composition the panel's "goalise"
 // action performs. Returns a new list; the tree is only ever a parent id, so
@@ -12244,13 +12461,13 @@ const resolveNeeds = (graph, needs, inventory, unlimited = unlimited_1.NO_UNLIMI
         const ratios = [];
         for (const need of ordered) {
             if (need.kind === "group") {
-                statusById.set(need.id, Object.assign(Object.assign({}, READY), { need }));
+                statusById.set(need.id, Object.assign(Object.assign({}, READY), { need, scopeId: rootId }));
                 continue;
             }
             const status = isClaimedByAncestor(need, byId, claimsByNeed)
                 ? costAsMilestone(need, graph, inventory, unlimited)
                 : costAgainstPool(need, graph, pool, unlimited, mastery);
-            statusById.set(need.id, Object.assign(Object.assign({}, status), { need }));
+            statusById.set(need.id, Object.assign(Object.assign({}, status), { need, scopeId: rootId }));
             if (status.coveredByParent) {
                 continue;
             }
@@ -12328,7 +12545,10 @@ exports.getNearlyDoneScopes = getNearlyDoneScopes;
 // single units happens. Every need is in here now, at the quantity it actually
 // wants, and an item two undertakings both need keeps the deeper of its two
 // positions so the order still builds bottom-up.
-const getDesiredQueueForNeeds = (graph, resolved, inventory, unlimited = unlimited_1.NO_UNLIMITED) => {
+const getDesiredQueueForNeeds = (graph, resolved, inventory, unlimited = unlimited_1.NO_UNLIMITED, 
+// when set, only this undertaking's needs are costed -- what "work a whole
+// quest at a time" means for the queue
+scopeId) => {
     var _a, _b;
     const byName = new Map();
     for (const status of resolved.statuses) {
@@ -12337,7 +12557,8 @@ const getDesiredQueueForNeeds = (graph, resolved, inventory, unlimited = unlimit
         if (status.need.kind !== "item" ||
             status.isReady ||
             status.coveredByParent ||
-            status.outstanding <= 0) {
+            status.outstanding <= 0 ||
+            (scopeId !== undefined && status.scopeId !== scopeId)) {
             continue;
         }
         const node = graph.nodes.get(status.need.item);
