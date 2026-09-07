@@ -395,8 +395,18 @@ const getHere = async (): Promise<Context["here"]> => {
   if (!page) {
     return undefined;
   }
+  // The page's own identity, not the URL. Framework7 does not always put the
+  // route in the hash -- exploring shows a bare "farmrpg.com/#" -- so gating on
+  // the address meant this returned before it had looked at anything, which is
+  // also why it never reached a log line. `data-page` is what the page actually
+  // declares itself to be.
   const route = window.location.hash || window.location.pathname;
-  if (!/\b(?:area|fishing)\.php/.test(route)) {
+  const identity = page.dataset.page;
+  const isLocation =
+    identity === Page.AREA ||
+    identity === Page.FISHING ||
+    /\b(?:area|fishing)\.php/.test(route);
+  if (!isLocation) {
     return undefined;
   }
   const locations = await getLocationEntries();
@@ -419,6 +429,11 @@ const getHere = async (): Promise<Context["here"]> => {
       ? matchLocationByImage(header.getAttribute("src") ?? "", locations)
       : undefined);
   if (!name) {
+    console.debug("[Farmhand] could not identify this location", {
+      image: header?.getAttribute("src"),
+      known: locations.length,
+      title,
+    });
     return undefined;
   }
   let location = await orUndefined(locationDataState.get({ query: name }));
@@ -430,6 +445,7 @@ const getHere = async (): Promise<Context["here"]> => {
     );
   }
   if (!location?.drops?.length) {
+    console.debug("[Farmhand] no drop table for", name, location);
     return undefined;
   }
   const staminaText = page.querySelector("#stamina")?.textContent ?? "";
@@ -1282,13 +1298,11 @@ const ensurePanel = (): void => {
       return;
     }
     // The panel outlives page navigation, so what it knows about where you are
-    // standing goes stale the moment you walk somewhere else. Re-deriving that
-    // costs nothing -- both lookups behind it are cached -- so refresh it on
-    // reopen rather than making the whole context reload.
-    if (currentRoute() !== loadedRoute) {
-      loadedRoute = currentRoute();
-      refreshHere();
-    }
+    // standing goes stale the moment you walk somewhere else. Comparing routes
+    // to detect that does not work -- the hash often does not change -- and
+    // both lookups behind this are cached, so simply re-derive it every time.
+    loadedRoute = currentRoute();
+    refreshHere();
   };
 
   const refreshHere = async (): Promise<void> => {
