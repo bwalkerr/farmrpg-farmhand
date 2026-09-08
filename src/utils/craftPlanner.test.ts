@@ -1253,6 +1253,74 @@ console.info("needs: the queue is asked for real quantities, not one of each");
   );
 }
 
+console.info("needs: focus can hold more than one undertaking at a time");
+{
+  // Two requests, focused together. The queue has to serve both -- and sum the
+  // material they share, because both lots really do have to be made, which is
+  // the opposite of how a TRIP merges them (largest ask, one journey).
+  const needs = [
+    ...needsFromGoal({
+      kind: "quest",
+      label: "Orbs",
+      needs: [{ name: "Glass Orb", quantity: 2 }],
+    }),
+    ...needsFromGoal({
+      kind: "quest",
+      label: "Stones",
+      needs: [{ name: "Shimmer Stone", quantity: 5 }],
+    }),
+    ...needsFromGoal({
+      kind: "quest",
+      label: "Ignored",
+      needs: [{ name: "Shimmer Stone", quantity: 100 }],
+    }),
+  ];
+  const resolved = resolveNeeds(glassOrb, needs, {});
+  const both = getDesiredQueueForNeeds(
+    glassOrb,
+    resolved,
+    {},
+    undefined,
+    new Set(["quest:Orbs", "quest:Stones"])
+  );
+  const byName = new Map(both.map((entry) => [entry.name, entry.quantity]));
+  check("the focused orbs are queued", byName.get("Glass Orb"), 2);
+  check(
+    "and the shimmer both focused scopes want, summed, with the third left out",
+    byName.get("Shimmer Stone"),
+    // 2 per orb x2, plus the 5 the second request wants -- not the 100
+    9
+  );
+
+  const one = getDesiredQueueForNeeds(
+    glassOrb,
+    resolved,
+    {},
+    undefined,
+    new Set(["quest:Orbs"])
+  );
+  check(
+    "focusing one alone still narrows to it",
+    one.some((entry) => entry.name === "Glass Orb"),
+    true
+  );
+
+  const none = getDesiredQueueForNeeds(
+    glassOrb,
+    resolved,
+    {},
+    undefined,
+    new Set()
+  );
+  check(
+    "an empty focus is not a filter -- it is the whole backlog",
+    new Map(none.map((entry) => [entry.name, entry.quantity])).get(
+      "Shimmer Stone"
+    ),
+    109
+  );
+}
+
 if (failures > 0) {
   throw new Error(`${failures} check(s) failed`);
 }

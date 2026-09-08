@@ -463,10 +463,16 @@ export const getDesiredQueueForNeeds = (
   resolved: ResolvedNeeds,
   inventory: Record<string, number>,
   unlimited: UnlimitedItems = NO_UNLIMITED,
-  // when set, only this undertaking's needs are costed -- what "work a whole
-  // quest at a time" means for the queue
-  scopeId?: string
+  // when non-empty, only these undertakings' needs are costed -- what "work a
+  // whole quest at a time" means for the queue.
+  //
+  // Note this SUMS a shared material across the focused scopes where a trip
+  // takes the largest single ask (`mergeMissing`). That difference is real and
+  // deliberate: two quests each wanting 40 Steel need 80 crafted, but one trip
+  // for Coal covers both.
+  scopeIds?: ReadonlySet<string>
 ): { name: string; quantity: number }[] => {
+  const isScoped = scopeIds !== undefined && scopeIds.size > 0;
   const byName = new Map<string, { depth: number; quantity: number }>();
   for (const status of resolved.statuses) {
     // a milestone is already inside its parent's plan; costing it again would
@@ -476,7 +482,7 @@ export const getDesiredQueueForNeeds = (
       status.isReady ||
       status.coveredByParent ||
       status.outstanding <= 0 ||
-      (scopeId !== undefined && status.scopeId !== scopeId)
+      (isScoped && !scopeIds.has(status.scopeId))
     ) {
       continue;
     }
