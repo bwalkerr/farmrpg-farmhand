@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.50
+// @version 1.1.51
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -627,33 +627,68 @@ var CropStatus;
     CropStatus["GROWING"] = "growing";
     CropStatus["READY"] = "ready";
 })(CropStatus || (exports.CropStatus = CropStatus = {}));
+// Reads the one-line field summary the game shows away from the farm page: the
+// home screen's xfarm row and worker.php?go=readycount both land here.
+//
+// Text we can't read now returns undefined, which state.set() treats as "keep
+// what you had". It used to fall through to a complete `{status: EMPTY}`
+// object, so any summary without the word "growing" or "ready" in it — a bare
+// "0" from readycount, which only says nothing is READY yet — asserted an empty
+// field over crops that were growing fine. readycount is polled, so every poll
+// re-asserted it: that is the "Fields are empty!" banner that follows you
+// around until a reload. EMPTY now has to be stated, never assumed.
 const processFarmStatus = (root) => {
-    const statusText = root.textContent;
+    var _a;
+    const statusText = (_a = root.textContent) === null || _a === void 0 ? void 0 : _a.trim();
     if (!statusText) {
+        return undefined;
+    }
+    const text = statusText.toLowerCase();
+    // "36 READY!", "12 Growing"
+    const count = Number.parseInt(statusText);
+    if (text.includes("ready")) {
+        return {
+            status: CropStatus.READY,
+            count: Number.isNaN(count) ? 0 : count,
+            readyAt: Date.now(),
+        };
+    }
+    if (text.includes("growing")) {
+        return {
+            status: CropStatus.GROWING,
+            count: Number.isNaN(count) ? 0 : count,
+            // no way to tell when from this text, check again in a minute
+            readyAt: Date.now() + 60 * 1000,
+        };
+    }
+    if (text.includes("empty")) {
         return {
             status: CropStatus.EMPTY,
             count: 0,
             readyAt: Number.POSITIVE_INFINITY,
         };
     }
-    // 36 READY!
-    const count = Number(statusText.split(" ")[0]);
-    let status = CropStatus.EMPTY;
-    let readyAt = Number.POSITIVE_INFINITY;
-    if (statusText.toLowerCase().includes("growing")) {
-        status = CropStatus.GROWING;
-        // new sure when ready, check again in a minute
-        readyAt = Date.now() + 60 * 1000;
+    // A bare number is readycount: more than none are ready, and zero says
+    // nothing at all about whether the field is planted.
+    if (/^\d+$/.test(statusText)) {
+        return count > 0
+            ? { status: CropStatus.READY, count, readyAt: Date.now() }
+            : undefined;
     }
-    else if (statusText.toLowerCase().includes("ready")) {
-        status = CropStatus.READY;
-        readyAt = Date.now();
-    }
-    return { status, count, readyAt };
+    console.debug("[FARM] Unreadable field summary, keeping status", statusText);
+    return undefined;
 };
 const processFarmPage = (root) => {
     var _a;
     const plots = root.querySelectorAll("#croparea #crops .col-25");
+    // No plots at all is a page we failed to read, not an empty field — the plots
+    // are in the markup whether or not anything is planted in them, so the loop
+    // below can only ever return EMPTY when it had nothing to look at (a farm.php
+    // fetch that came back as the logged-out shell looks exactly like this).
+    if (plots.length === 0) {
+        console.debug("[FARM] No plots on the farm page, keeping status");
+        return undefined;
+    }
     const count = plots.length;
     let status = CropStatus.EMPTY;
     let readyAt = Number.POSITIVE_INFINITY;
@@ -692,14 +727,22 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.READY_COUNT })],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
                 const root = yield (0, requests_1.getDocument)(response);
-                state.set(processFarmStatus(root.body));
+                const status = processFarmStatus(root.body);
+                // undefined means we couldn't read it — say nothing rather than
+                // overwriting a good status with a guess
+                if (status) {
+                    yield state.set(status);
+                }
             }),
         },
         {
             match: [page_1.Page.FARM, new URLSearchParams()],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
                 const root = yield (0, requests_1.getDocument)(response);
-                yield state.set(processFarmPage(root.body));
+                const status = processFarmPage(root.body);
+                if (status) {
+                    yield state.set(status);
+                }
             }),
         },
         {
@@ -710,33 +753,48 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
                 if (!linkStatus) {
                     return;
                 }
-                yield state.set(processFarmStatus(linkStatus));
+                const status = processFarmStatus(linkStatus);
+                if (status) {
+                    yield state.set(status);
+                }
             }),
         },
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.FARM_STATUS })],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
-                var _a;
                 const raw = yield response.text();
-                const rawPlots = raw.split(";");
-                if (rawPlots.length < ((_a = previous === null || previous === void 0 ? void 0 : previous.count) !== null && _a !== void 0 ? _a : 4)) {
-                    yield state.set(Object.assign(Object.assign({}, previous), { status: CropStatus.EMPTY }));
+                const rawPlots = raw.split(";").filter((plot) => plot.trim());
+                if (rawPlots.length === 0) {
+                    console.debug("[FARM] Empty farmstatus response, keeping status");
                     return;
                 }
+                // A plot counts as planted if it has progress OR time left to run.
+                // Progress alone is not enough: a crop planted seconds ago reports
+                // 0%, so a fresh plant-all read as an entirely empty field and put
+                // the banner up on the way out of the farm — the "I planted, and then
+                // it told me the fields were empty" report. The old length check
+                // (fewer entries than plots -> EMPTY) is gone with it: it compared
+                // this feed against a count parsed out of unrelated summary text, and
+                // a partly planted field is not what "Fields are empty!" means.
                 let status = CropStatus.EMPTY;
+                let readyAt = Number.POSITIVE_INFINITY;
                 for (const plot of rawPlots) {
                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
                     const [plotId, percent, secondsLeft, secondsSince] = plot.split("-");
                     const percentReady = Number(percent);
-                    if (percentReady === 100) {
+                    const remaining = Number(secondsLeft);
+                    if (percentReady >= 100) {
                         status = CropStatus.READY;
+                        readyAt = Date.now();
                         break;
                     }
-                    else if (percentReady > 0) {
+                    else if (percentReady > 0 || remaining > 0) {
                         status = CropStatus.GROWING;
+                        // this feed is the only one that knows the real countdown
+                        readyAt = Math.min(readyAt, Date.now() + (remaining > 0 ? remaining : 60) * 1000);
                     }
                 }
-                yield state.set(Object.assign(Object.assign({}, previous), { status }));
+                yield state.set(Object.assign(Object.assign({}, previous), { status, readyAt }));
             }),
         },
         {
@@ -10596,7 +10654,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.50" !== void 0 ? "1.1.50" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.51" !== void 0 ? "1.1.51" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
