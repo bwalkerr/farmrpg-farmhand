@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.51
+// @version 1.1.52
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -6975,192 +6975,6 @@ exports.fleaMarket = {
 
 /***/ }),
 
-/***/ 8697:
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
-
-
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.focusDashboard = void 0;
-const theme_1 = __webpack_require__(1178);
-const recipes_1 = __webpack_require__(498);
-const page_1 = __webpack_require__(7952);
-const focus_1 = __webpack_require__(7167);
-const quests_1 = __webpack_require__(303);
-const inventory_1 = __webpack_require__(4514);
-const api_1 = __webpack_require__(3413);
-const gameLinks_1 = __webpack_require__(1616);
-const promise_1 = __webpack_require__(6762);
-const unlimited_1 = __webpack_require__(4808);
-const settings_1 = __webpack_require__(126);
-const SETTING_FOCUS_DASHBOARD = {
-    id: settings_1.SettingId.FOCUS_DASHBOARD,
-    title: "Quests: Focus dashboard",
-    description: `
-    On the quests page, cross your open requests against your inventory: what
-    you can turn in now, what's one item away, and which materials are holding
-    up the most requests
-  `,
-    type: "boolean",
-    defaultValue: true,
-};
-const CONTAINER_ID = "fh-focus-dashboard";
-const MAX_LISTED = 6;
-const makeLine = (color, text) => {
-    const line = document.createElement("div");
-    line.style.color = color;
-    line.style.fontSize = "12px";
-    line.style.lineHeight = "1.5";
-    line.style.marginBottom = "3px";
-    line.textContent = text;
-    return line;
-};
-const makeHeading = (text) => {
-    const heading = document.createElement("div");
-    heading.textContent = text;
-    heading.style.color = theme_1.TEXT_WHITE;
-    heading.style.fontSize = "12px";
-    heading.style.fontWeight = "bold";
-    heading.style.margin = "10px 0 4px";
-    return heading;
-};
-const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
-const render = (container, goals, unlimited) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d;
-    const snapshot = yield inventory_1.inventoryState.get();
-    const inventory = (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.quantities) !== null && _a !== void 0 ? _a : {};
-    // one walk covering every item any open request wants, so the whole board is
-    // costed from a single batch of buddy.farm lookups
-    const graph = yield (0, recipes_1.gatherRecipeGraph)(goals.flatMap((goal) => goal.needs.map((need) => need.name)));
-    const statuses = (0, focus_1.getGoalStatuses)(graph, goals, inventory, unlimited);
-    const ready = statuses.filter((status) => status.isReady);
-    const nearlyDone = (0, focus_1.getNearlyDone)(statuses);
-    const bottlenecks = (0, focus_1.rankBottlenecks)(statuses);
-    container.append(makeLine(theme_1.TEXT_GRAY, `${goals.length} open request${goals.length === 1 ? "" : "s"} costed against your inventory.`));
-    if (ready.length > 0) {
-        container.append(makeHeading("Ready to turn in"));
-        for (const status of ready) {
-            container.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
-                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_SUCCESS),
-            ]));
-        }
-    }
-    if (nearlyDone.length > 0) {
-        container.append(makeHeading("One item away"));
-        for (const status of nearlyDone.slice(0, MAX_LISTED)) {
-            const [only] = status.missing;
-            container.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
-                (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_WARNING),
-                ` — ${only.quantity.toLocaleString()} × `,
-                (0, gameLinks_1.makeItemLink)(only.name, (_b = graph.nodes.get(only.name)) === null || _b === void 0 ? void 0 : _b.id, theme_1.TEXT_WARNING),
-            ]));
-        }
-    }
-    if (bottlenecks.length > 0) {
-        container.append(makeHeading("Holding up the most"));
-        for (const entry of bottlenecks.slice(0, MAX_LISTED)) {
-            const color = entry.goalsGated > 1 ? theme_1.TEXT_WARNING : theme_1.TEXT_GRAY;
-            container.append((0, gameLinks_1.makeLinkedLine)(color, [
-                (0, gameLinks_1.makeItemLink)(entry.name, (_c = graph.nodes.get(entry.name)) === null || _c === void 0 ? void 0 : _c.id, color),
-                ` — ${entry.goalsGated > 1
-                    ? `blocks ${entry.goalsGated} requests`
-                    : `blocks ${entry.goals[0]}`}, need up to ${entry.maxNeeded.toLocaleString()}`,
-            ]));
-        }
-        const sourcing = (0, focus_1.getFocusSourcing)(graph, bottlenecks);
-        if (sourcing.locations.length > 0) {
-            container.append(makeHeading("Where to go"));
-            const references = yield Promise.all(sourcing.locations.map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
-            for (const [index, location] of sourcing.locations.entries()) {
-                const color = location.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY;
-                const parts = [
-                    (0, gameLinks_1.makeLocationLink)(location.location, references[index], color),
-                    " — ",
-                ];
-                for (const [itemIndex, item] of location.items.entries()) {
-                    if (itemIndex > 0) {
-                        parts.push(", ");
-                    }
-                    parts.push((0, gameLinks_1.makeItemLink)(item.name, (_d = graph.nodes.get(item.name)) === null || _d === void 0 ? void 0 : _d.id, color));
-                }
-                parts.push(` (~${formatHits(location.hits)} ${location.type === "fishing" ? "casts" : "explores"})`);
-                container.append((0, gameLinks_1.makeLinkedLine)(color, parts));
-            }
-        }
-    }
-    else if (ready.length === statuses.length && statuses.length > 0) {
-        container.append(makeLine(theme_1.TEXT_SUCCESS, "Every open request is ready to hand in."));
-    }
-});
-exports.focusDashboard = {
-    settings: [SETTING_FOCUS_DASHBOARD],
-    onPageLoad: (settings, page) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c;
-        if (page !== page_1.Page.QUESTS) {
-            return;
-        }
-        if (!settings[settings_1.SettingId.FOCUS_DASHBOARD]) {
-            return;
-        }
-        const currentPage = (0, page_1.getCurrentPage)();
-        if (!currentPage) {
-            return;
-        }
-        (_a = currentPage.querySelector(`#${CONTAINER_ID}`)) === null || _a === void 0 ? void 0 : _a.remove();
-        const quests = (0, quests_1.parseActiveQuests)();
-        if (quests.length === 0) {
-            return;
-        }
-        const card = document.createElement("div");
-        card.id = CONTAINER_ID;
-        card.className = "card";
-        const content = document.createElement("div");
-        content.className = "card-content";
-        const inner = document.createElement("div");
-        inner.className = "card-content-inner";
-        inner.style.borderLeft = `3px solid ${theme_1.BORDER_GRAY}`;
-        inner.style.paddingLeft = "10px";
-        const title = document.createElement("div");
-        title.textContent = "Focus";
-        title.style.color = theme_1.TEXT_WHITE;
-        title.style.fontWeight = "bold";
-        title.style.marginBottom = "6px";
-        inner.append(title);
-        const status = makeLine(theme_1.TEXT_GRAY, "Costing your open requests…");
-        inner.append(status);
-        content.append(inner);
-        card.append(content);
-        const heading = (0, page_1.getTitle)(/Active Requests/);
-        if (heading) {
-            heading.before(card);
-        }
-        else {
-            (_b = currentPage.querySelector(".content-block")) === null || _b === void 0 ? void 0 : _b.prepend(card);
-        }
-        const { goals, unmatched } = yield (0, quests_1.getQuestGoals)(quests);
-        status.remove();
-        if (goals.length === 0) {
-            inner.append(makeLine(theme_1.TEXT_GRAY, "No requirements found for your open requests."));
-            return;
-        }
-        yield render(inner, goals, (0, unlimited_1.parseUnlimitedItems)(String((_c = settings[settings_1.SettingId.UNLIMITED_ITEMS]) !== null && _c !== void 0 ? _c : "")));
-        if (unmatched.length > 0) {
-            inner.append(makeLine(theme_1.TEXT_GRAY, `Not on buddy.farm, so not costed: ${unmatched.join(", ")}`));
-        }
-    }),
-};
-
-
-/***/ }),
-
 /***/ 4894:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -10654,7 +10468,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.51" !== void 0 ? "1.1.51" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.52" !== void 0 ? "1.1.52" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -10751,7 +10565,6 @@ const farmhandSettings_1 = __webpack_require__(8973);
 const harvestNotifications_1 = __webpack_require__(4894);
 const fishInBarrel_1 = __webpack_require__(2100);
 const fleaMarket_1 = __webpack_require__(9361);
-const focusDashboard_1 = __webpack_require__(8697);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const highlightSelfInChat_1 = __webpack_require__(5454);
@@ -10815,7 +10628,6 @@ const FEATURES = [
     inventoryCapWarnings_1.inventoryCapWarnings,
     // quests
     quests_1.quests,
-    focusDashboard_1.focusDashboard,
     questCollapse_1.questCollapse,
     questTagging_1.questTagging,
     compactSilver_1.compactSilver,
@@ -13507,7 +13319,6 @@ var SettingId;
     SettingId["ITEM_NEEDS"] = "itemNeeds";
     SettingId["CRAFTWORKS_ADVISOR"] = "craftworksAdvisor";
     SettingId["EXPLORE_FIRST"] = "exploreFirst";
-    SettingId["FOCUS_DASHBOARD"] = "focusDashboard";
     SettingId["EXPLORE_IMPROVED"] = "exploreImproved";
     SettingId["EXPORT"] = "export";
     SettingId["FIELD_EMPTY_NOTIFICATIONS"] = "fieldEmptyNotifications";
