@@ -21,7 +21,6 @@ import { farmhandSettings } from "./features/farmhandSettings";
 import { fieldNotifications } from "./features/harvestNotifications";
 import { fishinInBarrel } from "./features/fishInBarrel";
 import { fleaMarket } from "./features/fleaMarket";
-import { focusDashboard } from "./features/focusDashboard";
 import { getCurrentPage, getPage } from "~/utils/page";
 import { getSettingValues, registerSettings } from "./utils/settings";
 import { highlightSelfInChat } from "./features/highlightSelfInChat";
@@ -99,7 +98,6 @@ const FEATURES = [
 
   // quests
   quests,
-  focusDashboard,
   questCollapse,
   questTagging,
   compactSilver,

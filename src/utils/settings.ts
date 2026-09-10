@@ -18,7 +18,6 @@ export enum SettingId {
   ITEM_NEEDS = "itemNeeds",
   CRAFTWORKS_ADVISOR = "craftworksAdvisor",
   EXPLORE_FIRST = "exploreFirst",
-  FOCUS_DASHBOARD = "focusDashboard",
   EXPLORE_IMPROVED = "exploreImproved",
   EXPORT = "export",
   FIELD_EMPTY_NOTIFICATIONS = "fieldEmptyNotifications",
