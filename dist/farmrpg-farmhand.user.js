@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.52
+// @version 1.1.53
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2974,7 +2974,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.briefingPanel = void 0;
-const perks_1 = __webpack_require__(5543);
 const craftworks_1 = __webpack_require__(920);
 const goals_1 = __webpack_require__(1267);
 const craftworks_2 = __webpack_require__(7831);
@@ -2989,6 +2988,7 @@ const suggestions_1 = __webpack_require__(9262);
 const focus_1 = __webpack_require__(7167);
 const requests_1 = __webpack_require__(3300);
 const locationAdvice_1 = __webpack_require__(4764);
+const perks_1 = __webpack_require__(5543);
 const quests_1 = __webpack_require__(303);
 const settings_1 = __webpack_require__(126);
 const inventory_1 = __webpack_require__(4514);
@@ -3025,10 +3025,12 @@ const RIGHT_OFFSET = "calc(8px + env(safe-area-inset-right, 0px))";
 const TABS = [
     { id: "now", label: "Now" },
     { id: "goals", label: "Goals" },
-    { id: "sets", label: "Sets" },
     // "Queue" rather than "Craftworks": four labels have to fit 380px, and the
     // panel is already inside Craftworks by context
     { id: "craftworks", label: "Queue" },
+    // Sets is last because it is the one tab you open on purpose rather than to
+    // be told something: it has no count badge and nothing in it is time-sensitive
+    { id: "sets", label: "Sets" },
 ];
 const injectStyles = () => {
     if (document.querySelector(`#${STYLE_ID}`)) {
@@ -3137,6 +3139,41 @@ const injectStyles = () => {
         font-size: 11px;
       }
       #${PANEL_ID} .fh-briefing-refresh:hover { color: ${theme_1.TEXT_WHITE}; }
+      /* How old the numbers are. The panel outlives navigation, so without
+         this there is no telling whether it is showing this minute or whatever
+         was true when it was opened. Muted: it is a caveat, not a reading. */
+      #${PANEL_ID} .fh-briefing-age {
+        color: ${theme_1.TEXT_GRAY};
+        font-size: 11px;
+        opacity: 0.75;
+      }
+      #${PANEL_ID} .fh-briefing-controls {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+      /* The perk indicator is a button, not a label: its tooltip is the only
+         perk diagnostic there is, and a phone cannot show a tooltip. */
+      #${PANEL_ID} .fh-perk-chip {
+        align-items: center;
+        border-radius: 7px;
+        cursor: pointer;
+        display: flex;
+        gap: 5px;
+        padding: 3px 5px;
+      }
+      #${PANEL_ID} .fh-perk-chip:hover,
+      #${PANEL_ID} .fh-perk-chip[data-on="true"] {
+        background: rgba(255, 255, 255, 0.09);
+      }
+      #${PANEL_ID} .fh-perk-note {
+        display: none;
+        color: ${theme_1.TEXT_GRAY};
+        font-size: 11px;
+        line-height: 1.4;
+        margin: -2px 0 8px;
+      }
+      #${PANEL_ID} .fh-perk-note[data-on="true"] { display: block; }
       #${PANEL_ID} .fh-briefing-tabs {
         display: flex;
         gap: 4px;
@@ -3284,6 +3321,14 @@ const injectStyles = () => {
           font-size: 12px;
           padding: 6px 2px 6px 10px;
         }
+        /* The perk chip is the note's only way open on a phone, which is the
+           one place the note matters, so it gets a thumb-sized box. */
+        #${PANEL_ID} .fh-perk-chip {
+          padding: 7px 8px;
+        }
+        #${PANEL_ID} .fh-perk-note {
+          font-size: 12px;
+        }
         /* A 14px glyph is not a target. Padding grows the hit box without
            moving the glyph. */
         #${PANEL_ID} .fh-goal-remove,
@@ -3373,7 +3418,7 @@ const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 // outstanding shows no number at all rather than a zero -- a row of zeroes
 // reads as noise and hides the one number that matters.
 const getTabCounts = (context) => {
-    var _a, _b;
+    var _a, _b, _c, _d;
     const counts = {};
     const attention = summarizeAttention(context.advice, context.statuses.filter((status) => status.isReady).length);
     if (attention.count > 0) {
@@ -3387,6 +3432,13 @@ const getTabCounts = (context) => {
     const roots = (_b = (_a = context.advice) === null || _a === void 0 ? void 0 : _a.roots.length) !== null && _b !== void 0 ? _b : 0;
     if (roots > 0) {
         counts.craftworks = roots;
+    }
+    // Sets is the last tab and has nothing time-sensitive in it, so it earns a
+    // badge only when there is a reason to open it: a saved set that matches
+    // something you want and is not the one loaded. getRecommendedSet skips the
+    // active set, so anything it returns is by definition a change.
+    if ((0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_d = (_c = context.craftworks) === null || _c === void 0 ? void 0 : _c.sets) !== null && _d !== void 0 ? _d : [], context.itemNames)) {
+        counts.sets = 1;
     }
     return counts;
 };
@@ -3428,16 +3480,24 @@ const setBadge = (count, parts, isStale = false) => {
         button.append(badge);
     }
 };
-const makeHeading = (text) => {
-    const heading = document.createElement("div");
-    heading.textContent = text;
-    heading.style.color = theme_1.TEXT_WHITE;
-    heading.style.fontSize = "11px";
-    heading.style.fontWeight = "bold";
-    heading.style.letterSpacing = "0.4px";
-    heading.style.textTransform = "uppercase";
-    heading.style.margin = "12px 0 4px";
-    return heading;
+// Deliberately coarse: the question this answers is "is this still true?",
+// and a number ticking by the second invites reading it as precision.
+// The alert sections cut at MAX_LISTED, but the button's badge counts them all,
+// so a truncated list reads as the panel disagreeing with itself. Say what was
+// left out instead.
+const appendMore = (body, total) => {
+    if (total <= MAX_LISTED) {
+        return;
+    }
+    body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`+${total - MAX_LISTED} more`]));
+};
+const formatAge = (readAt) => {
+    const seconds = Math.max(0, Math.round((Date.now() - readAt) / 1000));
+    if (seconds < 60) {
+        return "just now";
+    }
+    const minutes = Math.round(seconds / 60);
+    return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
 };
 const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
 const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
@@ -3542,7 +3602,6 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         inventory,
         itemNames: (basicItems !== null && basicItems !== void 0 ? basicItems : []).map((item) => item.name),
         mastery: (_e = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _e !== void 0 ? _e : [],
-        perks: yield (0, promise_1.orUndefined)(perks_1.perksState.get()),
         questGoals,
         resolved: (0, needs_1.resolveNeeds)(graph, (0, needAdapters_1.buildNeeds)({
             craftworksRoots: (_f = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _f !== void 0 ? _f : [],
@@ -3578,7 +3637,7 @@ const renderWhereToGo = (body, context, missing) => __awaiter(void 0, void 0, vo
     if (sourcing.locations.length === 0) {
         return;
     }
-    body.append(makeHeading("Where to go"));
+    body.append((0, gameLinks_1.makeHeading)("Where to go"));
     const top = sourcing.locations.slice(0, MAX_LISTED);
     const references = yield Promise.all(top.map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
     for (const [index, entry] of top.entries()) {
@@ -3632,7 +3691,7 @@ const renderHere = (body, context, missing, focused) => {
         return;
     }
     const attempts = location.type === "fishing" ? "casts" : "explores";
-    body.append(makeHeading(`Here: ${location.name}`));
+    body.append((0, gameLinks_1.makeHeading)(`Here: ${location.name}`));
     for (const entry of advice.needed.slice(0, MAX_LISTED)) {
         // Stamina is the whole reason to know this while standing here: whether
         // the trip finishes the item or only dents it.
@@ -3679,15 +3738,16 @@ const renderNow = (body, context, focused) => __awaiter(void 0, void 0, void 0, 
     const ready = statuses.filter((status) => status.isReady).sort(byFocus);
     const nearlyDone = (0, focus_1.getNearlyDone)(statuses).sort(byFocus);
     if (ready.length > 0) {
-        body.append(makeHeading("Ready to turn in"));
+        body.append((0, gameLinks_1.makeHeading)("Ready to turn in"));
         for (const status of ready.slice(0, MAX_LISTED)) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
                 (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_SUCCESS),
             ]));
         }
+        appendMore(body, ready.length);
     }
     if (nearlyDone.length > 0) {
-        body.append(makeHeading("One item away"));
+        body.append((0, gameLinks_1.makeHeading)("One item away"));
         for (const status of nearlyDone.slice(0, MAX_LISTED)) {
             const [only] = status.missing;
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
@@ -3696,15 +3756,17 @@ const renderNow = (body, context, focused) => __awaiter(void 0, void 0, void 0, 
                 (0, gameLinks_1.makeItemLink)(only.name, (_a = graph.nodes.get(only.name)) === null || _a === void 0 ? void 0 : _a.id, theme_1.TEXT_WARNING),
             ]));
         }
+        appendMore(body, nearlyDone.length);
     }
     if (advice && advice.dead.length + advice.ordering.length > 0) {
-        body.append(makeHeading("Craftworks needs a hand"));
+        body.append((0, gameLinks_1.makeHeading)("Craftworks needs a hand"));
         for (const slot of advice.dead.slice(0, MAX_LISTED)) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
                 (0, gameLinks_1.makeItemLink)(slot.name, Number(slot.id) || undefined, theme_1.TEXT_ERROR),
                 " is at cap — dead slot",
             ]));
         }
+        appendMore(body, advice.dead.length);
         for (const { producer, slot } of advice.ordering) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
                 `move #${producer.position} ${producer.name} above #${slot.position} ${slot.name}`,
@@ -3762,7 +3824,7 @@ const renderUndertakings = (body, context, focused, onFocus) => {
     if (scopes.length === 0) {
         return;
     }
-    body.append(makeHeading("Undertakings"));
+    body.append((0, gameLinks_1.makeHeading)("Undertakings"));
     // Every focused scope floats above the rest, then progress order within each
     // group -- with several focused at once, "closest to done" is still the order
     // you want to work them in.
@@ -3923,7 +3985,7 @@ const renderSuggestions = (body, context, rerender) => {
     if (total === 0) {
         return;
     }
-    body.append(makeHeading("Suggested"));
+    body.append((0, gameLinks_1.makeHeading)("Suggested"));
     const chips = document.createElement("div");
     chips.className = "fh-chips";
     const list = document.createElement("div");
@@ -4072,7 +4134,7 @@ const renderCraftworks = (body, context, reload, focused) => {
     renderSetLoader(body, context, reload);
     const frozen = (0, suggestions_1.getFrozenMastery)(mastery, inventory, cap);
     if (frozen.length > 0) {
-        body.append(makeHeading("Mastery frozen at cap"));
+        body.append((0, gameLinks_1.makeHeading)("Mastery frozen at cap"));
         for (const entry of frozen.slice(0, MAX_LISTED)) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
                 (0, gameLinks_1.makeItemLink)(entry.name, entry.id, theme_1.TEXT_ERROR),
@@ -4099,7 +4161,7 @@ const renderCraftworks = (body, context, reload, focused) => {
     focused);
     const suggestions = (0, craftworks_2.suggestQueueChanges)(desired, craftworks.slots, inventory, cap, maxSlots, unlimited);
     if (suggestions.length > 0) {
-        body.append(makeHeading("Suggested changes"));
+        body.append((0, gameLinks_1.makeHeading)("Suggested changes"));
         for (const suggestion of suggestions) {
             const color = suggestion.action === "drop" ? theme_1.TEXT_ERROR : theme_1.TEXT_SUCCESS;
             body.append((0, gameLinks_1.makeLinkedLine)(color, [
@@ -4181,137 +4243,26 @@ const renderSetLoader = (body, context, reload) => {
 // Every saved set, loadable in place. The recommendation alone was too easy to
 // miss: it only appears when a tracked goal happens to share a name with a set,
 // so a queue of location loadouts showed nothing at all.
-// Perk sets live here rather than in a tab of their own: this tab is already
-// the loadouts you switch between, and a fifth tab would not fit the panel's
-// width, let alone a thumb. Switching is forced, because the reason to reach
-// for it by hand is that the automatic switch is not being trusted -- and the
-// fast path would otherwise no-op on the very state in doubt.
-const renderPerkSets = (body, context, reload) => {
-    var _a, _b;
-    const perkSets = (_b = (_a = context.perks) === null || _a === void 0 ? void 0 : _a.perkSets) !== null && _b !== void 0 ? _b : [];
-    if (perkSets.length === 0) {
-        return;
-    }
-    const status = (0, perks_1.getPerkStatus)();
-    body.append(makeHeading("Perk sets"));
-    // Auto manage is repeated here, not only on the game's settings page, for two
-    // reasons: that page is genuinely hard to reach on a phone, and this is the
-    // one setting whose being off is indistinguishable from the reconciler being
-    // broken -- manual equipping below still works, because it calls
-    // activatePerkSet directly and never consults the setting.
-    const autoSetting = (0, settings_1.getSettings)().find((setting) => setting.id === settings_1.SettingId.PERK_MANAGER && setting.type === "boolean");
-    if (autoSetting) {
-        const row = document.createElement("div");
-        row.style.alignItems = "center";
-        row.style.display = "flex";
-        row.style.gap = "8px";
-        row.style.marginBottom = "5px";
-        const label = document.createElement("span");
-        label.style.fontSize = "11px";
-        const toggle = document.createElement("a");
-        toggle.href = "#";
-        toggle.style.color = theme_1.TEXT_GRAY;
-        toggle.style.fontSize = "11px";
-        toggle.style.marginLeft = "auto";
-        toggle.style.textDecoration = "underline";
-        const paintAuto = (isOn) => {
-            label.textContent = `Auto manage: ${isOn ? "on" : "off"}`;
-            label.style.color = isOn ? theme_1.TEXT_SUCCESS : theme_1.TEXT_WARNING;
-            toggle.textContent = isOn ? "turn off" : "turn on";
-        };
-        paintAuto(Boolean(autoSetting.defaultValue));
-        (0, settings_1.getSetting)(autoSetting)
-            .then((current) => {
-            paintAuto(Boolean(current.value));
-        })
-            .catch((error) => {
-            console.error("Failed to read the perk auto-manage setting", error);
-        });
-        toggle.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
-            event.preventDefault();
-            const current = yield (0, settings_1.getSetting)(autoSetting);
-            const next = !current.value;
-            toggle.textContent = "saving…";
-            yield (0, settings_1.setSetting)(Object.assign(Object.assign({}, autoSetting), { value: next }));
-            paintAuto(next);
-            // turning it on should take effect where you are, not at the next
-            // navigation -- otherwise it reads as not having worked
-            reload();
-        }));
-        row.append(label, toggle);
-        body.append(row);
-    }
-    if (status.note) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [status.note]));
-    }
-    // Activity sets are matched by NAME, case-insensitively and exactly, so a set
-    // called "explore" or "def" is invisible to the reconciler while still being
-    // perfectly equippable by hand below. Without a set named "Default" the
-    // reconciler bails before it switches anything at all, which looks exactly
-    // like auto manage being broken -- so say so here rather than leave it to be
-    // deduced.
-    const activityNames = new Set(Object.values(perks_1.PerkActivity)
-        .filter((activity) => activity !== perks_1.PerkActivity.UNKNOWN)
-        .map((activity) => activity.toLowerCase()));
-    const isActivityName = (name) => activityNames.has(name.trim().toLowerCase());
-    if (!perkSets.some((set) => isActivityName(set.name))) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
-            "none of these names match an activity — nothing can auto-switch",
-        ]));
-    }
-    else if (!perkSets.some((set) => set.name.trim().toLowerCase() === "default")) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
-            'no set named "Default" — the reconciler stops before it switches',
-        ]));
-    }
-    for (const set of perkSets) {
-        const isOn = status.isConfirmed && status.name === set.name;
-        const row = document.createElement("div");
-        row.className = "fh-goal-top";
-        row.style.marginBottom = "5px";
-        const label = (0, gameLinks_1.makeLinkedLine)(isOn ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY, [
-            `${set.name}${isOn ? " · on" : ""}${isActivityName(set.name) ? "" : " · manual only"}`,
-        ]);
-        label.style.marginBottom = "0";
-        row.append(label);
-        if (!isOn) {
-            const action = document.createElement("a");
-            action.href = "#";
-            action.style.color = theme_1.TEXT_SUCCESS;
-            action.style.fontSize = "12px";
-            action.style.textDecoration = "underline";
-            action.textContent = "equip";
-            action.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
-                event.preventDefault();
-                event.stopPropagation();
-                action.textContent = "equipping…";
-                action.style.color = theme_1.TEXT_GRAY;
-                try {
-                    yield (0, perks_1.activatePerkSet)(set, { force: true, settle: true });
-                    reload();
-                }
-                catch (_a) {
-                    action.textContent = "failed — try again";
-                    action.style.color = theme_1.TEXT_ERROR;
-                }
-            }));
-            row.append(action);
-        }
-        body.append(row);
-    }
-};
 const renderSets = (body, context, reload) => {
     var _a;
     const { craftworks, itemNames } = context;
     const sets = (_a = craftworks === null || craftworks === void 0 ? void 0 : craftworks.sets) !== null && _a !== void 0 ? _a : [];
-    if (!craftworks || sets.length === 0) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["No saved sets found on the Craftworks page."]));
+    // Having no sets and never having read the page are different problems with
+    // different fixes, and this tab holds nothing else now, so saying "none
+    // found" for both sent you looking for sets you had already saved.
+    if (!craftworks) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            "Haven't read the Craftworks page yet — open it once and refresh.",
+        ]));
         return;
     }
-    renderPerkSets(body, context, reload);
-    if (sets.length > 0) {
-        body.append(makeHeading("Craftworks sets"));
+    if (sets.length === 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            "No saved sets. Save one on the Craftworks page and it can be loaded from here.",
+        ]));
+        return;
     }
+    body.append((0, gameLinks_1.makeHeading)("Craftworks sets"));
     const recommended = (0, suggestions_1.getRecommendedSet)(getWantedNames(context), sets, itemNames);
     for (const set of sets) {
         const row = document.createElement("div");
@@ -4376,13 +4327,23 @@ const ensurePanel = () => {
     perkDot.style.borderRadius = "50%";
     perkDot.style.flexShrink = "0";
     perkDot.style.height = "8px";
-    perkDot.style.marginLeft = "4px";
     perkDot.style.width = "8px";
     const perkLabel = document.createElement("span");
     perkLabel.style.fontSize = "11px";
     perkLabel.style.whiteSpace = "nowrap";
+    // The chip is the whole indicator, and it opens the note below. The note is
+    // the only account of what the manager did -- which page it recognised and
+    // whether the switch landed -- and it used to live in a tooltip, which a
+    // phone never shows and which is where perk switching is hardest to trust.
+    const perkChip = document.createElement("div");
+    perkChip.className = "fh-perk-chip";
+    perkChip.dataset.on = "false";
+    perkChip.append(perkDot, perkLabel);
+    const perkNote = document.createElement("div");
+    perkNote.className = "fh-perk-note";
+    perkNote.dataset.on = "false";
     const paintPerk = () => {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         const status = (0, perks_1.getPerkStatus)();
         let colour = theme_1.TEXT_GRAY;
         if (status.isConfirmed) {
@@ -4394,14 +4355,22 @@ const ensurePanel = () => {
         perkDot.style.backgroundColor = colour;
         perkLabel.style.color = colour;
         perkLabel.textContent = (_a = status.name) !== null && _a !== void 0 ? _a : "no set";
-        // the note says which page was recognised and whether the switch landed --
-        // the only diagnostic there is without a console
-        heading.title = status.note
+        perkChip.title = status.note
             ? `Perks: ${(_b = status.name) !== null && _b !== void 0 ? _b : "none"} — ${status.note}`
             : `Perks: ${(_c = status.name) !== null && _c !== void 0 ? _c : "none"}`;
+        // No note at all is itself the diagnostic: every path through the manager
+        // sets one except the bail on the feature being off.
+        perkNote.textContent =
+            (_d = status.note) !== null && _d !== void 0 ? _d : "no note yet — the manager has not acted on this page (or auto manage is off)";
     };
     paintPerk();
     (0, perks_1.onPerkStatusChange)(paintPerk);
+    perkChip.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const next = perkNote.dataset.on !== "true";
+        perkNote.dataset.on = String(next);
+        perkChip.dataset.on = String(next);
+    });
     const title = document.createElement("div");
     title.textContent = "Briefing";
     title.style.color = theme_1.TEXT_WHITE;
@@ -4409,11 +4378,16 @@ const ensurePanel = () => {
     // name first, then the perk state: the title is what identifies the panel,
     // and the indicator reads as a status attached to it rather than a label
     // competing with it
-    heading.append(title, perkDot, perkLabel);
+    heading.append(title, perkChip);
+    const age = document.createElement("span");
+    age.className = "fh-briefing-age";
     const refresh = document.createElement("span");
     refresh.className = "fh-briefing-refresh";
     refresh.textContent = "refresh";
-    head.append(heading, refresh);
+    const controls = document.createElement("div");
+    controls.className = "fh-briefing-controls";
+    controls.append(age, refresh);
+    head.append(heading, controls);
     const chip = document.createElement("div");
     chip.className = "fh-focus-chip";
     chip.dataset.on = "false";
@@ -4424,7 +4398,7 @@ const ensurePanel = () => {
     const main = document.createElement("div");
     main.className = "fh-briefing-main";
     main.append(tabs, body);
-    panel.append(head, chip, main);
+    panel.append(head, perkNote, chip, main);
     document.body.append(button, panel);
     let active = "now";
     let context;
@@ -4501,6 +4475,7 @@ const ensurePanel = () => {
             });
             chip.append(all);
         }
+        paintAge();
         const counts = getTabCounts(context);
         for (const tab of tabs.children) {
             const element = tab;
@@ -4532,10 +4507,26 @@ const ensurePanel = () => {
             }
         }
     };
+    // When the numbers in `context` were read. The panel outlives navigation, so
+    // a figure on screen can be from any point in the session.
+    let readAt;
+    const paintAge = () => {
+        age.textContent = readAt === undefined ? "" : `read ${formatAge(readAt)}`;
+    };
+    // Only while it is open, and only once a minute: the label's whole job is to
+    // stop a five-minute-old number reading as live.
+    setInterval(() => {
+        if (panel.dataset.open === "true") {
+            paintAge();
+        }
+    }, 30000);
     const load = (force) => __awaiter(void 0, void 0, void 0, function* () {
         body.textContent = "";
+        age.textContent = "reading…";
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Reading your farm…"]));
         context = yield loadContext(force);
+        readAt = Date.now();
+        paintAge();
         const attention = summarizeAttention(context.advice, context.statuses.filter((status) => status.isReady).length);
         setBadge(attention.count, attention.parts);
         draw();
@@ -10468,7 +10459,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.52" !== void 0 ? "1.1.52" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.53" !== void 0 ? "1.1.53" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -11823,7 +11814,7 @@ exports.setFocusedScopes = setFocusedScopes;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.makeMutedText = exports.makeLinkedLine = exports.makeQuestLink = exports.makeLocationLink = exports.toLocationHref = exports.makeItemLink = exports.makeLink = exports.applyLinkStyle = void 0;
+exports.makeHeading = exports.makeMutedText = exports.makeLinkedLine = exports.makeQuestLink = exports.makeLocationLink = exports.toLocationHref = exports.makeItemLink = exports.makeLink = exports.applyLinkStyle = void 0;
 const theme_1 = __webpack_require__(1178);
 // Framework7 only routes a click through its own navigation when the anchor
 // declares which view to load into. Without this the link does a full page
@@ -11904,6 +11895,20 @@ const makeMutedText = (text) => {
     return span;
 };
 exports.makeMutedText = makeMutedText;
+// Section label inside the briefing panel. Shared so anything that renders a
+// block into that body -- or into a panel built like it -- looks the same.
+const makeHeading = (text) => {
+    const heading = document.createElement("div");
+    heading.textContent = text;
+    heading.style.color = theme_1.TEXT_WHITE;
+    heading.style.fontSize = "11px";
+    heading.style.fontWeight = "bold";
+    heading.style.letterSpacing = "0.4px";
+    heading.style.textTransform = "uppercase";
+    heading.style.margin = "12px 0 4px";
+    return heading;
+};
+exports.makeHeading = makeHeading;
 
 
 /***/ }),
