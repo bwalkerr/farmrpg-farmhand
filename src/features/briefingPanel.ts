@@ -1,12 +1,4 @@
 import {
-  activatePerkSet,
-  getPerkStatus,
-  onPerkStatusChange,
-  PerkActivity,
-  PerkSet,
-  perksState,
-} from "~/api/farmrpg/apis/perks";
-import {
   activateSet,
   CraftworksSnapshot,
   craftworksState,
@@ -23,11 +15,6 @@ import {
 } from "~/utils/goals";
 import { Advice, adviseOnSlots, suggestQueueChanges } from "~/utils/craftworks";
 import {
-  BooleanFeatureSetting,
-  Feature,
-  FeatureSetting,
-} from "../utils/feature";
-import {
   BORDER_GRAY,
   TEXT_ERROR,
   TEXT_GRAY,
@@ -36,6 +23,7 @@ import {
   TEXT_WHITE,
 } from "~/utils/theme";
 import { buildNeeds } from "~/utils/needAdapters";
+import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import {
   getBasicItems,
@@ -72,16 +60,12 @@ import {
   matchLocationName,
   parseStamina,
 } from "~/utils/locationAdvice";
+import { getPerkStatus, onPerkStatusChange } from "~/api/farmrpg/apis/perks";
 import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
-import {
-  getSetting,
-  getSettings,
-  getSettingValues,
-  setSetting,
-  SettingId,
-} from "~/utils/settings";
+import { getSettingValues, SettingId } from "~/utils/settings";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
 import {
+  makeHeading,
   makeItemLink,
   makeLinkedLine,
   makeLocationLink,
@@ -125,10 +109,12 @@ type TabId = "now" | "goals" | "sets" | "craftworks";
 const TABS: { id: TabId; label: string }[] = [
   { id: "now", label: "Now" },
   { id: "goals", label: "Goals" },
-  { id: "sets", label: "Sets" },
   // "Queue" rather than "Craftworks": four labels have to fit 380px, and the
   // panel is already inside Craftworks by context
   { id: "craftworks", label: "Queue" },
+  // Sets is last because it is the one tab you open on purpose rather than to
+  // be told something: it has no count badge and nothing in it is time-sensitive
+  { id: "sets", label: "Sets" },
 ];
 
 const injectStyles = (): void => {
@@ -240,6 +226,41 @@ const injectStyles = (): void => {
         font-size: 11px;
       }
       #${PANEL_ID} .fh-briefing-refresh:hover { color: ${TEXT_WHITE}; }
+      /* How old the numbers are. The panel outlives navigation, so without
+         this there is no telling whether it is showing this minute or whatever
+         was true when it was opened. Muted: it is a caveat, not a reading. */
+      #${PANEL_ID} .fh-briefing-age {
+        color: ${TEXT_GRAY};
+        font-size: 11px;
+        opacity: 0.75;
+      }
+      #${PANEL_ID} .fh-briefing-controls {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+      }
+      /* The perk indicator is a button, not a label: its tooltip is the only
+         perk diagnostic there is, and a phone cannot show a tooltip. */
+      #${PANEL_ID} .fh-perk-chip {
+        align-items: center;
+        border-radius: 7px;
+        cursor: pointer;
+        display: flex;
+        gap: 5px;
+        padding: 3px 5px;
+      }
+      #${PANEL_ID} .fh-perk-chip:hover,
+      #${PANEL_ID} .fh-perk-chip[data-on="true"] {
+        background: rgba(255, 255, 255, 0.09);
+      }
+      #${PANEL_ID} .fh-perk-note {
+        display: none;
+        color: ${TEXT_GRAY};
+        font-size: 11px;
+        line-height: 1.4;
+        margin: -2px 0 8px;
+      }
+      #${PANEL_ID} .fh-perk-note[data-on="true"] { display: block; }
       #${PANEL_ID} .fh-briefing-tabs {
         display: flex;
         gap: 4px;
@@ -387,6 +408,14 @@ const injectStyles = (): void => {
           font-size: 12px;
           padding: 6px 2px 6px 10px;
         }
+        /* The perk chip is the note's only way open on a phone, which is the
+           one place the note matters, so it gets a thumb-sized box. */
+        #${PANEL_ID} .fh-perk-chip {
+          padding: 7px 8px;
+        }
+        #${PANEL_ID} .fh-perk-note {
+          font-size: 12px;
+        }
         /* A 14px glyph is not a target. Padding grows the hit box without
            moving the glyph. */
         #${PANEL_ID} .fh-goal-remove,
@@ -500,6 +529,19 @@ const getTabCounts = (context: Context): Partial<Record<TabId, number>> => {
   if (roots > 0) {
     counts.craftworks = roots;
   }
+  // Sets is the last tab and has nothing time-sensitive in it, so it earns a
+  // badge only when there is a reason to open it: a saved set that matches
+  // something you want and is not the one loaded. getRecommendedSet skips the
+  // active set, so anything it returns is by definition a change.
+  if (
+    getRecommendedSet(
+      getWantedNames(context),
+      context.craftworks?.sets ?? [],
+      context.itemNames
+    )
+  ) {
+    counts.sets = 1;
+  }
   return counts;
 };
 
@@ -549,16 +591,25 @@ const setBadge = (count: number, parts: string[], isStale = false): void => {
   }
 };
 
-const makeHeading = (text: string): HTMLDivElement => {
-  const heading = document.createElement("div");
-  heading.textContent = text;
-  heading.style.color = TEXT_WHITE;
-  heading.style.fontSize = "11px";
-  heading.style.fontWeight = "bold";
-  heading.style.letterSpacing = "0.4px";
-  heading.style.textTransform = "uppercase";
-  heading.style.margin = "12px 0 4px";
-  return heading;
+// Deliberately coarse: the question this answers is "is this still true?",
+// and a number ticking by the second invites reading it as precision.
+// The alert sections cut at MAX_LISTED, but the button's badge counts them all,
+// so a truncated list reads as the panel disagreeing with itself. Say what was
+// left out instead.
+const appendMore = (body: HTMLElement, total: number): void => {
+  if (total <= MAX_LISTED) {
+    return;
+  }
+  body.append(makeLinkedLine(TEXT_GRAY, [`+${total - MAX_LISTED} more`]));
+};
+
+const formatAge = (readAt: number): string => {
+  const seconds = Math.max(0, Math.round((Date.now() - readAt) / 1000));
+  if (seconds < 60) {
+    return "just now";
+  }
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
 };
 
 const formatHits = (hits: number): string =>
@@ -587,7 +638,6 @@ interface Context {
   here?: { location: LocationRef; stamina?: number };
   itemNames: string[];
   mastery: MasteryEntry[];
-  perks?: { currentPerkSetId?: number; perkSets: PerkSet[] };
   questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
   // every demand on you -- tracked goals, open requests, stalled queue slots --
   // resolved once, so each tab reasons from the same numbers
@@ -710,7 +760,6 @@ const loadContext = async (force: boolean): Promise<Context> => {
     inventory,
     itemNames: (basicItems ?? []).map((item) => item.name),
     mastery: mastery?.entries ?? [],
-    perks: await orUndefined(perksState.get()),
     questGoals,
     resolved: resolveNeeds(
       graph,
@@ -917,6 +966,7 @@ const renderNow = async (
         ])
       );
     }
+    appendMore(body, ready.length);
   }
   if (nearlyDone.length > 0) {
     body.append(makeHeading("One item away"));
@@ -930,6 +980,7 @@ const renderNow = async (
         ])
       );
     }
+    appendMore(body, nearlyDone.length);
   }
   if (advice && advice.dead.length + advice.ordering.length > 0) {
     body.append(makeHeading("Craftworks needs a hand"));
@@ -941,6 +992,7 @@ const renderNow = async (
         ])
       );
     }
+    appendMore(body, advice.dead.length);
     for (const { producer, slot } of advice.ordering) {
       body.append(
         makeLinkedLine(TEXT_WARNING, [
@@ -1604,145 +1656,6 @@ const renderSetLoader = (
 // Every saved set, loadable in place. The recommendation alone was too easy to
 // miss: it only appears when a tracked goal happens to share a name with a set,
 // so a queue of location loadouts showed nothing at all.
-// Perk sets live here rather than in a tab of their own: this tab is already
-// the loadouts you switch between, and a fifth tab would not fit the panel's
-// width, let alone a thumb. Switching is forced, because the reason to reach
-// for it by hand is that the automatic switch is not being trusted -- and the
-// fast path would otherwise no-op on the very state in doubt.
-const renderPerkSets = (
-  body: HTMLElement,
-  context: Context,
-  reload: () => void
-): void => {
-  const perkSets = context.perks?.perkSets ?? [];
-  if (perkSets.length === 0) {
-    return;
-  }
-  const status = getPerkStatus();
-  body.append(makeHeading("Perk sets"));
-
-  // Auto manage is repeated here, not only on the game's settings page, for two
-  // reasons: that page is genuinely hard to reach on a phone, and this is the
-  // one setting whose being off is indistinguishable from the reconciler being
-  // broken -- manual equipping below still works, because it calls
-  // activatePerkSet directly and never consults the setting.
-  const autoSetting = getSettings().find(
-    (setting): setting is BooleanFeatureSetting =>
-      setting.id === SettingId.PERK_MANAGER && setting.type === "boolean"
-  );
-  if (autoSetting) {
-    const row = document.createElement("div");
-    row.style.alignItems = "center";
-    row.style.display = "flex";
-    row.style.gap = "8px";
-    row.style.marginBottom = "5px";
-    const label = document.createElement("span");
-    label.style.fontSize = "11px";
-    const toggle = document.createElement("a");
-    toggle.href = "#";
-    toggle.style.color = TEXT_GRAY;
-    toggle.style.fontSize = "11px";
-    toggle.style.marginLeft = "auto";
-    toggle.style.textDecoration = "underline";
-    const paintAuto = (isOn: boolean): void => {
-      label.textContent = `Auto manage: ${isOn ? "on" : "off"}`;
-      label.style.color = isOn ? TEXT_SUCCESS : TEXT_WARNING;
-      toggle.textContent = isOn ? "turn off" : "turn on";
-    };
-    paintAuto(Boolean(autoSetting.defaultValue));
-    getSetting(autoSetting)
-      .then((current) => {
-        paintAuto(Boolean(current.value));
-      })
-      .catch((error) => {
-        console.error("Failed to read the perk auto-manage setting", error);
-      });
-    toggle.addEventListener("click", async (event) => {
-      event.preventDefault();
-      const current = await getSetting(autoSetting);
-      const next = !current.value;
-      toggle.textContent = "saving…";
-      await setSetting({ ...autoSetting, value: next });
-      paintAuto(next);
-      // turning it on should take effect where you are, not at the next
-      // navigation -- otherwise it reads as not having worked
-      reload();
-    });
-    row.append(label, toggle);
-    body.append(row);
-  }
-
-  if (status.note) {
-    body.append(makeLinkedLine(TEXT_GRAY, [status.note]));
-  }
-
-  // Activity sets are matched by NAME, case-insensitively and exactly, so a set
-  // called "explore" or "def" is invisible to the reconciler while still being
-  // perfectly equippable by hand below. Without a set named "Default" the
-  // reconciler bails before it switches anything at all, which looks exactly
-  // like auto manage being broken -- so say so here rather than leave it to be
-  // deduced.
-  const activityNames = new Set(
-    Object.values(PerkActivity)
-      .filter((activity) => activity !== PerkActivity.UNKNOWN)
-      .map((activity) => activity.toLowerCase())
-  );
-  const isActivityName = (name: string): boolean =>
-    activityNames.has(name.trim().toLowerCase());
-  if (!perkSets.some((set) => isActivityName(set.name))) {
-    body.append(
-      makeLinkedLine(TEXT_ERROR, [
-        "none of these names match an activity — nothing can auto-switch",
-      ])
-    );
-  } else if (
-    !perkSets.some((set) => set.name.trim().toLowerCase() === "default")
-  ) {
-    body.append(
-      makeLinkedLine(TEXT_ERROR, [
-        'no set named "Default" — the reconciler stops before it switches',
-      ])
-    );
-  }
-
-  for (const set of perkSets) {
-    const isOn = status.isConfirmed && status.name === set.name;
-    const row = document.createElement("div");
-    row.className = "fh-goal-top";
-    row.style.marginBottom = "5px";
-    const label = makeLinkedLine(isOn ? TEXT_SUCCESS : TEXT_GRAY, [
-      `${set.name}${isOn ? " · on" : ""}${
-        isActivityName(set.name) ? "" : " · manual only"
-      }`,
-    ]);
-    label.style.marginBottom = "0";
-    row.append(label);
-    if (!isOn) {
-      const action = document.createElement("a");
-      action.href = "#";
-      action.style.color = TEXT_SUCCESS;
-      action.style.fontSize = "12px";
-      action.style.textDecoration = "underline";
-      action.textContent = "equip";
-      action.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        action.textContent = "equipping…";
-        action.style.color = TEXT_GRAY;
-        try {
-          await activatePerkSet(set, { force: true, settle: true });
-          reload();
-        } catch {
-          action.textContent = "failed — try again";
-          action.style.color = TEXT_ERROR;
-        }
-      });
-      row.append(action);
-    }
-    body.append(row);
-  }
-};
-
 const renderSets = (
   body: HTMLElement,
   context: Context,
@@ -1750,16 +1663,26 @@ const renderSets = (
 ): void => {
   const { craftworks, itemNames } = context;
   const sets = craftworks?.sets ?? [];
-  if (!craftworks || sets.length === 0) {
+  // Having no sets and never having read the page are different problems with
+  // different fixes, and this tab holds nothing else now, so saying "none
+  // found" for both sent you looking for sets you had already saved.
+  if (!craftworks) {
     body.append(
-      makeLinkedLine(TEXT_GRAY, ["No saved sets found on the Craftworks page."])
+      makeLinkedLine(TEXT_GRAY, [
+        "Haven't read the Craftworks page yet — open it once and refresh.",
+      ])
     );
     return;
   }
-  renderPerkSets(body, context, reload);
-  if (sets.length > 0) {
-    body.append(makeHeading("Craftworks sets"));
+  if (sets.length === 0) {
+    body.append(
+      makeLinkedLine(TEXT_GRAY, [
+        "No saved sets. Save one on the Craftworks page and it can be loaded from here.",
+      ])
+    );
+    return;
   }
+  body.append(makeHeading("Craftworks sets"));
   const recommended = getRecommendedSet(
     getWantedNames(context),
     sets,
@@ -1832,11 +1755,21 @@ const ensurePanel = (): void => {
   perkDot.style.borderRadius = "50%";
   perkDot.style.flexShrink = "0";
   perkDot.style.height = "8px";
-  perkDot.style.marginLeft = "4px";
   perkDot.style.width = "8px";
   const perkLabel = document.createElement("span");
   perkLabel.style.fontSize = "11px";
   perkLabel.style.whiteSpace = "nowrap";
+  // The chip is the whole indicator, and it opens the note below. The note is
+  // the only account of what the manager did -- which page it recognised and
+  // whether the switch landed -- and it used to live in a tooltip, which a
+  // phone never shows and which is where perk switching is hardest to trust.
+  const perkChip = document.createElement("div");
+  perkChip.className = "fh-perk-chip";
+  perkChip.dataset.on = "false";
+  perkChip.append(perkDot, perkLabel);
+  const perkNote = document.createElement("div");
+  perkNote.className = "fh-perk-note";
+  perkNote.dataset.on = "false";
   const paintPerk = (): void => {
     const status = getPerkStatus();
     let colour = TEXT_GRAY;
@@ -1848,14 +1781,23 @@ const ensurePanel = (): void => {
     perkDot.style.backgroundColor = colour;
     perkLabel.style.color = colour;
     perkLabel.textContent = status.name ?? "no set";
-    // the note says which page was recognised and whether the switch landed --
-    // the only diagnostic there is without a console
-    heading.title = status.note
+    perkChip.title = status.note
       ? `Perks: ${status.name ?? "none"} — ${status.note}`
       : `Perks: ${status.name ?? "none"}`;
+    // No note at all is itself the diagnostic: every path through the manager
+    // sets one except the bail on the feature being off.
+    perkNote.textContent =
+      status.note ??
+      "no note yet — the manager has not acted on this page (or auto manage is off)";
   };
   paintPerk();
   onPerkStatusChange(paintPerk);
+  perkChip.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const next = perkNote.dataset.on !== "true";
+    perkNote.dataset.on = String(next);
+    perkChip.dataset.on = String(next);
+  });
   const title = document.createElement("div");
   title.textContent = "Briefing";
   title.style.color = TEXT_WHITE;
@@ -1863,11 +1805,16 @@ const ensurePanel = (): void => {
   // name first, then the perk state: the title is what identifies the panel,
   // and the indicator reads as a status attached to it rather than a label
   // competing with it
-  heading.append(title, perkDot, perkLabel);
+  heading.append(title, perkChip);
+  const age = document.createElement("span");
+  age.className = "fh-briefing-age";
   const refresh = document.createElement("span");
   refresh.className = "fh-briefing-refresh";
   refresh.textContent = "refresh";
-  head.append(heading, refresh);
+  const controls = document.createElement("div");
+  controls.className = "fh-briefing-controls";
+  controls.append(age, refresh);
+  head.append(heading, controls);
 
   const chip = document.createElement("div");
   chip.className = "fh-focus-chip";
@@ -1880,7 +1827,7 @@ const ensurePanel = (): void => {
   const main = document.createElement("div");
   main.className = "fh-briefing-main";
   main.append(tabs, body);
-  panel.append(head, chip, main);
+  panel.append(head, perkNote, chip, main);
   document.body.append(button, panel);
 
   let active: TabId = "now";
@@ -1964,6 +1911,7 @@ const ensurePanel = (): void => {
       chip.append(all);
     }
 
+    paintAge();
     const counts = getTabCounts(context);
     for (const tab of tabs.children) {
       const element = tab as HTMLElement;
@@ -2005,10 +1953,27 @@ const ensurePanel = (): void => {
     }
   };
 
+  // When the numbers in `context` were read. The panel outlives navigation, so
+  // a figure on screen can be from any point in the session.
+  let readAt: number | undefined;
+  const paintAge = (): void => {
+    age.textContent = readAt === undefined ? "" : `read ${formatAge(readAt)}`;
+  };
+  // Only while it is open, and only once a minute: the label's whole job is to
+  // stop a five-minute-old number reading as live.
+  setInterval(() => {
+    if (panel.dataset.open === "true") {
+      paintAge();
+    }
+  }, 30_000);
+
   const load = async (force: boolean): Promise<void> => {
     body.textContent = "";
+    age.textContent = "reading…";
     body.append(makeLinkedLine(TEXT_GRAY, ["Reading your farm…"]));
     context = await loadContext(force);
+    readAt = Date.now();
+    paintAge();
     const attention = summarizeAttention(
       context.advice,
       context.statuses.filter((status) => status.isReady).length

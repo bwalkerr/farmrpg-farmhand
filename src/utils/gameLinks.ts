@@ -1,5 +1,5 @@
 import { LocationRef } from "~/api/buddyfarm/api";
-import { TEXT_GRAY } from "~/utils/theme";
+import { TEXT_GRAY, TEXT_WHITE } from "~/utils/theme";
 
 // Framework7 only routes a click through its own navigation when the anchor
 // declares which view to load into. Without this the link does a full page
@@ -102,4 +102,18 @@ export const makeMutedText = (text: string): HTMLSpanElement => {
   span.textContent = text;
   span.style.color = TEXT_GRAY;
   return span;
+};
+
+// Section label inside the briefing panel. Shared so anything that renders a
+// block into that body -- or into a panel built like it -- looks the same.
+export const makeHeading = (text: string): HTMLDivElement => {
+  const heading = document.createElement("div");
+  heading.textContent = text;
+  heading.style.color = TEXT_WHITE;
+  heading.style.fontSize = "11px";
+  heading.style.fontWeight = "bold";
+  heading.style.letterSpacing = "0.4px";
+  heading.style.textTransform = "uppercase";
+  heading.style.margin = "12px 0 4px";
+  return heading;
 };
