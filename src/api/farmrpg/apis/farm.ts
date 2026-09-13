@@ -397,11 +397,20 @@ export const withFarmingPerks = async (
   }
   await action();
   // Only a dedicated Farming set needs putting away; without one we harvested
-  // under Default and are already where the reconciler wants us. No settle and
-  // no reset here — nothing reads the perks after this, so the clean-slate
-  // round-trip would only add the lag that made harvest feel slow before.
+  // under Default and are already where the reconciler wants us.
+  //
+  // This used to pass `reset: false` for speed, which was a bug: the reset is
+  // what makes the game equip a set FULLY (without it the game diffs off the
+  // previous set and drops/lags perks — see resetPerks), and the `reset: false`
+  // exception exists only for the quick actions, which act the instant after
+  // the switch and can't afford the clear still settling. Nothing acts after
+  // this one. Worse, activatePerkSet marks the set confirmed-equipped either
+  // way, so a half-applied Default then took the fast path on every later
+  // switch to Default and never got repaired: the reconciler's revert on the
+  // farm and at home reported "(already on)" over perks that weren't. No settle
+  // still — nothing reads them, and the game finishes equipping on its own.
   if (farmingPerks && defaultPerks) {
-    await activatePerkSet(defaultPerks, { reset: false });
+    await activatePerkSet(defaultPerks);
   }
 };
 

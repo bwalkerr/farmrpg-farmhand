@@ -7,7 +7,7 @@ import {
   setPerkStatusNote,
 } from "~/api/farmrpg/apis/perks";
 import { Feature, FeatureSetting } from "../utils/feature";
-import { getCurrentPage, getPage, Page } from "~/utils/page";
+import { getCurrentPage, getHashPage, getPage, Page } from "~/utils/page";
 import { getSetting, SettingId } from "~/utils/settings";
 import { onQuicksellClick, QuickAction } from "./quickSellSafely";
 import { renderPerkIndicator } from "./perkIndicator";
@@ -270,10 +270,24 @@ const isRestingPage = (page: Page | undefined): boolean =>
 // switch chain swallows failures to protect the next switch, so there was no way
 // to tell a request that failed from a page that was never recognised — and on a
 // phone there's no console to check either way.
+// `force` is deliberate. Without it activatePerkSet consults isActivePerkSet,
+// which reads the OPTIMISTIC currentPerkSetId cache — written the instant a
+// switch is SENT, and documented right there as drifting from what the game
+// really has equipped. That is why every action path (quick sell/craft/give,
+// withFarmingPerks) forces; the reconciler trusting it was the one remaining
+// hole, and it fails in the direction that hurts: the cache says Default, the
+// game has the crafting set on, the revert is skipped and the note reads
+// "(already on)" while the wrong perks are equipped.
+//
+// It stays cheap. `force` does NOT bypass the confirmedEquippedSet fast path
+// above it — the set we drove the game to and watched land — so a repeat switch
+// to the set already confirmed is still free. Only a reconcile where nothing is
+// confirmed yet (session start, or after the perks page cleared the flag) pays
+// the round-trip, which is exactly when it should.
 const switchTo = async (set: PerkSet, where: string): Promise<void> => {
   setPerkStatusNote(`${where} → ${set.name}`);
   try {
-    const switched = await activatePerkSet(set, { settle: true });
+    const switched = await activatePerkSet(set, { force: true, settle: true });
     setPerkStatusNote(
       `${where} → ${set.name}${switched ? "" : " (already on)"}`
     );
@@ -289,9 +303,30 @@ const reconcilePerksForCurrentPage = async (): Promise<void> => {
     return;
   }
 
-  const [page] = getPage();
-  // `page` is the live page id, or undefined when the page can't be identified
-  const where = page ?? "unknown page";
+  // `getPage()` reads data-page off the live page element, which this fork has
+  // found unreliable often enough that half this file matches on the URL
+  // instead — and when it comes back undefined the reconciler used to fall all
+  // the way through to "keeping current set" and switch NOTHING. That is the
+  // "it just doesn't switch sometimes" failure, and on the farm it is the
+  // "came to the farm and it never went back to Default" one: an unidentified
+  // page is not a resting page, so the revert never runs.
+  //
+  // The address bar is the second opinion (getHashPage: `#!/xfarm.php` ->
+  // `xfarm`), used ONLY when the element can't identify itself, so a page that
+  // reads fine is unaffected. Mid-transition the hash leads the DOM, but the
+  // 100ms debounce below already settles that, and a lagging hash can only pick
+  // the page we just left — the next dispatch corrects it.
+  const [domPage] = getPage();
+  const page = domPage ?? getHashPage();
+  // `page` is the live page id, or undefined when neither source knows it.
+  // The note says which source answered, so a wrong decision can be traced to
+  // the page id rather than to the switch.
+  let where = "unknown page";
+  if (domPage) {
+    where = domPage;
+  } else if (page) {
+    where = `${page} (url)`;
+  }
 
   // don't touch perks on the perks page so you can edit sets freely
   if (page === Page.PERKS) {
@@ -364,10 +399,39 @@ const reconcileSafely = async (): Promise<void> => {
 // correct one and win.
 let transitionTimeout: number | undefined;
 
+// Everything this feature puts ON a page, as opposed to the perks it switches:
+// the equipped-set marker and the quick-craft proxy. Both were reachable only
+// from onPageLoad, which is precisely the dispatch that does not fire for a
+// RETAINED page — so arriving at an item page by back navigation left the
+// game's own quick-craft button live and unproxied, and clicking it crafted
+// under whatever set happened to be equipped. That is "crafting perk switching
+// does not happen on item pages", and it is a phone symptom because a phone
+// leans on back navigation far harder than a desktop does.
+//
+// Safe to re-run: renderPerkIndicator mounts once and reuses, and
+// installQuickActionProxy bails when the native button is missing or already
+// hidden (i.e. already proxied), so a retained page keeps its one proxy.
+const mountPageExtras = async (): Promise<void> => {
+  await renderPerkIndicator();
+
+  // the quick-craft proxy lives on item pages; skip the workshop, where the
+  // reconciler already scopes perks. (quick-sell and quick-give are handled
+  // by quickSellSafely.ts — see installQuickActionProxy's note.)
+  const [page] = getPage();
+  if (page !== Page.WORKSHOP) {
+    installQuickActionProxy(".quickcraftbtn", "CRAFT");
+  }
+};
+
+const onPageSettled = async (): Promise<void> => {
+  await reconcileSafely();
+  await mountPageExtras();
+};
+
 const scheduleReconcile = (): void => {
   clearTimeout(transitionTimeout);
   transitionTimeout = setTimeout(() => {
-    reconcileSafely().catch((error) => {
+    onPageSettled().catch((error) => {
       console.error("Failed to reconcile perks", error);
     });
   }, 100) as unknown as number;
@@ -412,25 +476,18 @@ export const perkManagment: Feature = {
       return;
     }
 
-    // page-scoped perk switching, driven by the live page (idempotent, so the
-    // SPA's duplicate onPageLoad calls converge instead of racing)
-    await reconcileSafely();
-
-    // Mount/refresh the equipped-set indicator AFTER the reconcile, never
-    // before: the game rebuilds the bottom bar as you navigate, and the perk
-    // state isn't read yet on the very first load, so there'd be nothing to
-    // show anyway. When the reconcile switched, the status listener has already
-    // drawn it; this covers the no-op case. (renderPerkIndicator waits out the
-    // game's own boot on its own — see isGameBooted there.)
-    await renderPerkIndicator();
-
-    // the quick-craft proxy lives on item pages; skip the workshop, where the
-    // reconciler already scopes perks. (quick-sell and quick-give are handled
-    // by quickSellSafely.ts — see installQuickActionProxy's note.)
-    const [page] = getPage();
-    if (page !== Page.WORKSHOP) {
-      installQuickActionProxy(".quickcraftbtn", "CRAFT");
-    }
+    // page-scoped perk switching, then the marker and the quick-craft proxy.
+    // Idempotent, so the SPA's duplicate onPageLoad calls converge instead of
+    // racing, and it agrees with the page-transition watcher below, which runs
+    // the same pair for the arrivals this dispatch never sees.
+    //
+    // The extras are mounted AFTER the reconcile, never before: the game
+    // rebuilds the bottom bar as you navigate, and the perk state isn't read
+    // yet on the very first load, so there'd be nothing to show anyway. When
+    // the reconcile switched, the status listener has already drawn it; this
+    // covers the no-op case. (renderPerkIndicator waits out the game's own boot
+    // on its own — see isGameBooted there.)
+    await onPageSettled();
   },
   onQuestLoad: async (settings) => {
     if (!settings[SettingId.PERK_MANAGER]) {
