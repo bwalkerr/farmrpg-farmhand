@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.54
+// @version 1.1.55
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -613,9 +613,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.harvestAll = exports.withFarmingPerks = exports.farmIdState = exports.farmStatusState = exports.CropStatus = void 0;
-const perks_1 = __webpack_require__(5543);
+exports.replantAll = exports.harvestAll = exports.farmIdState = exports.farmStatusState = exports.CropStatus = void 0;
 const state_1 = __webpack_require__(4782);
+const perks_1 = __webpack_require__(5543);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
 const page_1 = __webpack_require__(7952);
@@ -825,26 +825,7 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
                             {
                                 name: "Replant",
                                 buttonClass: "btnblue",
-                                callback: () => __awaiter(void 0, void 0, void 0, function* () {
-                                    const farmId = yield exports.farmIdState.get();
-                                    if (!farmId) {
-                                        console.error("No farm id found");
-                                        return;
-                                    }
-                                    yield (0, exports.withFarmingPerks)(() => __awaiter(void 0, void 0, void 0, function* () {
-                                        var _a;
-                                        if (page === page_1.Page.FARM) {
-                                            (_a = document
-                                                .querySelector(".plantallbtn")) === null || _a === void 0 ? void 0 : _a.click();
-                                        }
-                                        else {
-                                            yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
-                                                go: page_1.WorkerGo.PLANT_ALL,
-                                                id: String(farmId),
-                                            }));
-                                        }
-                                    }));
-                                }),
+                                callback: () => (0, exports.replantAll)(page === page_1.Page.FARM),
                             },
                         ],
                     });
@@ -911,61 +892,80 @@ exports.farmIdState = new state_1.CachedState(state_1.StorageKey.FARM_ID, () => 
         },
     ],
 });
-// Makes sure the right perks are equipped for a harvest/replant roll, then
-// rolls it. The farm perks are whichever set is named "Farming", or Default
-// when there's no such set (where most players, Reed included, keep them).
+// Which set a harvest or a replant should roll under: the one named "Farming",
+// or Default when there is no such set -- where most players, Reed included,
+// keep their farm perks. Undefined when auto-manage is off, which leaves the
+// perks exactly as they are and just does the action.
 //
-// This is a GATED ACTION — the harvest is fired the instant the switch resolves
-// and its yield depends on the perks — so it uses the same contract as the item
-// page quick actions: `force` (the optimistic active-set cache drifts, and when
-// it wrongly reads "already on" the switch is skipped and the harvest rolls
-// under whatever is really equipped) and `settle` (the game acks
-// activateperkset BEFORE it finishes equipping, so an action fired immediately
-// after runs under the OLD perks). That is exactly what went wrong harvesting
-// from the crops-ready banner on an item page: the quick-sell/craft set is left
-// equipped there on purpose, so the harvest was a real cross-set switch and,
-// unsettled, rolled under the selling/crafting perks.
-//
-// It stays snappy where it always was: activatePerkSet short-circuits on
-// `confirmedEquippedSetId` BEFORE it looks at `force`, so harvesting from Home
-// or the farm — where the reconciler has already confirmed Default equipped —
-// costs zero requests. Only a genuine cross-set harvest pays the settle.
-const withFarmingPerks = (action) => __awaiter(void 0, void 0, void 0, function* () {
+// Resolved INSIDE the gated task (runGatedAction calls this when the task
+// reaches the front of the perk queue), so it reads settings and sets as they
+// are at the moment of the switch rather than when the button was clicked.
+const getFarmingPerks = () => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     const settings = yield (0, settings_1.getSettingValues)();
     if (!settings[settings_1.SettingId.PERK_MANAGER]) {
-        yield action();
+        return undefined;
+    }
+    return ((_a = (yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.FARMING))) !== null && _a !== void 0 ? _a : (yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT)));
+});
+// Harvesting and replanting are GATED ACTIONS: the yield depends on the perks
+// equipped at the moment the request lands, so the switch and the request run
+// as one task on the perk queue (see runGatedAction). Nothing else can switch
+// perks in between -- which is what went wrong harvesting from the crops-ready
+// banner away from the farm: the switch was serialised but the harvest was not,
+// so a page reconcile could start its resetperks() while the harvest was in
+// flight and the crops came in with no perks applied at all, one per plot.
+//
+// Afterwards the perks go back to whatever the page you are standing on calls
+// for (the Town set in the vault, Default at home), instead of the old
+// "revert only if a Farming set exists" rule, which left Default equipped in
+// the middle of town after a banner harvest.
+//
+// It stays snappy where it always was: apply() short-circuits when the set is
+// already confirmed equipped, so harvesting from Home or the farm -- where the
+// reconciler has already put Default on -- costs zero requests.
+const harvestAll = () => (0, perks_1.runGatedAction)({
+    label: "harvest",
+    set: getFarmingPerks,
+    action: () => __awaiter(void 0, void 0, void 0, function* () {
+        const farmId = yield exports.farmIdState.get();
+        yield (0, requests_2.getJSON)(page_1.Page.WORKER, new URLSearchParams({
+            go: page_1.WorkerGo.HARVEST_ALL,
+            id: String(farmId),
+        }));
+    }),
+});
+exports.harvestAll = harvestAll;
+// `fromFarmPage`: on the farm we click the game's own Plant All button so its
+// UI updates, and a click is fire-and-forget -- the game runs its own request
+// and we never see it finish. `holdMs` keeps the perk queue held for that
+// window so nothing switches perks out from under it; away from the farm we
+// fire the request ourselves and can simply await it.
+const PLANT_CLICK_HOLD_MS = 1500;
+const replantAll = (fromFarmPage) => __awaiter(void 0, void 0, void 0, function* () {
+    const farmId = yield exports.farmIdState.get();
+    if (!farmId) {
+        console.error("No farm id found");
         return;
     }
-    const farmingPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.FARMING);
-    const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
-    const harvestPerks = farmingPerks !== null && farmingPerks !== void 0 ? farmingPerks : defaultPerks;
-    if (harvestPerks) {
-        yield (0, perks_1.activatePerkSet)(harvestPerks, { force: true, settle: true });
-    }
-    yield action();
-    // Only a dedicated Farming set needs putting away; without one we harvested
-    // under Default and are already where the reconciler wants us.
-    //
-    // This used to pass `reset: false` for speed, which was a bug: the reset is
-    // what makes the game equip a set FULLY (without it the game diffs off the
-    // previous set and drops/lags perks — see resetPerks), and the `reset: false`
-    // exception exists only for the quick actions, which act the instant after
-    // the switch and can't afford the clear still settling. Nothing acts after
-    // this one. Worse, activatePerkSet marks the set confirmed-equipped either
-    // way, so a half-applied Default then took the fast path on every later
-    // switch to Default and never got repaired: the reconciler's revert on the
-    // farm and at home reported "(already on)" over perks that weren't. No settle
-    // still — nothing reads them, and the game finishes equipping on its own.
-    if (farmingPerks && defaultPerks) {
-        yield (0, perks_1.activatePerkSet)(defaultPerks);
-    }
+    yield (0, perks_1.runGatedAction)({
+        label: "replant",
+        set: getFarmingPerks,
+        holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : 0,
+        action: () => __awaiter(void 0, void 0, void 0, function* () {
+            var _a;
+            if (fromFarmPage) {
+                (_a = document.querySelector(".plantallbtn")) === null || _a === void 0 ? void 0 : _a.click();
+                return;
+            }
+            yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
+                go: page_1.WorkerGo.PLANT_ALL,
+                id: String(farmId),
+            }));
+        }),
+    });
 });
-exports.withFarmingPerks = withFarmingPerks;
-const harvestAll = () => (0, exports.withFarmingPerks)(() => __awaiter(void 0, void 0, void 0, function* () {
-    const farmId = yield exports.farmIdState.get();
-    yield (0, requests_2.getJSON)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.HARVEST_ALL, id: String(farmId) }));
-}));
-exports.harvestAll = harvestAll;
+exports.replantAll = replantAll;
 
 
 /***/ }),
@@ -1807,11 +1807,11 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.activatePerkSet = exports.isActivePerkSet = exports.getPerkStatus = exports.primePerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.setPerkStatusNote = exports.PerkActivity = void 0;
+exports.runGatedAction = exports.onPerkRestore = exports.equipPerkSet = exports.runPerkTask = exports.getPerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.setPerkStatusNote = exports.getPerkLog = exports.PerkActivity = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
-const requests_2 = __webpack_require__(3300);
 const page_1 = __webpack_require__(7952);
+const requests_2 = __webpack_require__(3300);
 var PerkActivity;
 (function (PerkActivity) {
     PerkActivity["DEFAULT"] = "Default";
@@ -1850,31 +1850,44 @@ const processPerks = (root) => {
     }
     return { perkSets, currentPerkSetId };
 };
-// The id of the set we last drove the game to via a completed activateperkset
-// switch, cleared whenever resetPerks() wipes the slate or the perks page is
-// (re)loaded. Unlike the optimistic currentPerkSetId cache (set from the request
-// URL the instant a switch is SENT, so it drifts from what's really equipped),
-// this is written only AFTER a switch finishes — including its settle wait — so
-// it's a trustworthy "these perks are genuinely equipped right now" signal. It
-// lets a repeated switch to the already-equipped set skip the whole
-// reset+activate+settle round-trip: the common case of quick-selling a stack of
-// items one after another, where the reconciler leaves the perks alone between
-// item pages, so the set the first sell equipped is still on for the rest. The
-// first sell pays the ~1s; the rest are instant, until you navigate to a normal
-// page and the reconciler reverts.
+// ---------------------------------------------------------------------------
+// What we believe is equipped
+// ---------------------------------------------------------------------------
+// The set we last drove the game to with a switch that finished AND was
+// acknowledged, cleared whenever the slate is wiped (every switch starts with
+// resetperks) or a real visit to the perks page could have changed things
+// behind our back.
+//
+// This is the only "what is equipped" signal anything switches on. The other
+// one -- `currentPerkSetId` in the state below -- is written optimistically
+// from the request URL the instant a switch is SENT, so it drifts from reality
+// and every caller had to remember to pass `force` to get past it. Forgetting
+// that flag was its own bug twice (1.1.54). It is display-only now.
 let confirmedEquippedSet;
-// The set a switch is currently in flight to, if any — drives the indicator's
+// The set a switch is currently in flight to, if any -- drives the indicator's
 // "switching…" state so a switch is visible while it happens (including the
 // settle wait) rather than only after it lands.
 let pendingPerkSet;
 const perkStatusListeners = [];
 let statusNote;
+const PERK_LOG_LIMIT = 24;
+const perkLog = [];
+const getPerkLog = () => perkLog;
+exports.getPerkLog = getPerkLog;
+const logPerk = (text) => {
+    perkLog.push({ at: Date.now(), text });
+    if (perkLog.length > PERK_LOG_LIMIT) {
+        perkLog.shift();
+    }
+    console.debug(`[PERKS] ${text}`);
+    notifyPerkStatus();
+};
 const setPerkStatusNote = (note) => {
     if (statusNote === note) {
         return;
     }
     statusNote = note;
-    notifyPerkStatus();
+    logPerk(note);
 };
 exports.setPerkStatusNote = setPerkStatusNote;
 const onPerkStatusChange = (listener) => {
@@ -1903,11 +1916,22 @@ exports.perksState = new state_1.CachedState(state_1.StorageKey.PERKS_SETS, () =
         {
             match: [page_1.Page.PERKS, new URLSearchParams()],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
-                // the perks page is where a set can be manually re-equipped/edited,
-                // which our fast-path flag can't see — drop it so the next switch
-                // re-verifies instead of trusting a possibly-stale assumption
-                setConfirmedEquipped(undefined);
-                yield state.set(processPerks(yield (0, requests_1.getDocument)(response)));
+                const next = processPerks(yield (0, requests_1.getDocument)(response));
+                // The perks page is where a set can be re-equipped or edited by hand,
+                // which the fast path can't see -- so a real VISIT drops the
+                // confirmation and makes the next switch re-verify.
+                //
+                // Only a visit, though. This fired on any read of perks.php, and the
+                // reconciler reads it itself whenever the day-long cache lapses --
+                // detached from the fetch, so it could land just after a switch we
+                // watched complete and throw that confirmation away. The page
+                // contradicting us (a different set shown active) is worth acting on
+                // whoever asked for it.
+                const isVisit = (0, page_1.getPage)()[0] === page_1.Page.PERKS || (0, page_1.getHashPage)() === page_1.Page.PERKS;
+                if (isVisit || next.currentPerkSetId !== (confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id)) {
+                    setConfirmedEquipped(undefined);
+                }
+                yield state.set(next);
             }),
         },
         {
@@ -1933,29 +1957,9 @@ const getCurrentPerkSet = (options) => __awaiter(void 0, void 0, void 0, functio
 });
 exports.getCurrentPerkSet = getCurrentPerkSet;
 // The set we last confirmed genuinely equipped (see confirmedEquippedSet), or
-// undefined when unknown. Trustworthy where the currentPerkSetId cache isn't,
-// because it's only written after a switch fully completes.
+// undefined when unknown.
 const getConfirmedEquippedSetId = () => confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id;
 exports.getConfirmedEquippedSetId = getConfirmedEquippedSetId;
-// What to display as the currently equipped set. Prefers the set we confirmed
-// ourselves; falls back to the game's own selected-set cache (unconfirmed —
-// it's the optimistic one) so the indicator still says something useful before
-// this session has driven a switch.
-// Read the game's perk sets once if nothing has needed them yet. Until something
-// does, there is no set name to show and the indicator can't draw itself — which
-// is why it used to appear only after the first switch of a session (a harvest,
-// or arriving on an activity page) rather than on the first page load. The state
-// is cached for a day and persisted, so this costs one read.
-let statusPrimed = false;
-const primePerkStatus = () => __awaiter(void 0, void 0, void 0, function* () {
-    if (statusPrimed) {
-        return;
-    }
-    statusPrimed = true;
-    yield exports.perksState.get();
-    notifyPerkStatus();
-});
-exports.primePerkStatus = primePerkStatus;
 const getPerkStatus = () => {
     if (pendingPerkSet) {
         return {
@@ -1983,100 +1987,193 @@ const getPerkStatus = () => {
     };
 };
 exports.getPerkStatus = getPerkStatus;
-const isActivePerkSet = (set, options) => __awaiter(void 0, void 0, void 0, function* () {
-    const current = yield (0, exports.getCurrentPerkSet)(options);
-    return Boolean(current && current.id === set.id);
-});
-exports.isActivePerkSet = isActivePerkSet;
-// Perk switches are serialized through this chain. Activating a set is an
-// async server round-trip, and two switches overlapping — e.g. a quick-sell
-// and a quick-craft fired on the same page within a few hundred ms — would
-// race and leave a set selected but only partially applied. Chaining runs them
-// one at a time, in call order, so each finishes before the next begins.
-let perkSwitchChain = Promise.resolve();
-// The game acknowledges activateperkset (responds "success") BEFORE it has
-// finished equipping the set's perks, so an action fired immediately after —
-// the quick-sell/craft/give click — can run under the OLD perks: a 50-silver
-// item sold for 55 (+10% gold perk only) right after activating the selling
-// set, vs the full 80 (+60%) once it settled. On the FORCED paths (the caller
-// is about to act on these perks) we wait this long after the switch for the
-// game to apply them. Unforced switches (the reconciler's revert to Default,
-// withFarmingPerks) don't act on the perks immediately and stay fast.
+// ---------------------------------------------------------------------------
+// The switch engine
+// ---------------------------------------------------------------------------
+//
+// ONE QUEUE, AND THE ACTION RUNS INSIDE IT.
+//
+// Every perk decision -- the page reconciler's revert, a harvest, a quick-sell
+// -- is a task on `runPerkTask`, which runs them one at a time in call order.
+// Two rules fall out of that, and between them they close the whole class of
+// bug this feature has produced since it was written:
+//
+// 1. A task that ACTS on the perks it just equipped holds the queue across the
+//    action. Before, only the SWITCHES were serialised; the action ran outside
+//    the chain, so any switch queued in between -- a page-transition reconcile,
+//    a second quick action -- began with resetperks() and pulled the perks out
+//    from under an action already in flight. Perks are EMPTY between resetperks
+//    and activateperkset, and an action landing in that window rolls with no
+//    perks at all. That is a harvest coming back with exactly one crop per plot.
+//
+// 2. A task decides WHAT to switch to when it reaches the front of the queue,
+//    not when it was scheduled. A reconcile scheduled mid-transition used to
+//    capture the page it saw at the time and could apply it after the correct
+//    one had landed (the 1.1.41 regression). Resolving in the slot means a
+//    stale task re-resolves to the page you are actually on and no-ops.
+//
+// Nothing outside this file switches perks, and nothing inside it switches
+// outside a task.
+// The game acks activateperkset ("success") BEFORE it has finished equipping
+// the set, so an action fired immediately after can run under the OLD perks: a
+// 50-silver item sold for 55 (+10% gold perk only) instead of 80 (+60%). We
+// wait this long after every real switch. It is empirically enough on Reed's
+// connection (verified: Sandstone quick-sells for 80), and it is now paid only
+// when a switch actually happened -- the confirmed fast path below skips it.
 const PERK_SETTLE_MS = 1000;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// worker.php answers these two with the bare word "success". Anything else --
+// an error page, a logged-out shell, a rate limit -- means we do NOT know what
+// the game did, and the one thing we must not do then is record it as
+// confirmed: a switch marked confirmed after a reset that landed and an
+// activate that didn't leaves perks EMPTY, and every later switch to that set
+// takes the fast path and never repairs it. Stuck empty for the session.
+const isAcknowledged = (reply, what) => {
+    var _a, _b;
+    const text = (_b = (_a = reply.body.textContent) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "";
+    if (/success/i.test(text)) {
+        return true;
+    }
+    logPerk(`${what} was not acknowledged: "${text.slice(0, 60)}"`);
+    return false;
+};
 // Clear every equipped perk before loading a set (upstream behaviour). Loading
 // from an EMPTY slate is what makes the game equip a set fully; switching
 // set-to-set without it leaves the game diffing off the previous full set and
-// dropping/lagging perks. Default ON — see the `reset` option for the one
-// exception.
-const resetPerks = () => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
-    const state = yield exports.perksState.get();
-    yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.RESET_PERKS }));
-    // perks are now cleared, so nothing is confirmed-equipped anymore
+// dropping/lagging perks, which showed up as a set selected but only half
+// applied (and never self-repairing).
+const clearPerks = () => __awaiter(void 0, void 0, void 0, function* () {
+    const reply = yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.RESET_PERKS }));
+    // perks are cleared (or in an unknown state) either way, so nothing is
+    // confirmed-equipped anymore
     setConfirmedEquipped(undefined);
-    yield exports.perksState.set({
-        perkSets: (_a = state === null || state === void 0 ? void 0 : state.perkSets) !== null && _a !== void 0 ? _a : [],
-        currentPerkSetId: undefined,
-    });
+    const state = exports.perksState.read();
+    if (state) {
+        yield exports.perksState.set(Object.assign(Object.assign({}, state), { currentPerkSetId: undefined }));
+    }
+    return isAcknowledged(reply, "resetperks");
 });
-// Resolves to whether an actual switch was performed — false when it no-op'd
-// because the set was already equipped (fast path or guard). Callers use this
-// to only show a "…perks activated" banner when perks really changed, instead
-// of on every revisit to e.g. a town building that's already on the Town set.
-const activatePerkSet = (set, { force = false, settle = false, reset = true } = {}) => {
-    const task = perkSwitchChain.then(() => __awaiter(void 0, void 0, void 0, function* () {
-        // We already drove the game to this exact set and nothing has reset the
-        // slate since, so it's genuinely equipped — skip the whole round-trip
-        // (reset + activate + settle). This is the trustworthy fast path: unlike
-        // the optimistic isActivePerkSet cache below, confirmedEquippedSet is
-        // only set after a switch fully completes, so even forced callers (the
-        // quick actions, which distrust that cache) can safely short-circuit here.
-        // It's what makes back-to-back quick-sells after the first one instant.
-        // Returning before the pending flag is raised also keeps the indicator
-        // still: a no-op switch shouldn't flicker "switching…".
-        if ((confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id) {
-            return false;
+const sendActivate = (set) => __awaiter(void 0, void 0, void 0, function* () {
+    const reply = yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
+        go: page_1.WorkerGo.ACTIVATE_PERK_SET,
+        id: set.id.toString(),
+    }));
+    return isAcknowledged(reply, `activate ${set.name}`);
+});
+// Drive the game to `set`. Only callable from inside a task, which is what
+// guarantees nothing else is touching the perks while the slate is empty.
+// Resolves to whether a real switch happened (false = already confirmed on it),
+// so callers can tell a change from a no-op.
+const applySet = (set) => __awaiter(void 0, void 0, void 0, function* () {
+    // We drove the game here and watched it land, and nothing has cleared the
+    // slate since -- so it is genuinely equipped and the whole round trip
+    // (reset + activate + settle) can be skipped. This is what makes back-to-back
+    // quick-sells instant after the first one.
+    if ((confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id) {
+        return false;
+    }
+    pendingPerkSet = set;
+    notifyPerkStatus();
+    try {
+        const wasCleared = yield clearPerks();
+        // Retried once if the game doesn't say "success", because at this point the
+        // slate is already EMPTY: an activate that goes missing here is not a switch
+        // that didn't happen, it is every perk turned off until something switches
+        // again. That is the state a harvest comes back from with one crop a plot.
+        let wasActivated = yield sendActivate(set);
+        if (!wasActivated) {
+            wasActivated = yield sendActivate(set);
         }
-        if (!force && (yield (0, exports.isActivePerkSet)(set))) {
-            return false;
-        }
-        console.debug(`Activating ${set.name} Perks`);
-        // eslint-disable-next-line require-atomic-updates
-        pendingPerkSet = set;
-        notifyPerkStatus();
-        try {
-            if (reset) {
-                yield resetPerks();
-            }
-            yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({
-                go: page_1.WorkerGo.ACTIVATE_PERK_SET,
-                id: set.id.toString(),
-            }));
-            if (settle) {
-                yield delay(PERK_SETTLE_MS);
-            }
-        }
-        finally {
-            // cleared (and announced) even if the switch throws, so a failed switch
-            // can't leave the indicator stuck on "switching…"
+        yield delay(PERK_SETTLE_MS);
+        if (wasCleared && wasActivated) {
             // eslint-disable-next-line require-atomic-updates
             pendingPerkSet = undefined;
-            notifyPerkStatus();
+            setConfirmedEquipped(set);
         }
-        // record that this set is now genuinely equipped so the next switch to it
-        // can take the fast path above. Safe despite the awaits: every write runs
-        // inside perkSwitchChain, which serializes switches, so there's no
-        // concurrent reassignment to race with.
-        setConfirmedEquipped(set);
+        else {
+            // Left in the dark. Don't claim it: the next switch to this set pays the
+            // round trip again rather than trusting perks we never saw confirmed.
+            logPerk(`${set.name} may not be fully equipped — will re-apply`);
+        }
         return true;
+    }
+    finally {
+        // cleared (and announced) even if the switch throws, so a failed switch
+        // can't leave the indicator stuck on "switching…"
+        // eslint-disable-next-line require-atomic-updates
+        pendingPerkSet = undefined;
+        notifyPerkStatus();
+    }
+});
+const session = { apply: applySet };
+let perkQueue = Promise.resolve();
+let isTaskRunning = false;
+// Run `task` with exclusive use of the perks. Don't call it from inside another
+// task -- anything a task needs is on the session it is given.
+//
+// If something does anyway, it runs INLINE rather than joining the queue.
+// Waiting would be a deadlock on a queue the caller is itself holding, and that
+// queue would never drain again: perk switching dead for the rest of the
+// session, silently. Running inline is safe (a task already holds the perks, so
+// nothing else is touching them) and the log says it happened.
+const runPerkTask = (task) => {
+    if (isTaskRunning) {
+        logPerk("a perk task was started from inside another one — ran it inline");
+        return task(session);
+    }
+    const run = perkQueue.then(() => __awaiter(void 0, void 0, void 0, function* () {
+        isTaskRunning = true;
+        try {
+            return yield task(session);
+        }
+        finally {
+            // eslint-disable-next-line require-atomic-updates
+            isTaskRunning = false;
+        }
     }));
-    perkSwitchChain = task.catch(() => {
-        // swallow: a failed switch must not break the chain for the next one
+    // a failed task must not break the queue for the next one
+    perkQueue = run.catch(() => {
+        // swallowed here only; runPerkTask's own caller still sees the rejection
     });
-    return task;
+    return run;
 };
-exports.activatePerkSet = activatePerkSet;
+exports.runPerkTask = runPerkTask;
+// One-shot switch with no action behind it: the panel's manual "equip".
+const equipPerkSet = (set) => (0, exports.runPerkTask)((perks) => perks.apply(set));
+exports.equipPerkSet = equipPerkSet;
+let restorePerks;
+const onPerkRestore = (restore) => {
+    restorePerks = restore;
+};
+exports.onPerkRestore = onPerkRestore;
+// Run an action under a specific perk set, with nothing able to switch perks
+// from under it. This is the ONLY way to perform a perk-sensitive action.
+const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, }) => (0, exports.runPerkTask)((perks) => __awaiter(void 0, void 0, void 0, function* () {
+    const target = yield set();
+    if (target) {
+        // said before the switch as well as after, so the log timestamps the
+        // moment the action started waiting on perks, not just the moment it
+        // stopped
+        (0, exports.setPerkStatusNote)(`${label} → ${target.name}`);
+        const switched = yield perks.apply(target);
+        (0, exports.setPerkStatusNote)(`${label} → ${target.name}${switched ? "" : " (already on)"}`);
+    }
+    else {
+        (0, exports.setPerkStatusNote)(`${label}: no set to switch to`);
+    }
+    try {
+        yield action();
+    }
+    finally {
+        if (holdMs > 0) {
+            yield delay(holdMs);
+        }
+        if (restore && restorePerks) {
+            yield restorePerks(perks);
+        }
+    }
+}));
+exports.runGatedAction = runGatedAction;
 
 
 /***/ }),
@@ -3183,6 +3280,20 @@ const injectStyles = () => {
         margin: -2px 0 8px;
       }
       #${PANEL_ID} .fh-perk-note[data-on="true"] { display: block; }
+      /* The log under the note: one line per perk decision, newest last, so an
+         ordering problem (a reconcile landing between a harvest's switch and
+         the harvest) is visible as two entries a second apart. */
+      #${PANEL_ID} .fh-perk-log {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        column-gap: 6px;
+        margin-top: 4px;
+        opacity: 0.85;
+      }
+      #${PANEL_ID} .fh-perk-log-time {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
       #${PANEL_ID} .fh-briefing-tabs {
         display: flex;
         gap: 4px;
@@ -4351,6 +4462,26 @@ const ensurePanel = () => {
     const perkNote = document.createElement("div");
     perkNote.className = "fh-perk-note";
     perkNote.dataset.on = "false";
+    const perkNoteText = document.createElement("div");
+    perkNote.append(perkNoteText);
+    const perkLogElement = document.createElement("div");
+    perkLogElement.className = "fh-perk-log";
+    perkNote.append(perkLogElement);
+    const paintPerkLog = () => {
+        perkLogElement.replaceChildren();
+        for (const entry of (0, perks_1.getPerkLog)()) {
+            const time = document.createElement("span");
+            time.className = "fh-perk-log-time";
+            time.textContent = new Date(entry.at).toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+            });
+            const text = document.createElement("span");
+            text.textContent = entry.text;
+            perkLogElement.append(time, text);
+        }
+    };
     const paintPerk = () => {
         var _a, _b, _c, _d;
         const status = (0, perks_1.getPerkStatus)();
@@ -4368,9 +4499,10 @@ const ensurePanel = () => {
             ? `Perks: ${(_b = status.name) !== null && _b !== void 0 ? _b : "none"} — ${status.note}`
             : `Perks: ${(_c = status.name) !== null && _c !== void 0 ? _c : "none"}`;
         // No note at all is itself the diagnostic: every path through the manager
-        // sets one except the bail on the feature being off.
-        perkNote.textContent =
-            (_d = status.note) !== null && _d !== void 0 ? _d : "no note yet — the manager has not acted on this page (or auto manage is off)";
+        // sets one, so a blank note means it has not run on this page at all.
+        perkNoteText.textContent =
+            (_d = status.note) !== null && _d !== void 0 ? _d : "no note yet — the manager has not acted on this page";
+        paintPerkLog();
     };
     paintPerk();
     (0, perks_1.onPerkStatusChange)(paintPerk);
@@ -9467,7 +9599,7 @@ const isTownHubPage = () => /\btown\.php/.test(window.location.hash || window.lo
 // (PerkActivity.TOWN) to avoid thrashing between sets; each still falls back to
 // its own set when no Town set exists. The Town set now also holds the selling
 // perks, so the farmers market belongs here too — the whole town area stays on
-// Town, and (via activatePerkSet's guard) only switches once on entry.
+// Town, and (via the confirmed-equipped fast path) only switches once on entry.
 const TOWN_CLUSTER = [
     { activity: perks_1.PerkActivity.TOWN, matches: () => isTownHubPage() },
     { activity: perks_1.PerkActivity.TEMPLE, matches: isTemplePage },
@@ -9484,48 +9616,56 @@ const TOWN_CLUSTER = [
     },
 ];
 // Quick-sell, quick-craft and quick-give all share ONE consolidated perk set,
-// so clicking between them never swaps perks — swapping between sets is what
+// so clicking between them never swaps perks -- swapping between sets is what
 // caused every switch-timing bug in this feature. That set is the one named
 // "Crafting"; it holds the selling, crafting and friendship perks together.
-const getQuickActionPerks = () => (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.CRAFTING);
-// Force the consolidated set active and settle, so its perks are actually
-// equipped (not just labelled active) before the caller fires the native action.
-// The stats-bar indicator (perkIndicator.ts) shows which set is on throughout —
-// it replaced the old "…perks activated" banner, which pushed the page (and the
-// button under your finger) down every time it appeared.
 //
 // GIVE is the exception: the friendship/give perks live in BOTH the Default set
-// and the consolidated set, so if either is already equipped there's nothing to
-// switch — skip the ~1s activation entirely and let the give fire immediately.
+// and the consolidated set, so if either is already confirmed on there is
+// nothing to switch -- no set, no ~1s activation, the give fires immediately.
 // (Selling and crafting perks are NOT in Default, so those always switch.)
-// Sell and craft need no such check: activatePerkSet no-ops instantly via its
-// confirmedEquippedSetId fast path when the set is already on.
-const activateQuickActionPerks = (...args_1) => __awaiter(void 0, [...args_1], void 0, function* (action = "sell") {
-    const perks = yield getQuickActionPerks();
+const getQuickActionSet = (action) => __awaiter(void 0, void 0, void 0, function* () {
+    const perks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.CRAFTING);
     if (!perks) {
-        return;
+        return undefined;
     }
     if (action === "give") {
         const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
         const activeId = (0, perks_1.getConfirmedEquippedSetId)();
-        const giveAlreadyCovered = activeId !== undefined &&
+        const isAlreadyCovered = activeId !== undefined &&
             (activeId === perks.id || activeId === (defaultPerks === null || defaultPerks === void 0 ? void 0 : defaultPerks.id));
-        if (giveAlreadyCovered) {
-            return;
+        if (isAlreadyCovered) {
+            return undefined;
         }
     }
-    yield (0, perks_1.activatePerkSet)(perks, { force: true, settle: true });
+    return perks;
 });
-// Replace the native quick-craft button with a proxy that activates the
-// consolidated set first, then fires the native action and stops — the
-// reconciler reverts to Default when you navigate away. No-op if the native
-// button is absent or already proxied.
+// A quick action is a proxied click: we press the game's own button and the
+// game runs its own request, which we never see finish. So the perk queue is
+// held for a moment afterwards -- long enough for that request to go out --
+// because the thing it is being held against is a page reconcile starting its
+// resetperks() while the sale is in flight, which is how a 50-silver item sells
+// for 55 instead of 80.
+const QUICK_ACTION_HOLD_MS = 1500;
+const runQuickAction = (action, fire) => __awaiter(void 0, void 0, void 0, function* () {
+    const { value: isEnabled } = yield (0, settings_1.getSetting)(SETTING_PERK_MANAGER);
+    if (!isEnabled) {
+        fire();
+        return;
+    }
+    yield (0, perks_1.runGatedAction)({
+        label: `quick ${action}`,
+        set: () => getQuickActionSet(action),
+        action: () => fire(),
+        holdMs: QUICK_ACTION_HOLD_MS,
+    });
+});
+// Replace the native quick-craft button with a proxy that runs the click as a
+// gated action. No-op if the native button is absent or already proxied.
 //
 // Quick-sell and quick-give are NOT installed here: quickSellSafely.ts already
-// proxies both (.quicksellbtn / .quickgivebtn) with lock-safety and runs the
-// shared onQuicksellClick callback below, which activates the same consolidated
-// set. Installing a second give proxy here was dead code (quickSellSafely runs
-// first and wins) and made give's lock-safety silently depend on feature order.
+// proxies both (.quicksellbtn / .quickgivebtn) with lock-safety and routes them
+// through the gate registered below, which runs the same helper.
 const installQuickActionProxy = (nativeSelector, label) => {
     var _a, _b;
     const nativeButton = (_a = (0, page_1.getCurrentPage)()) === null || _a === void 0 ? void 0 : _a.querySelector(nativeSelector);
@@ -9538,21 +9678,13 @@ const installQuickActionProxy = (nativeSelector, label) => {
     proxyButton.style.height = "28px;";
     proxyButton.textContent = label;
     proxyButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
-        yield activateQuickActionPerks();
-        nativeButton.click();
+        yield runQuickAction("craft", () => nativeButton.click());
     }));
     (_b = nativeButton.parentElement) === null || _b === void 0 ? void 0 : _b.insertBefore(proxyButton, nativeButton);
 };
-// Quick-sell, registered once at module scope (registering per page-load would
-// stack duplicate callbacks). Returning true never blocks the sale; the
-// reconciler restores Default when you navigate away.
-(0, quickSellSafely_1.onQuicksellClick)((_event, action) => __awaiter(void 0, void 0, void 0, function* () {
-    const { value: isEnabled } = yield (0, settings_1.getSetting)(SETTING_PERK_MANAGER);
-    if (isEnabled) {
-        yield activateQuickActionPerks(action);
-    }
-    return true;
-}));
+// Quick-sell and quick-give, registered once at module scope. One gate, set
+// rather than appended to, so it cannot accumulate across page loads.
+(0, quickSellSafely_1.setQuicksellGate)(runQuickAction);
 // Resolves the one activity set the given (live) page calls for, or undefined
 // when the page isn't an activity page (→ revert to Default). A page matches at
 // most one activity, so the first hit wins; a matched page whose set isn't
@@ -9628,60 +9760,24 @@ const getPageActivation = (page) => __awaiter(void 0, void 0, void 0, function* 
 //
 // This is safe because everything that actually spends perks is gated on its
 // own set rather than trusting whatever happens to be equipped: harvest and
-// replant force the farm perks (withFarmingPerks), quick-sell/craft/give force
-// the consolidated set, and the workshop, market, town and activity locations
+// replant take the farm perks, quick-sell/craft/give take the consolidated set
+// (both as gated actions, which hold the perk queue across the action itself),
+// and the workshop, market, town and activity locations
 // are activity pages in their own right. The one exception is the farm page's
 // native Harvest All button, which is the game's and not gated by us — which is
 // exactly why the farm stays a revert point.
 const isRestingPage = (page) => page === page_1.Page.HOME_PAGE || page === page_1.Page.HOME_PATH || page === page_1.Page.FARM;
-// The single source of truth for page-scoped perk switching. Resolves the set
-// the *live* page calls for (via getPage(), NOT the argument handed to
-// onPageLoad) and switches to it, going back to Default on a resting page.
-// Idempotent: the SPA fires onPageLoad several times per navigation,
-// sometimes with a stale page — the old branch table let one run activate the
-// activity set while another fell through and reverted to Default, and whoever
-// landed last won, nondeterministically leaving e.g. the market under Default
-// (partial sell perks). Keying every run off the same live page makes the
-// duplicate runs agree on the same set, so the redundant ones no-op via the
-// activatePerkSet guard instead of fighting each other.
-// Runs a page-driven switch and leaves a record of how it went, which the
-// indicator can show in debug mode. A failed switch was invisible before: the
-// switch chain swallows failures to protect the next switch, so there was no way
-// to tell a request that failed from a page that was never recognised — and on a
-// phone there's no console to check either way.
-// `force` is deliberate. Without it activatePerkSet consults isActivePerkSet,
-// which reads the OPTIMISTIC currentPerkSetId cache — written the instant a
-// switch is SENT, and documented right there as drifting from what the game
-// really has equipped. That is why every action path (quick sell/craft/give,
-// withFarmingPerks) forces; the reconciler trusting it was the one remaining
-// hole, and it fails in the direction that hurts: the cache says Default, the
-// game has the crafting set on, the revert is skipped and the note reads
-// "(already on)" while the wrong perks are equipped.
-//
-// It stays cheap. `force` does NOT bypass the confirmedEquippedSet fast path
-// above it — the set we drove the game to and watched land — so a repeat switch
-// to the set already confirmed is still free. Only a reconcile where nothing is
-// confirmed yet (session start, or after the perks page cleared the flag) pays
-// the round-trip, which is exactly when it should.
-const switchTo = (set, where) => __awaiter(void 0, void 0, void 0, function* () {
-    (0, perks_1.setPerkStatusNote)(`${where} → ${set.name}`);
-    try {
-        const switched = yield (0, perks_1.activatePerkSet)(set, { force: true, settle: true });
-        (0, perks_1.setPerkStatusNote)(`${where} → ${set.name}${switched ? "" : " (already on)"}`);
-    }
-    catch (error) {
-        console.error(`Failed to activate the ${set.name} perk set`, error);
-        (0, perks_1.setPerkStatusNote)(`${where} → ${set.name} FAILED`);
-    }
-});
-const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, function* () {
+const resolveDecision = () => __awaiter(void 0, void 0, void 0, function* () {
     const { value: isEnabled } = yield (0, settings_1.getSetting)(SETTING_PERK_MANAGER);
     if (!isEnabled) {
-        return;
+        // The one silent path there was. With auto manage off nothing switches and
+        // nothing says why, which is indistinguishable from a broken reconciler --
+        // and manual equipping from the panel still works, so the setting looks on.
+        return { note: "auto manage is off" };
     }
     // `getPage()` reads data-page off the live page element, which this fork has
     // found unreliable often enough that half this file matches on the URL
-    // instead — and when it comes back undefined the reconciler used to fall all
+    // instead -- and when it comes back undefined the reconciler used to fall all
     // the way through to "keeping current set" and switch NOTHING. That is the
     // "it just doesn't switch sometimes" failure, and on the farm it is the
     // "came to the farm and it never went back to Default" one: an unidentified
@@ -9689,12 +9785,11 @@ const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, fun
     //
     // The address bar is the second opinion (getHashPage: `#!/xfarm.php` ->
     // `xfarm`), used ONLY when the element can't identify itself, so a page that
-    // reads fine is unaffected. Mid-transition the hash leads the DOM, but the
-    // 100ms debounce below already settles that, and a lagging hash can only pick
-    // the page we just left — the next dispatch corrects it.
+    // reads fine is unaffected. Mid-transition the hash leads the DOM, but a
+    // lagging hash can only name the page we just left, and the next dispatch
+    // corrects it.
     const [domPage] = (0, page_1.getPage)();
     const page = domPage !== null && domPage !== void 0 ? domPage : (0, page_1.getHashPage)();
-    // `page` is the live page id, or undefined when neither source knows it.
     // The note says which source answered, so a wrong decision can be traced to
     // the page id rather than to the switch.
     let where = "unknown page";
@@ -9706,21 +9801,18 @@ const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, fun
     }
     // don't touch perks on the perks page so you can edit sets freely
     if (page === page_1.Page.PERKS) {
-        (0, perks_1.setPerkStatusNote)(`${where}: left alone`);
-        return;
+        return { note: `${where}: left alone` };
     }
     const defaultPerks = yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT);
     if (!defaultPerks) {
         console.warn("Default perk set not found");
-        (0, perks_1.setPerkStatusNote)("no Default set");
-        return;
+        return { note: "no Default set" };
     }
     const activation = yield getPageActivation(page);
     if (activation) {
-        yield switchTo(activation.set, where);
-        return;
+        return { set: activation.set, note: where };
     }
-    // Not an activity page, and not a resting one either — you're browsing
+    // Not an activity page, and not a resting one either -- you're browsing
     // mid-activity (an item, your inventory, a quest), so leave the perks where
     // they are. This also covers the two cases that used to need their own
     // guards: item pages, where the quick actions manage perks themselves and a
@@ -9729,20 +9821,44 @@ const reconcilePerksForCurrentPage = () => __awaiter(void 0, void 0, void 0, fun
     // reliable "you've left the activity" signal and once caused the workshop to
     // reset and re-activate Crafting on every single craft.
     if (!isRestingPage(page)) {
-        (0, perks_1.setPerkStatusNote)(`${where}: keeping current set`);
+        return { note: `${where}: keeping current set` };
+    }
+    return { set: defaultPerks, note: where };
+});
+// Put the page's set on. Used for BOTH halves of the job: the page-transition
+// reconcile, and the restore after a gated action (a banner harvest in the
+// vault leaves the Town set back on, where the old code left Default equipped
+// in the middle of town). One function, so the two can't drift apart.
+//
+// Called with a live session, so it must never enqueue a task of its own.
+const applyDecision = (perks) => __awaiter(void 0, void 0, void 0, function* () {
+    const decision = yield resolveDecision();
+    if (!decision.set) {
+        (0, perks_1.setPerkStatusNote)(decision.note);
         return;
     }
-    // back to Default (settle: the game acks the switch before it equips, so
-    // without waiting the label flips to Default while the previous set's perks
-    // stay on)
-    yield switchTo(defaultPerks, where);
+    const { set, note } = decision;
+    (0, perks_1.setPerkStatusNote)(`${note} → ${set.name}`);
+    try {
+        const switched = yield perks.apply(set);
+        (0, perks_1.setPerkStatusNote)(`${note} → ${set.name}${switched ? "" : " (already on)"}`);
+    }
+    catch (error) {
+        // A failed switch was invisible before: the queue swallows failures to
+        // protect the next task, so there was no way to tell a request that failed
+        // from a page that was never recognised.
+        console.error(`Failed to activate the ${set.name} perk set`, error);
+        (0, perks_1.setPerkStatusNote)(`${note} → ${set.name} FAILED`);
+    }
 });
+// After any gated action, the perks go back to what the page calls for.
+(0, perks_1.onPerkRestore)(applyDecision);
 // Nothing awaits a feature's onPageLoad, so a throw in the reconciler would be
 // an unhandled rejection: silent, and on a phone there is no console to find it
-// in. Every other path through it leaves a note, so this one does too.
+// in. Every path through applyDecision leaves a note, so this one does too.
 const reconcileSafely = () => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        yield reconcilePerksForCurrentPage();
+        yield (0, perks_1.runPerkTask)(applyDecision);
     }
     catch (error) {
         console.error("Failed to reconcile perks", error);
@@ -9762,8 +9878,9 @@ const reconcileSafely = () => __awaiter(void 0, void 0, void 0, function* () {
 // are not". Same observer shape as utils/notifications.ts, which has run this
 // way since 1.1.16, and the 100ms debounce matters for a second reason here:
 // mid-transition the hash has already moved while the page swap has not landed,
-// and switchTo awaits its settle, so a decision made then can land after the
-// correct one and win.
+// so a reconcile that ran then would be deciding about the page you are
+// leaving. (Deciding inside the perk task rather than here is the real defence
+// -- see resolveDecision -- but there is no reason to queue the work at all.)
 let transitionTimeout;
 // Everything this feature puts ON a page, as opposed to the perks it switches:
 // the equipped-set marker and the quick-craft proxy. Both were reachable only
@@ -9779,6 +9896,12 @@ let transitionTimeout;
 // hidden (i.e. already proxied), so a retained page keeps its one proxy.
 const mountPageExtras = () => __awaiter(void 0, void 0, void 0, function* () {
     yield (0, perkIndicator_1.renderPerkIndicator)();
+    // With auto manage off nothing switches, so there is nothing for a proxy to
+    // do but hide the game's own button and click it for you.
+    const { value: isEnabled } = yield (0, settings_1.getSetting)(SETTING_PERK_MANAGER);
+    if (!isEnabled) {
+        return;
+    }
     // the quick-craft proxy lives on item pages; skip the workshop, where the
     // reconciler already scopes perks. (quick-sell and quick-give are handled
     // by quickSellSafely.ts — see installQuickActionProxy's note.)
@@ -9787,9 +9910,14 @@ const mountPageExtras = () => __awaiter(void 0, void 0, void 0, function* () {
         installQuickActionProxy(".quickcraftbtn", "CRAFT");
     }
 });
+// Extras first, then the switch. They are independent -- the proxy button and
+// the marker don't need to know which set is on -- and the reconcile now waits
+// on the perk queue, which a harvest can hold for a couple of seconds. Mounting
+// second meant arriving at an item page during one left the game's own,
+// UNGATED craft button live and clickable for that whole window.
 const onPageSettled = () => __awaiter(void 0, void 0, void 0, function* () {
-    yield reconcileSafely();
     yield mountPageExtras();
+    yield reconcileSafely();
 });
 const scheduleReconcile = () => {
     clearTimeout(transitionTimeout);
@@ -9828,26 +9956,13 @@ exports.perkManagment = {
     onInitialize: () => {
         watchPageTransitions();
     },
-    onPageLoad: (settings) => __awaiter(void 0, void 0, void 0, function* () {
-        if (!settings[settings_1.SettingId.PERK_MANAGER]) {
-            // The one silent path there was. With auto manage off nothing switches
-            // and nothing says why, which on a phone is indistinguishable from a
-            // broken reconciler -- and manual equipping from the panel still works,
-            // because that calls activatePerkSet directly, so the setting looks on.
-            (0, perks_1.setPerkStatusNote)("auto manage is off");
-            return;
-        }
-        // page-scoped perk switching, then the marker and the quick-craft proxy.
+    onPageLoad: () => __awaiter(void 0, void 0, void 0, function* () {
+        // The marker and the quick-craft proxy, then page-scoped perk switching.
         // Idempotent, so the SPA's duplicate onPageLoad calls converge instead of
         // racing, and it agrees with the page-transition watcher below, which runs
         // the same pair for the arrivals this dispatch never sees.
-        //
-        // The extras are mounted AFTER the reconcile, never before: the game
-        // rebuilds the bottom bar as you navigate, and the perk state isn't read
-        // yet on the very first load, so there'd be nothing to show anyway. When
-        // the reconcile switched, the status listener has already drawn it; this
-        // covers the no-op case. (renderPerkIndicator waits out the game's own boot
-        // on its own — see isGameBooted there.)
+        // (renderPerkIndicator waits out the game's own boot on its own — see
+        // isGameBooted there.)
         yield onPageSettled();
     }),
     onQuestLoad: (settings) => __awaiter(void 0, void 0, void 0, function* () {
@@ -10214,7 +10329,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.quicksellSafely = exports.onQuicksellClick = void 0;
+exports.quicksellSafely = exports.setQuicksellGate = void 0;
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const SETTING_QUICKSELL_SAFELY = {
@@ -10224,13 +10339,18 @@ const SETTING_QUICKSELL_SAFELY = {
     type: "boolean",
     defaultValue: true,
 };
-const state = {
-    onQuicksellClick: [],
+let quicksellGate;
+const setQuicksellGate = (gate) => {
+    quicksellGate = gate;
 };
-const onQuicksellClick = (callback) => {
-    state.onQuicksellClick.push(callback);
-};
-exports.onQuicksellClick = onQuicksellClick;
+exports.setQuicksellGate = setQuicksellGate;
+const fireQuickAction = (action, fire) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!quicksellGate) {
+        fire();
+        return;
+    }
+    yield quicksellGate(action, fire);
+});
 exports.quicksellSafely = {
     settings: [SETTING_QUICKSELL_SAFELY],
     onPageLoad: (settings, page) => {
@@ -10260,17 +10380,12 @@ exports.quicksellSafely = {
                 lock.textContent = "unlock_fill";
                 proxyButton.append(lock);
             }
-            proxyButton.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+            proxyButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
                 if (isSafetyOn && isLocked) {
                     unlockButton.click();
                     return;
                 }
-                for (const callback of state.onQuicksellClick) {
-                    if (!(yield callback(event, "sell"))) {
-                        return;
-                    }
-                }
-                quicksellButton.click();
+                yield fireQuickAction("sell", () => quicksellButton.click());
             }));
             (_d = quicksellButton.parentElement) === null || _d === void 0 ? void 0 : _d.insertBefore(proxyButton, quicksellButton);
         }
@@ -10291,17 +10406,12 @@ exports.quicksellSafely = {
                 lock.textContent = "unlock_fill";
                 proxyButton.append(lock);
             }
-            proxyButton.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+            proxyButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
                 if (isSafetyOn && isLocked) {
                     unlockButton.click();
                     return;
                 }
-                for (const callback of state.onQuicksellClick) {
-                    if (!(yield callback(event, "give"))) {
-                        return;
-                    }
-                }
-                quickgiveButton.click();
+                yield fireQuickAction("give", () => quickgiveButton.click());
             }));
             (_f = quickgiveButton.parentElement) === null || _f === void 0 ? void 0 : _f.insertBefore(proxyButton, quickgiveButton);
         }
@@ -10525,7 +10635,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.54" !== void 0 ? "1.1.54" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.55" !== void 0 ? "1.1.55" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
