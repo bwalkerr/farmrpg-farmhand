@@ -1,10 +1,10 @@
+import { BooleanFeatureSetting } from "~/utils/feature";
 import {
-  activatePerkSet,
+  equipPerkSet,
   getPerkStatus,
   PerkActivity,
   PerkSet,
 } from "~/api/farmrpg/apis/perks";
-import { BooleanFeatureSetting } from "~/utils/feature";
 import {
   getSetting,
   getSettings,
@@ -151,7 +151,7 @@ export const renderPerkSets = (
         action.textContent = "equipping…";
         action.style.color = TEXT_GRAY;
         try {
-          await activatePerkSet(set, { force: true, settle: true });
+          await equipPerkSet(set);
           reload();
         } catch {
           action.textContent = "failed — try again";

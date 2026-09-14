@@ -60,7 +60,11 @@ import {
   matchLocationName,
   parseStamina,
 } from "~/utils/locationAdvice";
-import { getPerkStatus, onPerkStatusChange } from "~/api/farmrpg/apis/perks";
+import {
+  getPerkLog,
+  getPerkStatus,
+  onPerkStatusChange,
+} from "~/api/farmrpg/apis/perks";
 import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
 import { getSettingValues, SettingId } from "~/utils/settings";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
@@ -261,6 +265,20 @@ const injectStyles = (): void => {
         margin: -2px 0 8px;
       }
       #${PANEL_ID} .fh-perk-note[data-on="true"] { display: block; }
+      /* The log under the note: one line per perk decision, newest last, so an
+         ordering problem (a reconcile landing between a harvest's switch and
+         the harvest) is visible as two entries a second apart. */
+      #${PANEL_ID} .fh-perk-log {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        column-gap: 6px;
+        margin-top: 4px;
+        opacity: 0.85;
+      }
+      #${PANEL_ID} .fh-perk-log-time {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
       #${PANEL_ID} .fh-briefing-tabs {
         display: flex;
         gap: 4px;
@@ -1770,6 +1788,26 @@ const ensurePanel = (): void => {
   const perkNote = document.createElement("div");
   perkNote.className = "fh-perk-note";
   perkNote.dataset.on = "false";
+  const perkNoteText = document.createElement("div");
+  perkNote.append(perkNoteText);
+  const perkLogElement = document.createElement("div");
+  perkLogElement.className = "fh-perk-log";
+  perkNote.append(perkLogElement);
+  const paintPerkLog = (): void => {
+    perkLogElement.replaceChildren();
+    for (const entry of getPerkLog()) {
+      const time = document.createElement("span");
+      time.className = "fh-perk-log-time";
+      time.textContent = new Date(entry.at).toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      const text = document.createElement("span");
+      text.textContent = entry.text;
+      perkLogElement.append(time, text);
+    }
+  };
   const paintPerk = (): void => {
     const status = getPerkStatus();
     let colour = TEXT_GRAY;
@@ -1785,10 +1823,10 @@ const ensurePanel = (): void => {
       ? `Perks: ${status.name ?? "none"} — ${status.note}`
       : `Perks: ${status.name ?? "none"}`;
     // No note at all is itself the diagnostic: every path through the manager
-    // sets one except the bail on the feature being off.
-    perkNote.textContent =
-      status.note ??
-      "no note yet — the manager has not acted on this page (or auto manage is off)";
+    // sets one, so a blank note means it has not run on this page at all.
+    perkNoteText.textContent =
+      status.note ?? "no note yet — the manager has not acted on this page";
+    paintPerkLog();
   };
   paintPerk();
   onPerkStatusChange(paintPerk);

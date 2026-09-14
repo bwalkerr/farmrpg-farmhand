@@ -11,21 +11,44 @@ const SETTING_QUICKSELL_SAFELY: FeatureSetting = {
   defaultValue: true,
 };
 
-// action tells a callback whether this was the SELL or the GIVE button — they
-// share the same callback list but need different perks (selling needs the
-// Negotiator set; giving is covered by the Default set too)
-export type QuickAction = "sell" | "give";
-export type QuicksellCallback = (
-  event: MouseEvent,
-  action: QuickAction
-) => Promise<boolean>;
+// Which button the gate is being asked about. Sell and give come from this
+// file; "craft" comes from the quick-craft proxy in perkManagement.ts, which
+// shares this gate's vocabulary — the three need different perks (selling and
+// crafting need the consolidated set; giving is covered by Default too), so a
+// gate must be able to tell them apart.
+export type QuickAction = "sell" | "give" | "craft";
 
-const state: { onQuicksellClick: QuicksellCallback[] } = {
-  onQuicksellClick: [],
+// A gate WRAPS the native click rather than merely being consulted before it:
+// it is handed `fire`, and the button is only pressed if and when the gate
+// calls it. That is what lets the perk manager hold the perk queue across the
+// sale instead of switching perks, returning, and hoping nothing switches them
+// back before the game's own request goes out. A gate that never calls `fire`
+// blocks the action, which is the old "return false" contract.
+//
+// ONE gate, replacing a list of callbacks that was appended to per page load
+// and never cleared — every navigation stacked another copy and one quick-sell
+// fired the perk swap once per accumulated copy (fixed once by moving
+// registration to module scope; a single slot makes it unrepeatable).
+export type QuicksellGate = (
+  action: QuickAction,
+  fire: () => void
+) => Promise<void>;
+
+let quicksellGate: QuicksellGate | undefined;
+
+export const setQuicksellGate = (gate: QuicksellGate): void => {
+  quicksellGate = gate;
 };
 
-export const onQuicksellClick = (callback: QuicksellCallback): void => {
-  state.onQuicksellClick.push(callback);
+const fireQuickAction = async (
+  action: QuickAction,
+  fire: () => void
+): Promise<void> => {
+  if (!quicksellGate) {
+    fire();
+    return;
+  }
+  await quicksellGate(action, fire);
 };
 
 export const quicksellSafely: Feature = {
@@ -62,17 +85,12 @@ export const quicksellSafely: Feature = {
         lock.textContent = "unlock_fill";
         proxyButton.append(lock);
       }
-      proxyButton.addEventListener("click", async (event) => {
+      proxyButton.addEventListener("click", async () => {
         if (isSafetyOn && isLocked) {
           unlockButton.click();
           return;
         }
-        for (const callback of state.onQuicksellClick) {
-          if (!(await callback(event, "sell"))) {
-            return;
-          }
-        }
-        quicksellButton.click();
+        await fireQuickAction("sell", () => quicksellButton.click());
       });
       quicksellButton.parentElement?.insertBefore(proxyButton, quicksellButton);
     }
@@ -94,17 +112,12 @@ export const quicksellSafely: Feature = {
         lock.textContent = "unlock_fill";
         proxyButton.append(lock);
       }
-      proxyButton.addEventListener("click", async (event) => {
+      proxyButton.addEventListener("click", async () => {
         if (isSafetyOn && isLocked) {
           unlockButton.click();
           return;
         }
-        for (const callback of state.onQuicksellClick) {
-          if (!(await callback(event, "give"))) {
-            return;
-          }
-        }
-        quickgiveButton.click();
+        await fireQuickAction("give", () => quickgiveButton.click());
       });
       quickgiveButton.parentElement?.insertBefore(proxyButton, quickgiveButton);
     }

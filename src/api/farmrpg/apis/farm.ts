@@ -1,9 +1,10 @@
+import { CachedState, StorageKey } from "../../../utils/state";
 import {
-  activatePerkSet,
   getActivityPerksSet,
   PerkActivity,
+  PerkSet,
+  runGatedAction,
 } from "~/api/farmrpg/apis/perks";
-import { CachedState, StorageKey } from "../../../utils/state";
 import { getDocument } from "../../../utils/requests";
 import { getHTML, getJSON } from "../utils/requests";
 import { getPage, Page, WorkerGo } from "~/utils/page";
@@ -260,28 +261,7 @@ export const farmStatusState = new CachedState<FarmStatus>(
                 {
                   name: "Replant",
                   buttonClass: "btnblue",
-                  callback: async () => {
-                    const farmId = await farmIdState.get();
-                    if (!farmId) {
-                      console.error("No farm id found");
-                      return;
-                    }
-                    await withFarmingPerks(async () => {
-                      if (page === Page.FARM) {
-                        document
-                          .querySelector<HTMLAnchorElement>(".plantallbtn")
-                          ?.click();
-                      } else {
-                        await getHTML(
-                          Page.WORKER,
-                          new URLSearchParams({
-                            go: WorkerGo.PLANT_ALL,
-                            id: String(farmId),
-                          })
-                        );
-                      }
-                    });
-                  },
+                  callback: () => replantAll(page === Page.FARM),
                 },
               ],
             });
@@ -362,63 +342,86 @@ export const farmIdState = new CachedState<number>(
   }
 );
 
-// Makes sure the right perks are equipped for a harvest/replant roll, then
-// rolls it. The farm perks are whichever set is named "Farming", or Default
-// when there's no such set (where most players, Reed included, keep them).
+// Which set a harvest or a replant should roll under: the one named "Farming",
+// or Default when there is no such set -- where most players, Reed included,
+// keep their farm perks. Undefined when auto-manage is off, which leaves the
+// perks exactly as they are and just does the action.
 //
-// This is a GATED ACTION — the harvest is fired the instant the switch resolves
-// and its yield depends on the perks — so it uses the same contract as the item
-// page quick actions: `force` (the optimistic active-set cache drifts, and when
-// it wrongly reads "already on" the switch is skipped and the harvest rolls
-// under whatever is really equipped) and `settle` (the game acks
-// activateperkset BEFORE it finishes equipping, so an action fired immediately
-// after runs under the OLD perks). That is exactly what went wrong harvesting
-// from the crops-ready banner on an item page: the quick-sell/craft set is left
-// equipped there on purpose, so the harvest was a real cross-set switch and,
-// unsettled, rolled under the selling/crafting perks.
-//
-// It stays snappy where it always was: activatePerkSet short-circuits on
-// `confirmedEquippedSetId` BEFORE it looks at `force`, so harvesting from Home
-// or the farm — where the reconciler has already confirmed Default equipped —
-// costs zero requests. Only a genuine cross-set harvest pays the settle.
-export const withFarmingPerks = async (
-  action: () => Promise<void>
-): Promise<void> => {
+// Resolved INSIDE the gated task (runGatedAction calls this when the task
+// reaches the front of the perk queue), so it reads settings and sets as they
+// are at the moment of the switch rather than when the button was clicked.
+const getFarmingPerks = async (): Promise<PerkSet | undefined> => {
   const settings = await getSettingValues();
   if (!settings[SettingId.PERK_MANAGER]) {
-    await action();
-    return;
+    return undefined;
   }
-  const farmingPerks = await getActivityPerksSet(PerkActivity.FARMING);
-  const defaultPerks = await getActivityPerksSet(PerkActivity.DEFAULT);
-  const harvestPerks = farmingPerks ?? defaultPerks;
-  if (harvestPerks) {
-    await activatePerkSet(harvestPerks, { force: true, settle: true });
-  }
-  await action();
-  // Only a dedicated Farming set needs putting away; without one we harvested
-  // under Default and are already where the reconciler wants us.
-  //
-  // This used to pass `reset: false` for speed, which was a bug: the reset is
-  // what makes the game equip a set FULLY (without it the game diffs off the
-  // previous set and drops/lags perks — see resetPerks), and the `reset: false`
-  // exception exists only for the quick actions, which act the instant after
-  // the switch and can't afford the clear still settling. Nothing acts after
-  // this one. Worse, activatePerkSet marks the set confirmed-equipped either
-  // way, so a half-applied Default then took the fast path on every later
-  // switch to Default and never got repaired: the reconciler's revert on the
-  // farm and at home reported "(already on)" over perks that weren't. No settle
-  // still — nothing reads them, and the game finishes equipping on its own.
-  if (farmingPerks && defaultPerks) {
-    await activatePerkSet(defaultPerks);
-  }
+  return (
+    (await getActivityPerksSet(PerkActivity.FARMING)) ??
+    (await getActivityPerksSet(PerkActivity.DEFAULT))
+  );
 };
 
+// Harvesting and replanting are GATED ACTIONS: the yield depends on the perks
+// equipped at the moment the request lands, so the switch and the request run
+// as one task on the perk queue (see runGatedAction). Nothing else can switch
+// perks in between -- which is what went wrong harvesting from the crops-ready
+// banner away from the farm: the switch was serialised but the harvest was not,
+// so a page reconcile could start its resetperks() while the harvest was in
+// flight and the crops came in with no perks applied at all, one per plot.
+//
+// Afterwards the perks go back to whatever the page you are standing on calls
+// for (the Town set in the vault, Default at home), instead of the old
+// "revert only if a Farming set exists" rule, which left Default equipped in
+// the middle of town after a banner harvest.
+//
+// It stays snappy where it always was: apply() short-circuits when the set is
+// already confirmed equipped, so harvesting from Home or the farm -- where the
+// reconciler has already put Default on -- costs zero requests.
 export const harvestAll = (): Promise<void> =>
-  withFarmingPerks(async () => {
-    const farmId = await farmIdState.get();
-    await getJSON(
-      Page.WORKER,
-      new URLSearchParams({ go: WorkerGo.HARVEST_ALL, id: String(farmId) })
-    );
+  runGatedAction({
+    label: "harvest",
+    set: getFarmingPerks,
+    action: async () => {
+      const farmId = await farmIdState.get();
+      await getJSON(
+        Page.WORKER,
+        new URLSearchParams({
+          go: WorkerGo.HARVEST_ALL,
+          id: String(farmId),
+        })
+      );
+    },
   });
+
+// `fromFarmPage`: on the farm we click the game's own Plant All button so its
+// UI updates, and a click is fire-and-forget -- the game runs its own request
+// and we never see it finish. `holdMs` keeps the perk queue held for that
+// window so nothing switches perks out from under it; away from the farm we
+// fire the request ourselves and can simply await it.
+const PLANT_CLICK_HOLD_MS = 1500;
+
+export const replantAll = async (fromFarmPage: boolean): Promise<void> => {
+  const farmId = await farmIdState.get();
+  if (!farmId) {
+    console.error("No farm id found");
+    return;
+  }
+  await runGatedAction({
+    label: "replant",
+    set: getFarmingPerks,
+    holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : 0,
+    action: async () => {
+      if (fromFarmPage) {
+        document.querySelector<HTMLAnchorElement>(".plantallbtn")?.click();
+        return;
+      }
+      await getHTML(
+        Page.WORKER,
+        new URLSearchParams({
+          go: WorkerGo.PLANT_ALL,
+          id: String(farmId),
+        })
+      );
+    },
+  });
+};
