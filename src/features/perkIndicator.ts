@@ -8,7 +8,8 @@ import { isMobileLayout, onLayoutChange } from "~/utils/layout";
 import { TEXT_GRAY, TEXT_SUCCESS, TEXT_WARNING } from "~/utils/theme";
 
 // A small "● Crafting" pill in the bottom stats bar, right of the currency
-// counts and the cap tracker, showing which perk set is equipped right now.
+// counts, showing which perk set is equipped right now. (The cap tracker used
+// to share this bar; it lives in the briefing panel now.)
 //
 // It replaces the old "…perks activated" notification banner, which was
 // inserted into the page's own content — so it shoved everything below it down,
@@ -60,13 +61,11 @@ const BOOT_POLL_LIMIT = 40; // ~10s, then give up until the next page load
 let bootPollsLeft = BOOT_POLL_LIMIT;
 let bootPoll: ReturnType<typeof setTimeout> | undefined;
 
-// The pill shares the stats bar with the cap tracker, and both simply append
-// themselves — so which one ends up on the left came down to who mounted first.
-// The tracker waits on an inventory fetch, so on a cold load we win the race and
-// sit left of it; on a reload with cached data it wins and we sit right. Rather
-// than depend on that timing, we keep "last child" as a maintained property: fix
-// the position on every render, and watch the bar so a later arrival (the
-// tracker mounting, or the game rewriting the toolbar) is corrected at once.
+// The pill simply appends itself to the bar, and so does anything else that
+// lands there (the game rewriting the toolbar, another feature's element) — so
+// "last child" is kept as a maintained property rather than a one-time
+// placement: fix the position on every render, and watch the bar so a later
+// arrival is corrected at once.
 const keepRightmost = (statsZone: Element, pill: HTMLElement): void => {
   if (statsZone.lastElementChild !== pill) {
     statsZone.append(pill);

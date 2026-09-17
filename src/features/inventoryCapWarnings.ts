@@ -1,10 +1,3 @@
-import {
-  BORDER_GRAY,
-  TEXT_ERROR,
-  TEXT_GRAY,
-  TEXT_WARNING,
-  TEXT_WHITE,
-} from "~/utils/theme";
 import { CachedState } from "~/utils/state";
 import { Feature, FeatureSetting } from "../utils/feature";
 import { getCurrentPage, Page } from "~/utils/page";
@@ -18,9 +11,9 @@ import {
   parseInventoryPage,
   publishInventoryPage,
 } from "~/api/farmrpg/apis/inventory";
-import { isMobileLayout, onLayoutChange } from "~/utils/layout";
 import { Responselike } from "~/utils/requests";
 import { SettingId } from "~/utils/settings";
+import { TEXT_ERROR, TEXT_WARNING } from "~/utils/theme";
 
 const SETTING_INVENTORY_CAP_WARNINGS: FeatureSetting = {
   id: SettingId.INVENTORY_CAP_WARNINGS,
@@ -33,22 +26,21 @@ const SETTING_INVENTORY_CAP_WARNINGS: FeatureSetting = {
 
 const SETTING_INVENTORY_CAP_TRACKER: FeatureSetting = {
   id: SettingId.INVENTORY_CAP_TRACKER,
-  title: "Inventory: Cap tracker box",
+  title: "Inventory: Cap tracker",
   description: `
-    Show items at or near your inventory cap in a small box above the bottom
-    bar; click an item to open its page
+    Track items at or near your inventory cap: a count on the Farmhand button
+    and a Cap tab in the briefing panel, filtered to what drops where you are
   `,
   type: "boolean",
   defaultValue: true,
 };
 
 const NEAR_CAP_RATIO = 0.9;
-const MAX_TRACKER_ITEMS = 20;
 const PASSIVE_REFRESH_MS = 10 * 60 * 1000;
 const ACTIVE_DEBOUNCE_MS = 1500;
 const ACTIVE_MIN_INTERVAL_MS = 15 * 1000;
 
-interface CapItem {
+export interface CapItem {
   count: number;
   href: string;
   image?: string;
@@ -103,34 +95,6 @@ const collectCapItems = (
   return { cap, items };
 };
 
-const renderTrackerItem = (item: CapItem): HTMLAnchorElement => {
-  const anchor = document.createElement("a");
-  anchor.href = item.href;
-  const count = item.count.toLocaleString();
-  const cap = capTrackerState.cap.toLocaleString();
-  anchor.title = `${item.name}: ${count} / ${cap}`;
-  anchor.style.display = "block";
-  anchor.style.lineHeight = "0";
-  anchor.style.borderRadius = "5px";
-  anchor.style.border = `2px solid ${item.isAtCap ? TEXT_ERROR : TEXT_WARNING}`;
-  if (item.image) {
-    const icon = document.createElement("img");
-    icon.src = item.image;
-    icon.style.width = "22px";
-    icon.style.height = "22px";
-    icon.style.borderRadius = "3px";
-    icon.style.display = "block";
-    anchor.append(icon);
-  } else {
-    anchor.style.lineHeight = "22px";
-    anchor.style.padding = "0 4px";
-    anchor.style.fontSize = "12px";
-    anchor.style.color = TEXT_WHITE;
-    anchor.textContent = item.name;
-  }
-  return anchor;
-};
-
 const imageBasename = (source: string): string =>
   (source.split("/").pop() ?? "").split("?")[0];
 
@@ -141,28 +105,11 @@ const LOCATION_DROPS_KEY = "fhCapTrackerLocationDrops";
 let locationDrops: Record<string, string[]> = {};
 let locationDropsLoaded = false;
 
-const COLLAPSED_KEY = "fhCapTrackerCollapsed";
-let isCollapsed = false;
-
-const setCollapsed = (value: boolean): void => {
-  isCollapsed = value;
-  GM.setValue(COLLAPSED_KEY, value);
-  scheduleRender();
-};
-
 const loadLocationDrops = (): void => {
   if (locationDropsLoaded) {
     return;
   }
   locationDropsLoaded = true;
-  GM.getValue<boolean>(COLLAPSED_KEY, false)
-    .then((value) => {
-      isCollapsed = Boolean(value);
-      scheduleRender();
-    })
-    .catch(() => {
-      // ignore load failures; default to expanded
-    });
   GM.getValue<Record<string, string[]>>(LOCATION_DROPS_KEY, {})
     .then((value) => {
       locationDrops = value ?? {};
@@ -269,128 +216,64 @@ const learnCurrentLocation = (): void => {
   }
 };
 
-const renderCapTracker = (): void => {
-  let box = document.querySelector<HTMLDivElement>("#fh-cap-tracker");
+// What the tracker knows, for whoever draws it. The tracker used to draw
+// itself -- a row of icons in the bottom stats bar -- and that row is gone:
+// it was up to twenty icons wide in a bar that also holds the currency counts
+// and the perk pill, it could not be drawn on a phone at all, and the briefing
+// panel is where every other "what wants you" list already lives. The panel
+// now owns the drawing (a Cap tab, and a count on its button); this module
+// owns the data and says when it changed.
+export interface CapTrackerView {
+  cap: number;
+  isEnabled: boolean;
+  // everything at or near cap, at-cap first
+  items: readonly CapItem[];
+  // the subset that drops where you are, once this location's drops have been
+  // learned; undefined when you are not somewhere with drops, or it has not
+  // been learned yet (then `items` is the honest answer)
+  here?: readonly CapItem[];
+  isFetching: boolean;
+  updatedAt: number;
+}
 
-  // Not on a phone. The row is up to 20 item icons wide and the phone's stats
-  // bar has room for the currency counts and the game's own buttons and nothing
-  // else, so wherever it is put it either overflows the bar or pushes the counts
-  // off it. The inventory page's own MAX/NEAR badges are a separate feature and
-  // are unaffected -- the cap information is still there, just not in the bar,
-  // and the briefing panel carries the at-cap warnings on both layouts.
-  if (isMobileLayout()) {
-    box?.remove();
-    return;
-  }
-
+export const getCapTrackerView = (): CapTrackerView => {
   const key = getLocationKey();
   const learned = key ? locationDrops[key] : undefined;
-  // filter to this location's known drops; before a location has been
-  // learned (first visit), show everything rather than nothing
-  const visible =
+  const here =
     learned && learned.length > 0
       ? capTrackerState.items.filter(
           (item) => item.image && learned.includes(imageBasename(item.image))
         )
-      : capTrackerState.items;
-  if (visible.length === 0) {
-    box?.remove();
-    return;
-  }
-  if (!box) {
-    box = document.createElement("div");
-    box.id = "fh-cap-tracker";
-    box.classList.add("fh-cap-tracker");
-    box.style.gap = "4px";
-    box.style.pointerEvents = "auto";
-    const statsZone = document.querySelector("#statszone_main");
-    if (statsZone) {
-      // single line in the bottom bar, right of the currency counts
-      box.style.display = "inline-flex";
-      box.style.flexWrap = "nowrap";
-      box.style.verticalAlign = "middle";
-      box.style.marginLeft = "14px";
-      statsZone.append(box);
-    } else {
-      box.style.display = "flex";
-      box.style.flexWrap = "wrap";
-      box.style.justifyContent = "flex-end";
-      box.style.maxWidth = "180px";
-      box.style.padding = "5px 6px";
-      box.style.borderRadius = "6px";
-      box.style.border = `1px solid ${BORDER_GRAY}`;
-      box.style.backgroundColor = "rgba(20, 20, 20, 0.92)";
-      box.style.position = "fixed";
-      box.style.right = "8px";
-      box.style.bottom = "62px";
-      box.style.zIndex = "5000";
-      document.body.append(box);
-    }
-  }
-  const shown = visible.slice(0, MAX_TRACKER_ITEMS);
-  const signature = JSON.stringify([
-    capTrackerState.cap,
-    visible.length,
-    isCollapsed,
-    shown,
-  ]);
-  if (box.dataset.fhSignature === signature) {
-    return;
-  }
-  box.dataset.fhSignature = signature;
-  box.innerHTML = "";
-  if (isCollapsed) {
-    const atCapCount = visible.filter((item) => item.isAtCap).length;
-    const nearCapCount = visible.length - atCapCount;
-    const summary = document.createElement("span");
-    summary.style.cursor = "pointer";
-    summary.style.display = "inline-flex";
-    summary.style.gap = "6px";
-    summary.style.alignItems = "center";
-    summary.style.fontWeight = "bold";
-    summary.title = `${atCapCount} at cap · ${nearCapCount} near cap — click to expand`;
-    const atCapNumber = document.createElement("span");
-    atCapNumber.style.color = TEXT_ERROR;
-    atCapNumber.textContent = String(atCapCount);
-    const nearCapNumber = document.createElement("span");
-    nearCapNumber.style.color = TEXT_WARNING;
-    nearCapNumber.textContent = String(nearCapCount);
-    summary.append(atCapNumber, nearCapNumber);
-    summary.addEventListener("click", () => setCollapsed(false));
-    box.append(summary);
-    return;
-  }
-  for (const item of shown) {
-    box.append(renderTrackerItem(item));
-  }
-  if (visible.length > shown.length) {
-    const more = document.createElement("a");
-    more.href = "inventory.php";
-    more.textContent = `+${visible.length - shown.length}`;
-    more.title = "More items at/near cap — open inventory";
-    more.style.color = TEXT_WARNING;
-    more.style.fontWeight = "bold";
-    more.style.fontSize = "12px";
-    more.style.alignSelf = "center";
-    more.style.padding = "0 3px";
-    box.append(more);
-  }
-  const collapseButton = document.createElement("span");
-  collapseButton.textContent = "\u2212";
-  collapseButton.title = "Collapse";
-  collapseButton.style.cursor = "pointer";
-  collapseButton.style.color = TEXT_GRAY;
-  collapseButton.style.fontWeight = "bold";
-  collapseButton.style.fontSize = "14px";
-  collapseButton.style.alignSelf = "center";
-  collapseButton.style.padding = "0 3px";
-  collapseButton.addEventListener("click", () => setCollapsed(true));
-  box.append(collapseButton);
+      : undefined;
+  return {
+    cap: capTrackerState.cap,
+    here,
+    isEnabled: isTrackerEnabled,
+    isFetching: capTrackerState.isFetching,
+    items: capTrackerState.items,
+    updatedAt: capTrackerState.updatedAt,
+  };
 };
 
-// every state change funnels through here: mutate, then ask for a repaint.
-// renders coalesce into a single microtask, so a burst of mutations repaints
-// once and no mutation site has to remember to call the renderer.
+const capTrackerListeners: (() => void)[] = [];
+
+export const onCapTrackerChange = (listener: () => void): void => {
+  capTrackerListeners.push(listener);
+};
+
+const notifyCapTracker = (): void => {
+  for (const listener of capTrackerListeners) {
+    listener();
+  }
+};
+
+// The panel's own refresh control: read the inventory now, regardless of the
+// passive interval.
+export const refreshCapTrackerNow = (): Promise<void> => fetchCapTrackerNow();
+
+// every state change funnels through here: mutate, then announce it. Notices
+// coalesce into a single microtask, so a burst of mutations announces once and
+// no mutation site has to remember to do it.
 let isRenderScheduled = false;
 const scheduleRender = (): void => {
   if (isRenderScheduled) {
@@ -399,14 +282,9 @@ const scheduleRender = (): void => {
   isRenderScheduled = true;
   queueMicrotask(() => {
     isRenderScheduled = false;
-    renderCapTracker();
+    notifyCapTracker();
   });
 };
-
-// Crossing the breakpoint changes whether the row is drawn at all, and nothing
-// else would repaint it -- so rotating a phone, or dragging a desktop window
-// narrow, would otherwise leave the tracker in whichever shape it mounted in.
-onLayoutChange(scheduleRender);
 
 const updateFromRoot = (root: HTMLElement): void => {
   const result = collectCapItems(root);
