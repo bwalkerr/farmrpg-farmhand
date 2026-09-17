@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.57
+// @version 1.1.58
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -3112,6 +3112,7 @@ const goals_1 = __webpack_require__(1267);
 const craftworks_2 = __webpack_require__(7831);
 const theme_1 = __webpack_require__(1178);
 const needAdapters_1 = __webpack_require__(1903);
+const inventoryCapWarnings_1 = __webpack_require__(6660);
 const recipes_1 = __webpack_require__(498);
 const api_1 = __webpack_require__(3413);
 const page_1 = __webpack_require__(7952);
@@ -3145,22 +3146,24 @@ const BUTTON_ID = "fh-briefing-button";
 const PANEL_ID = "fh-briefing-panel";
 const STYLE_ID = "fh-briefing-style";
 const MAX_LISTED = 5;
-// Bottom-left, mirroring the cap tracker's floating fallback on the right, so
-// the two never collide and both clear the bottom bar.
+// Bottom-left, clear of the bottom bar. (The cap tracker used to float on the
+// right; it lives in this panel now, so nothing else floats.)
 // env() keeps the button clear of the iOS home indicator and any notch; the
 // fallbacks make it identical to before on anything that does not report insets.
 const EDGE_OFFSET = "calc(8px + env(safe-area-inset-left, 0px))";
 const BOTTOM_OFFSET = "calc(62px + env(safe-area-inset-bottom, 0px))";
 // On a phone the button moves to the RIGHT, at Reed's request: that is where a
-// thumb rests, and the cap tracker -- the only other thing that floats on that
-// side -- is not drawn below MOBILE_MAX_WIDTH, so nothing collides there.
+// thumb rests.
 const RIGHT_OFFSET = "calc(8px + env(safe-area-inset-right, 0px))";
 const TABS = [
     { id: "now", label: "Now" },
     { id: "goals", label: "Goals" },
-    // "Queue" rather than "Craftworks": four labels have to fit 380px, and the
+    // "Queue" rather than "Craftworks": five labels have to fit 380px, and the
     // panel is already inside Craftworks by context
     { id: "craftworks", label: "Queue" },
+    // Items at or near the inventory cap, filtered to what drops where you are.
+    // This used to be a row of icons in the bottom stats bar; see renderCap.
+    { id: "cap", label: "Cap" },
     // Sets is last because it is the one tab you open on purpose rather than to
     // be told something: it has no count badge and nothing in it is time-sensitive
     { id: "sets", label: "Sets" },
@@ -3211,6 +3214,66 @@ const injectStyles = () => {
         font-weight: bold;
         line-height: 18px;
         text-align: center;
+      }
+      /* The cap tracker's count, on the other shoulder of the button: red for
+         items AT cap where you are (every drop of those is thrown away), amber
+         when the worst of it is only near. It is what the row of icons in the
+         stats bar used to be for -- a glance, without opening anything. */
+      #${BUTTON_ID} .fh-cap-badge {
+        position: absolute;
+        top: -2px;
+        left: -2px;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 4px;
+        border-radius: 9px;
+        background: ${theme_1.TEXT_ERROR};
+        color: #fff;
+        font-size: 11px;
+        font-weight: bold;
+        line-height: 18px;
+        text-align: center;
+      }
+      #${BUTTON_ID} .fh-cap-badge[data-level="near"] {
+        background: ${theme_1.TEXT_WARNING};
+        color: #111;
+      }
+      #${PANEL_ID} .fh-cap-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin: 4px 0 8px;
+      }
+      #${PANEL_ID} .fh-cap-item {
+        display: block;
+        line-height: 0;
+        border-radius: 6px;
+        border: 2px solid ${theme_1.TEXT_WARNING};
+      }
+      #${PANEL_ID} .fh-cap-item[data-at-cap="true"] { border-color: ${theme_1.TEXT_ERROR}; }
+      #${PANEL_ID} .fh-cap-item img {
+        width: 28px;
+        height: 28px;
+        border-radius: 4px;
+        display: block;
+      }
+      #${PANEL_ID} .fh-cap-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        padding: 2px 0;
+      }
+      #${PANEL_ID} .fh-cap-row img {
+        width: 18px;
+        height: 18px;
+        border-radius: 3px;
+        flex-shrink: 0;
+      }
+      #${PANEL_ID} .fh-cap-row .fh-cap-count {
+        margin-left: auto;
+        color: ${theme_1.TEXT_GRAY};
+        white-space: nowrap;
       }
       #${PANEL_ID} {
         position: fixed;
@@ -3565,7 +3628,7 @@ const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 // outstanding shows no number at all rather than a zero -- a row of zeroes
 // reads as noise and hides the one number that matters.
 const getTabCounts = (context) => {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     const counts = {};
     const attention = summarizeAttention(context.advice, context.statuses.filter((status) => status.isReady).length);
     if (attention.count > 0) {
@@ -3580,11 +3643,18 @@ const getTabCounts = (context) => {
     if (roots > 0) {
         counts.craftworks = roots;
     }
+    // items at cap where you are (or anywhere, before this spot is learned);
+    // live tracker state rather than the context, same as the button's badge
+    const capView = (0, inventoryCapWarnings_1.getCapTrackerView)();
+    const atCapHere = ((_c = capView.here) !== null && _c !== void 0 ? _c : capView.items).filter((item) => item.isAtCap).length;
+    if (capView.isEnabled && atCapHere > 0) {
+        counts.cap = atCapHere;
+    }
     // Sets is the last tab and has nothing time-sensitive in it, so it earns a
     // badge only when there is a reason to open it: a saved set that matches
     // something you want and is not the one loaded. getRecommendedSet skips the
     // active set, so anything it returns is by definition a change.
-    if ((0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_d = (_c = context.craftworks) === null || _c === void 0 ? void 0 : _c.sets) !== null && _d !== void 0 ? _d : [], context.itemNames)) {
+    if ((0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_e = (_d = context.craftworks) === null || _d === void 0 ? void 0 : _d.sets) !== null && _e !== void 0 ? _e : [], context.itemNames)) {
         counts.sets = 1;
     }
     return counts;
@@ -3605,6 +3675,135 @@ const summarizeAttention = (advice, readyRequests) => {
             readyRequests,
         parts,
     };
+};
+// The cap tracker, as a tab. It draws two things: what drops HERE and is at or
+// near cap (the icon grid -- the glance the old stats-bar row gave, now with
+// room to breathe), and everything at or near cap regardless of where you are
+// (the list). The data is the tracker's own live state, not the panel's
+// context: it refreshes itself off your actions every few seconds, and a
+// figure the panel read on open would be stale by the time it mattered.
+const renderCapItemRow = (item, cap) => {
+    const row = document.createElement("a");
+    row.className = "fh-cap-row";
+    row.href = item.href;
+    const colour = item.isAtCap ? theme_1.TEXT_ERROR : theme_1.TEXT_WARNING;
+    if (item.image) {
+        const icon = document.createElement("img");
+        icon.src = item.image;
+        icon.alt = "";
+        row.append(icon);
+    }
+    const name = document.createElement("span");
+    name.textContent = item.name;
+    name.style.color = colour;
+    const count = document.createElement("span");
+    count.className = "fh-cap-count";
+    count.textContent = `${item.count.toLocaleString()} / ${cap.toLocaleString()}`;
+    row.append(name, count);
+    return row;
+};
+const renderCap = (body, onRefresh) => {
+    const view = (0, inventoryCapWarnings_1.getCapTrackerView)();
+    if (!view.isEnabled) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            "The cap tracker is off — turn on “Inventory: Cap tracker” in settings.",
+        ]));
+        return;
+    }
+    if (view.updatedAt === 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            view.isFetching ? "Reading your inventory…" : "Inventory not read yet.",
+        ]));
+        return;
+    }
+    if (view.here) {
+        body.append((0, gameLinks_1.makeHeading)("Drops here at or near cap"));
+        if (view.here.length === 0) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Nothing — everything here still counts."]));
+        }
+        else {
+            const grid = document.createElement("div");
+            grid.className = "fh-cap-grid";
+            for (const item of view.here) {
+                const tile = document.createElement("a");
+                tile.className = "fh-cap-item";
+                tile.dataset.atCap = String(item.isAtCap);
+                tile.href = item.href;
+                tile.title = `${item.name}: ${item.count.toLocaleString()} / ${view.cap.toLocaleString()}${item.isAtCap ? " — at cap, thrown away" : " — near cap"}`;
+                if (item.image) {
+                    const icon = document.createElement("img");
+                    icon.src = item.image;
+                    icon.alt = item.name;
+                    tile.append(icon);
+                }
+                else {
+                    tile.textContent = item.name;
+                    tile.style.lineHeight = "28px";
+                    tile.style.padding = "0 5px";
+                    tile.style.fontSize = "12px";
+                    tile.style.color = theme_1.TEXT_WHITE;
+                }
+                grid.append(tile);
+            }
+            body.append(grid);
+        }
+    }
+    const atCap = view.items.filter((item) => item.isAtCap);
+    const nearCap = view.items.filter((item) => !item.isAtCap);
+    body.append((0, gameLinks_1.makeHeading)(view.here ? "Everything at or near cap" : "At or near cap"));
+    if (view.items.length === 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Nothing at or near cap."]));
+    }
+    for (const item of [...atCap, ...nearCap]) {
+        body.append(renderCapItemRow(item, view.cap));
+    }
+    const foot = document.createElement("div");
+    foot.style.marginTop = "8px";
+    foot.style.fontSize = "11px";
+    foot.style.color = theme_1.TEXT_GRAY;
+    const refresh = document.createElement("span");
+    refresh.textContent = view.isFetching ? "reading…" : "refresh";
+    refresh.style.cursor = "pointer";
+    refresh.style.textDecoration = "underline";
+    refresh.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onRefresh();
+    });
+    foot.append(`cap ${view.cap.toLocaleString()} · inventory read ${formatAge(view.updatedAt)} · `, refresh);
+    body.append(foot);
+};
+// The count on the button's left shoulder. Counts what is AT cap where you are
+// (or anywhere, when this location's drops aren't known yet); when nothing is
+// at cap it falls back to the near-cap count in amber, and to nothing at all
+// when there is nothing to say. Live: repainted on every tracker change, not
+// only when the panel loads.
+const setCapBadge = () => {
+    var _a;
+    const button = document.querySelector(`#${BUTTON_ID}`);
+    if (!button) {
+        return;
+    }
+    const existing = button.querySelector(".fh-cap-badge");
+    const view = (0, inventoryCapWarnings_1.getCapTrackerView)();
+    const scope = (_a = view.here) !== null && _a !== void 0 ? _a : view.items;
+    const atCap = scope.filter((item) => item.isAtCap).length;
+    const nearCap = scope.length - atCap;
+    if (!view.isEnabled || (atCap === 0 && nearCap === 0)) {
+        existing === null || existing === void 0 ? void 0 : existing.remove();
+        return;
+    }
+    const badge = existing !== null && existing !== void 0 ? existing : document.createElement("span");
+    badge.className = "fh-cap-badge";
+    badge.dataset.level = atCap > 0 ? "at" : "near";
+    badge.textContent = String(atCap > 0 ? atCap : nearCap);
+    const where = view.here ? "here" : "in your inventory";
+    badge.title =
+        atCap > 0
+            ? `${plural(atCap, "item")} at cap ${where}${nearCap > 0 ? `, ${nearCap} near` : ""}`
+            : `${plural(nearCap, "item")} near cap ${where}`;
+    if (!existing) {
+        button.append(badge);
+    }
 };
 const setBadge = (count, parts, isStale = false) => {
     const button = document.querySelector(`#${BUTTON_ID}`);
@@ -4670,11 +4869,28 @@ const ensurePanel = () => {
                 renderSets(body, context, () => load(true));
                 break;
             }
+            case "cap": {
+                renderCap(body, () => {
+                    (0, inventoryCapWarnings_1.refreshCapTrackerNow)().catch((error) => {
+                        console.error("Failed to refresh the cap tracker", error);
+                    });
+                });
+                break;
+            }
             default: {
                 renderCraftworks(body, context, () => load(true), focused);
             }
         }
     };
+    // The tracker refreshes itself off your actions, so the Cap tab and the
+    // button's count follow it rather than the panel's own read.
+    (0, inventoryCapWarnings_1.onCapTrackerChange)(() => {
+        setCapBadge();
+        if (panel.dataset.open === "true" && active === "cap" && context) {
+            draw();
+        }
+    });
+    setCapBadge();
     // When the numbers in `context` were read. The panel outlives navigation, so
     // a figure on screen can be from any point in the session.
     let readAt;
@@ -7486,13 +7702,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.inventoryCapWarnings = void 0;
-const theme_1 = __webpack_require__(1178);
+exports.inventoryCapWarnings = exports.refreshCapTrackerNow = exports.onCapTrackerChange = exports.getCapTrackerView = void 0;
 const page_1 = __webpack_require__(7952);
 const requests_1 = __webpack_require__(3300);
 const inventory_1 = __webpack_require__(4514);
-const layout_1 = __webpack_require__(6253);
 const settings_1 = __webpack_require__(126);
+const theme_1 = __webpack_require__(1178);
 const SETTING_INVENTORY_CAP_WARNINGS = {
     id: settings_1.SettingId.INVENTORY_CAP_WARNINGS,
     title: "Inventory: Cap warnings",
@@ -7502,16 +7717,15 @@ const SETTING_INVENTORY_CAP_WARNINGS = {
 };
 const SETTING_INVENTORY_CAP_TRACKER = {
     id: settings_1.SettingId.INVENTORY_CAP_TRACKER,
-    title: "Inventory: Cap tracker box",
+    title: "Inventory: Cap tracker",
     description: `
-    Show items at or near your inventory cap in a small box above the bottom
-    bar; click an item to open its page
+    Track items at or near your inventory cap: a count on the Farmhand button
+    and a Cap tab in the briefing panel, filtered to what drops where you are
   `,
     type: "boolean",
     defaultValue: true,
 };
 const NEAR_CAP_RATIO = 0.9;
-const MAX_TRACKER_ITEMS = 20;
 const PASSIVE_REFRESH_MS = 10 * 60 * 1000;
 const ACTIVE_DEBOUNCE_MS = 1500;
 const ACTIVE_MIN_INTERVAL_MS = 15 * 1000;
@@ -7549,34 +7763,6 @@ const collectCapItems = (root) => {
     }
     return { cap, items };
 };
-const renderTrackerItem = (item) => {
-    const anchor = document.createElement("a");
-    anchor.href = item.href;
-    const count = item.count.toLocaleString();
-    const cap = capTrackerState.cap.toLocaleString();
-    anchor.title = `${item.name}: ${count} / ${cap}`;
-    anchor.style.display = "block";
-    anchor.style.lineHeight = "0";
-    anchor.style.borderRadius = "5px";
-    anchor.style.border = `2px solid ${item.isAtCap ? theme_1.TEXT_ERROR : theme_1.TEXT_WARNING}`;
-    if (item.image) {
-        const icon = document.createElement("img");
-        icon.src = item.image;
-        icon.style.width = "22px";
-        icon.style.height = "22px";
-        icon.style.borderRadius = "3px";
-        icon.style.display = "block";
-        anchor.append(icon);
-    }
-    else {
-        anchor.style.lineHeight = "22px";
-        anchor.style.padding = "0 4px";
-        anchor.style.fontSize = "12px";
-        anchor.style.color = theme_1.TEXT_WHITE;
-        anchor.textContent = item.name;
-    }
-    return anchor;
-};
 const imageBasename = (source) => { var _a; return ((_a = source.split("/").pop()) !== null && _a !== void 0 ? _a : "").split("?")[0]; };
 // per-location drop lists, learned from the game's own explore/fishing
 // responses (the location pages themselves don't list what drops there).
@@ -7584,26 +7770,11 @@ const imageBasename = (source) => { var _a; return ((_a = source.split("/").pop(
 const LOCATION_DROPS_KEY = "fhCapTrackerLocationDrops";
 let locationDrops = {};
 let locationDropsLoaded = false;
-const COLLAPSED_KEY = "fhCapTrackerCollapsed";
-let isCollapsed = false;
-const setCollapsed = (value) => {
-    isCollapsed = value;
-    GM.setValue(COLLAPSED_KEY, value);
-    scheduleRender();
-};
 const loadLocationDrops = () => {
     if (locationDropsLoaded) {
         return;
     }
     locationDropsLoaded = true;
-    GM.getValue(COLLAPSED_KEY, false)
-        .then((value) => {
-        isCollapsed = Boolean(value);
-        scheduleRender();
-    })
-        .catch(() => {
-        // ignore load failures; default to expanded
-    });
     GM.getValue(LOCATION_DROPS_KEY, {})
         .then((value) => {
         locationDrops = value !== null && value !== void 0 ? value : {};
@@ -7704,123 +7875,39 @@ const learnCurrentLocation = () => {
         learnFromMiningPage(key);
     }
 };
-const renderCapTracker = () => {
-    let box = document.querySelector("#fh-cap-tracker");
-    // Not on a phone. The row is up to 20 item icons wide and the phone's stats
-    // bar has room for the currency counts and the game's own buttons and nothing
-    // else, so wherever it is put it either overflows the bar or pushes the counts
-    // off it. The inventory page's own MAX/NEAR badges are a separate feature and
-    // are unaffected -- the cap information is still there, just not in the bar,
-    // and the briefing panel carries the at-cap warnings on both layouts.
-    if ((0, layout_1.isMobileLayout)()) {
-        box === null || box === void 0 ? void 0 : box.remove();
-        return;
-    }
+const getCapTrackerView = () => {
     const key = getLocationKey();
     const learned = key ? locationDrops[key] : undefined;
-    // filter to this location's known drops; before a location has been
-    // learned (first visit), show everything rather than nothing
-    const visible = learned && learned.length > 0
+    const here = learned && learned.length > 0
         ? capTrackerState.items.filter((item) => item.image && learned.includes(imageBasename(item.image)))
-        : capTrackerState.items;
-    if (visible.length === 0) {
-        box === null || box === void 0 ? void 0 : box.remove();
-        return;
-    }
-    if (!box) {
-        box = document.createElement("div");
-        box.id = "fh-cap-tracker";
-        box.classList.add("fh-cap-tracker");
-        box.style.gap = "4px";
-        box.style.pointerEvents = "auto";
-        const statsZone = document.querySelector("#statszone_main");
-        if (statsZone) {
-            // single line in the bottom bar, right of the currency counts
-            box.style.display = "inline-flex";
-            box.style.flexWrap = "nowrap";
-            box.style.verticalAlign = "middle";
-            box.style.marginLeft = "14px";
-            statsZone.append(box);
-        }
-        else {
-            box.style.display = "flex";
-            box.style.flexWrap = "wrap";
-            box.style.justifyContent = "flex-end";
-            box.style.maxWidth = "180px";
-            box.style.padding = "5px 6px";
-            box.style.borderRadius = "6px";
-            box.style.border = `1px solid ${theme_1.BORDER_GRAY}`;
-            box.style.backgroundColor = "rgba(20, 20, 20, 0.92)";
-            box.style.position = "fixed";
-            box.style.right = "8px";
-            box.style.bottom = "62px";
-            box.style.zIndex = "5000";
-            document.body.append(box);
-        }
-    }
-    const shown = visible.slice(0, MAX_TRACKER_ITEMS);
-    const signature = JSON.stringify([
-        capTrackerState.cap,
-        visible.length,
-        isCollapsed,
-        shown,
-    ]);
-    if (box.dataset.fhSignature === signature) {
-        return;
-    }
-    box.dataset.fhSignature = signature;
-    box.innerHTML = "";
-    if (isCollapsed) {
-        const atCapCount = visible.filter((item) => item.isAtCap).length;
-        const nearCapCount = visible.length - atCapCount;
-        const summary = document.createElement("span");
-        summary.style.cursor = "pointer";
-        summary.style.display = "inline-flex";
-        summary.style.gap = "6px";
-        summary.style.alignItems = "center";
-        summary.style.fontWeight = "bold";
-        summary.title = `${atCapCount} at cap · ${nearCapCount} near cap — click to expand`;
-        const atCapNumber = document.createElement("span");
-        atCapNumber.style.color = theme_1.TEXT_ERROR;
-        atCapNumber.textContent = String(atCapCount);
-        const nearCapNumber = document.createElement("span");
-        nearCapNumber.style.color = theme_1.TEXT_WARNING;
-        nearCapNumber.textContent = String(nearCapCount);
-        summary.append(atCapNumber, nearCapNumber);
-        summary.addEventListener("click", () => setCollapsed(false));
-        box.append(summary);
-        return;
-    }
-    for (const item of shown) {
-        box.append(renderTrackerItem(item));
-    }
-    if (visible.length > shown.length) {
-        const more = document.createElement("a");
-        more.href = "inventory.php";
-        more.textContent = `+${visible.length - shown.length}`;
-        more.title = "More items at/near cap — open inventory";
-        more.style.color = theme_1.TEXT_WARNING;
-        more.style.fontWeight = "bold";
-        more.style.fontSize = "12px";
-        more.style.alignSelf = "center";
-        more.style.padding = "0 3px";
-        box.append(more);
-    }
-    const collapseButton = document.createElement("span");
-    collapseButton.textContent = "\u2212";
-    collapseButton.title = "Collapse";
-    collapseButton.style.cursor = "pointer";
-    collapseButton.style.color = theme_1.TEXT_GRAY;
-    collapseButton.style.fontWeight = "bold";
-    collapseButton.style.fontSize = "14px";
-    collapseButton.style.alignSelf = "center";
-    collapseButton.style.padding = "0 3px";
-    collapseButton.addEventListener("click", () => setCollapsed(true));
-    box.append(collapseButton);
+        : undefined;
+    return {
+        cap: capTrackerState.cap,
+        here,
+        isEnabled: isTrackerEnabled,
+        isFetching: capTrackerState.isFetching,
+        items: capTrackerState.items,
+        updatedAt: capTrackerState.updatedAt,
+    };
 };
-// every state change funnels through here: mutate, then ask for a repaint.
-// renders coalesce into a single microtask, so a burst of mutations repaints
-// once and no mutation site has to remember to call the renderer.
+exports.getCapTrackerView = getCapTrackerView;
+const capTrackerListeners = [];
+const onCapTrackerChange = (listener) => {
+    capTrackerListeners.push(listener);
+};
+exports.onCapTrackerChange = onCapTrackerChange;
+const notifyCapTracker = () => {
+    for (const listener of capTrackerListeners) {
+        listener();
+    }
+};
+// The panel's own refresh control: read the inventory now, regardless of the
+// passive interval.
+const refreshCapTrackerNow = () => fetchCapTrackerNow();
+exports.refreshCapTrackerNow = refreshCapTrackerNow;
+// every state change funnels through here: mutate, then announce it. Notices
+// coalesce into a single microtask, so a burst of mutations announces once and
+// no mutation site has to remember to do it.
 let isRenderScheduled = false;
 const scheduleRender = () => {
     if (isRenderScheduled) {
@@ -7829,13 +7916,9 @@ const scheduleRender = () => {
     isRenderScheduled = true;
     queueMicrotask(() => {
         isRenderScheduled = false;
-        renderCapTracker();
+        notifyCapTracker();
     });
 };
-// Crossing the breakpoint changes whether the row is drawn at all, and nothing
-// else would repaint it -- so rotating a phone, or dragging a desktop window
-// narrow, would otherwise leave the tracker in whichever shape it mounted in.
-(0, layout_1.onLayoutChange)(scheduleRender);
 const updateFromRoot = (root) => {
     const result = collectCapItems(root);
     if (!result) {
@@ -9375,7 +9458,8 @@ const settings_1 = __webpack_require__(126);
 const layout_1 = __webpack_require__(6253);
 const theme_1 = __webpack_require__(1178);
 // A small "● Crafting" pill in the bottom stats bar, right of the currency
-// counts and the cap tracker, showing which perk set is equipped right now.
+// counts, showing which perk set is equipped right now. (The cap tracker used
+// to share this bar; it lives in the briefing panel now.)
 //
 // It replaces the old "…perks activated" notification banner, which was
 // inserted into the page's own content — so it shoved everything below it down,
@@ -9421,13 +9505,11 @@ const BOOT_POLL_MS = 250;
 const BOOT_POLL_LIMIT = 40; // ~10s, then give up until the next page load
 let bootPollsLeft = BOOT_POLL_LIMIT;
 let bootPoll;
-// The pill shares the stats bar with the cap tracker, and both simply append
-// themselves — so which one ends up on the left came down to who mounted first.
-// The tracker waits on an inventory fetch, so on a cold load we win the race and
-// sit left of it; on a reload with cached data it wins and we sit right. Rather
-// than depend on that timing, we keep "last child" as a maintained property: fix
-// the position on every render, and watch the bar so a later arrival (the
-// tracker mounting, or the game rewriting the toolbar) is corrected at once.
+// The pill simply appends itself to the bar, and so does anything else that
+// lands there (the game rewriting the toolbar, another feature's element) — so
+// "last child" is kept as a maintained property rather than a one-time
+// placement: fix the position on every render, and watch the bar so a later
+// arrival is corrected at once.
 const keepRightmost = (statsZone, pill) => {
     if (statsZone.lastElementChild !== pill) {
         statsZone.append(pill);
@@ -10695,7 +10777,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.57" !== void 0 ? "1.1.57" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.58" !== void 0 ? "1.1.58" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
