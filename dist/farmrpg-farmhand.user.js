@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.61
+// @version 1.1.62
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -952,28 +952,23 @@ const getFarmingPerks = () => __awaiter(void 0, void 0, void 0, function* () {
 // so a page reconcile could start its resetperks() while the harvest was in
 // flight and the crops came in with no perks applied at all, one per plot.
 //
-// Afterwards the perks go back to whatever the page you are standing on calls
-// for (the Town set in the vault, Default at home), instead of the old
-// "revert only if a Farming set exists" rule, which left Default equipped in
-// the middle of town after a banner harvest.
+// Afterwards the perks are LEFT on the farm set -- no restore. This is how
+// the wrap worked from the start (1.0.40): switch to Default if it isn't on,
+// harvest, done; the next page you land on reconciles to whatever it calls
+// for. 1.1.55-1.1.61 restored the page's own set right after the reply, and
+// Reed watched it undo the switch before the harvest had visibly landed
+// ("Default never turns green before the harvest is run"), then grow a 2 s
+// settle, a verify read and a 1.5 s hold trying to make that safe. Reed's
+// call: go back to leaving it. The cost is Default staying on in town until
+// you navigate, which the reconciler fixes on the next page transition.
 //
 // It stays snappy where it always was: apply() short-circuits when the set is
 // already confirmed equipped, so harvesting from Home or the farm -- where the
 // reconciler has already put Default on -- costs zero requests.
-// A harvest is one roll that cannot be redone, so its switch waits longer than
-// a sale's before it is trusted, and is checked against the perks page too.
-const ROLL_SETTLE_MS = 2000;
-// And the perks stay put for a moment AFTER the game answers. The game acks
-// activateperkset before it has finished equipping, so there is no reason to
-// assume harvestall's reply means the harvest is fully rolled either -- and
-// the restore that follows starts with resetperks. Reed's read of the symptom
-// was exactly this: "the switch back happens too fast".
-const ROLL_HOLD_MS = 1500;
 const harvestAll = () => (0, perks_1.runGatedAction)({
     label: "harvest",
     set: getFarmingPerks,
-    holdMs: ROLL_HOLD_MS,
-    settleMs: ROLL_SETTLE_MS,
+    restore: false,
     action: () => __awaiter(void 0, void 0, void 0, function* () {
         const farmId = yield exports.farmIdState.get();
         yield (0, requests_2.getJSON)(page_1.Page.WORKER, new URLSearchParams({
@@ -998,8 +993,8 @@ const replantAll = (fromFarmPage) => __awaiter(void 0, void 0, void 0, function*
     yield (0, perks_1.runGatedAction)({
         label: "replant",
         set: getFarmingPerks,
-        holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : ROLL_HOLD_MS,
-        settleMs: ROLL_SETTLE_MS,
+        restore: false,
+        holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : 0,
         action: () => __awaiter(void 0, void 0, void 0, function* () {
             var _a;
             if (fromFarmPage) {
@@ -2108,18 +2103,11 @@ const sendActivate = (set) => __awaiter(void 0, void 0, void 0, function* () {
     }));
     return isAcknowledged(reply, `activate ${set.name}`);
 });
-// The game's own account of which set is active, read fresh. The checkmark
-// on the perks page is written by the same activate we sent, so if it isn't
-// there yet the game has not finished with our request, whatever it acked.
-const readActiveSetId = () => __awaiter(void 0, void 0, void 0, function* () {
-    const state = yield exports.perksState.get({ ignoreCache: true });
-    return state === null || state === void 0 ? void 0 : state.currentPerkSetId;
-});
 // Drive the game to `set`. Only callable from inside a task, which is what
 // guarantees nothing else is touching the perks while the slate is empty.
 // Resolves to whether a real switch happened (false = already confirmed on it),
 // so callers can tell a change from a no-op.
-const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], void 0, function* (set, { settleMs = PERK_SETTLE_MS, verify = false } = {}) {
+const applySet = (set) => __awaiter(void 0, void 0, void 0, function* () {
     // We drove the game here and watched it land, and nothing has cleared the
     // slate since -- so it is genuinely equipped and the whole round trip
     // (reset + activate + settle) can be skipped. This is what makes back-to-back
@@ -2139,23 +2127,7 @@ const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], voi
         if (!wasActivated) {
             wasActivated = yield sendActivate(set);
         }
-        yield delay(settleMs);
-        if (verify && wasActivated) {
-            // The ack says the request arrived; this says the game acted on it.
-            // A mismatch here is the shape of "the set never turned green before
-            // the harvest": the activate was still being applied when we moved on.
-            let activeId = yield readActiveSetId();
-            if (activeId !== set.id) {
-                logPerk(`${set.name} not active yet after ${settleMs}ms (game shows ${activeId !== null && activeId !== void 0 ? activeId : "none"}) — re-activating`);
-                wasActivated = yield sendActivate(set);
-                yield delay(settleMs);
-                activeId = yield readActiveSetId();
-                if (activeId !== set.id) {
-                    wasActivated = false;
-                    logPerk(`${set.name} still not active (game shows ${activeId !== null && activeId !== void 0 ? activeId : "none"})`);
-                }
-            }
-        }
+        yield delay(PERK_SETTLE_MS);
         if (wasCleared && wasActivated) {
             // eslint-disable-next-line require-atomic-updates
             pendingPerkSet = undefined;
@@ -2246,20 +2218,15 @@ const onPerkRestore = (restore) => {
 exports.onPerkRestore = onPerkRestore;
 // Run an action under a specific perk set, with nothing able to switch perks
 // from under it. This is the ONLY way to perform a perk-sensitive action.
-const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, settleMs, }) => (0, exports.runPerkTask)((perks) => __awaiter(void 0, void 0, void 0, function* () {
+const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, }) => (0, exports.runPerkTask)((perks) => __awaiter(void 0, void 0, void 0, function* () {
     const target = yield set();
     if (target) {
         // said before the switch as well as after, so the log timestamps the
         // moment the action started waiting on perks, not just the moment it
         // stopped
         (0, exports.setPerkStatusNote)(`${label} → ${target.name}`);
-        const startedAt = Date.now();
-        // a gated action is the one place a switch is VERIFIED against the perks
-        // page: the roll behind it cannot be redone, so one more request to know
-        // the game agrees is cheap
-        const switched = yield perks.apply(target, { settleMs, verify: true });
-        const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-        (0, exports.setPerkStatusNote)(`${label} → ${target.name}${switched ? ` (switched, ${elapsed}s)` : " (already on)"}`);
+        const switched = yield perks.apply(target);
+        (0, exports.setPerkStatusNote)(`${label} → ${target.name}${switched ? "" : " (already on)"}`);
     }
     else {
         (0, exports.setPerkStatusNote)(`${label}: no set to switch to`);
@@ -11904,9 +11871,10 @@ const resolveDecision = () => __awaiter(void 0, void 0, void 0, function* () {
     return { set: defaultPerks, note: where };
 });
 // Put the page's set on. Used for BOTH halves of the job: the page-transition
-// reconcile, and the restore after a gated action (a banner harvest in the
-// vault leaves the Town set back on, where the old code left Default equipped
-// in the middle of town). One function, so the two can't drift apart.
+// reconcile, and the restore after a quick action. (Harvest and replant opt
+// OUT of the restore: they leave the farm set on and let the next page
+// transition reconcile, the way the wrap worked from 1.0.40 -- see
+// apis/farm.ts.) One function, so the two can't drift apart.
 //
 // Called with a live session, so it must never enqueue a task of its own.
 const applyDecision = (perks) => __awaiter(void 0, void 0, void 0, function* () {
@@ -12713,7 +12681,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.61" !== void 0 ? "1.1.61" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.62" !== void 0 ? "1.1.62" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
