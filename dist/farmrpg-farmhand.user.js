@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.62
+// @version 1.1.63
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -505,7 +505,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.restoreQueue = exports.setQueueRunning = exports.activateSet = exports.craftworksState = void 0;
+exports.restoreQueue = exports.setQueueRunning = exports.saveSet = exports.activateSet = exports.craftworksState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3300);
 const craftworks_1 = __webpack_require__(7831);
@@ -596,6 +596,47 @@ const activateSet = (setId_1, previous_1, ...args_1) => __awaiter(void 0, [setId
     return { message: "Set loaded.", ok: true, previous };
 });
 exports.activateSet = activateSet;
+// Save an ordered list of items as a named set WITHOUT touching the live queue.
+//
+// This is the game's own share-page button (`.saveitemsetbtn` -> `savecwset`
+// with `cwsetname` and `cwitems`), which saves someone else's shared set as
+// yours in one request; the only difference here is that the list comes from
+// the panel's plan rather than a share code. `cwitems` is `id|1,id|2,...`, the
+// same string craftworks.js builds from the queue when saving from the page.
+// Loading the saved set afterwards is the usual (destructive, confirmed)
+// activateSet.
+const saveSet = (name, itemIds) => __awaiter(void 0, void 0, void 0, function* () {
+    const cwitems = itemIds.map((id, index) => `${id}|${index + 1}`).join(",");
+    let result;
+    try {
+        result = yield postWorker(new URLSearchParams({ go: "savecwset", cwsetname: name, cwitems }));
+    }
+    catch (_a) {
+        return { message: "The set could not be saved.", ok: false };
+    }
+    switch (result) {
+        case "success": {
+            yield exports.craftworksState.get({ ignoreCache: true });
+            return { message: "Set saved.", ok: true };
+        }
+        case "invalidname": {
+            return {
+                message: "The game rejected that set name (already used, or too long).",
+                ok: false,
+            };
+        }
+        case "missingfields": {
+            return { message: "The game wanted a name and items.", ok: false };
+        }
+        default: {
+            return {
+                message: `The game answered "${result || "nothing"}".`,
+                ok: false,
+            };
+        }
+    }
+});
+exports.saveSet = saveSet;
 // Start or stop every slot. Neither call takes parameters, and both are
 // reversible, so this needs no confirmation the way loading a set does.
 const setQueueRunning = (play) => __awaiter(void 0, void 0, void 0, function* () {
@@ -2450,13 +2491,71 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.findTownsfolkLink = exports.townsfolkState = exports.parseTownsfolkPage = void 0;
+exports.findTownsfolkLink = exports.isSamePerson = exports.townsfolkState = exports.parseTownsfolkPage = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3300);
 const page_1 = __webpack_require__(7952);
+// Words the game is likely to use next to the bonus townsperson. The page
+// shape has never been captured, so this is a GUESS with a wide net: a hit is
+// logged with the rule that fired, and a miss is logged asking for the markup.
+const BONUS_TEXT = /\b(bonus|double|2x|extra|boost(?:ed)?|today(?:'s)?|daily|featured)\b/i;
+// The visible lines of an element, one text node at a time: the game separates
+// a name from its level and hearts with <br>, which textContent runs together,
+// and whether its markup carries newlines between them is not something to
+// depend on.
+const textLines = (element) => {
+    var _a, _b;
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const lines = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const line = (_b = (_a = node.textContent) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "";
+        if (line.length > 0) {
+            lines.push(line);
+        }
+    }
+    return lines;
+};
+const BADGE_CLASS = /star|bonus|daily|highlight|featured/i;
+const BADGE_SELECTOR = '[class*="star"], [class*="bonus"], [class*="daily"], [class*="highlight"], [class*="featured"]';
+const findHighlight = (anchor, name) => {
+    var _a, _b;
+    const container = (_a = anchor.closest("li")) !== null && _a !== void 0 ? _a : anchor;
+    // (1) the row says so in words
+    const said = textLines(container).find((line) => line !== name && BONUS_TEXT.test(line));
+    if (said) {
+        return { matchedBy: "text", reason: said.slice(0, 60) };
+    }
+    // (2) a badge-like element: a star icon, or a class that names the bonus
+    const badge = container.querySelector(BADGE_SELECTOR);
+    if (badge) {
+        const className = [...badge.classList].find((entry) => BADGE_CLASS.test(entry));
+        return {
+            matchedBy: `badge .${className !== null && className !== void 0 ? className : badge.className}`,
+            reason: "featured today",
+        };
+    }
+    // (3) the row is painted: an inline background or border on the row, the
+    // link or its title, which the plain rows do not carry
+    for (const element of [
+        container,
+        anchor,
+        anchor.querySelector(".item-title"),
+        anchor.querySelector(".item-inner"),
+    ]) {
+        const style = (_b = element === null || element === void 0 ? void 0 : element.getAttribute("style")) !== null && _b !== void 0 ? _b : "";
+        if (/background|border|box-shadow|outline/i.test(style)) {
+            return {
+                matchedBy: `style ${style.slice(0, 40)}`,
+                reason: "featured today",
+            };
+        }
+    }
+    return undefined;
+};
 const parseTownsfolkPage = (root) => {
-    var _a, _b, _c, _d;
+    var _a, _b, _c;
     const seen = new Map();
+    let dailyFriend;
     for (const anchor of root.querySelectorAll("a[href]")) {
         const href = (_a = anchor.getAttribute("href")) !== null && _a !== void 0 ? _a : "";
         // a townsperson's own page, whatever the game calls it, carries an id;
@@ -2466,40 +2565,57 @@ const parseTownsfolkPage = (root) => {
         }
         // the visible name is the first line of the link's text; levels and
         // hearts follow it on their own lines
-        const name = ((_b = anchor.textContent) !== null && _b !== void 0 ? _b : "")
-            .split("\n")
-            .map((line) => line.trim())
-            .find((line) => line.length > 0);
+        const [name] = textLines(anchor);
         if (!name || seen.has(name.toLowerCase())) {
             continue;
         }
-        seen.set(name.toLowerCase(), {
+        const link = {
             href,
-            image: (_d = (_c = anchor.querySelector("img")) === null || _c === void 0 ? void 0 : _c.getAttribute("src")) !== null && _d !== void 0 ? _d : undefined,
+            image: (_c = (_b = anchor.querySelector("img")) === null || _b === void 0 ? void 0 : _b.getAttribute("src")) !== null && _c !== void 0 ? _c : undefined,
             name,
-        });
+        };
+        seen.set(name.toLowerCase(), link);
+        if (!dailyFriend) {
+            const highlight = findHighlight(anchor, name);
+            if (highlight) {
+                dailyFriend = Object.assign(Object.assign({}, link), highlight);
+            }
+        }
     }
-    return [...seen.values()];
+    return { dailyFriend, links: [...seen.values()] };
 };
 exports.parseTownsfolkPage = parseTownsfolkPage;
 exports.townsfolkState = new state_1.CachedState(state_1.StorageKey.TOWNSFOLK, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_1.getHTML)(page_1.Page.FRIENDSHIP, new URLSearchParams());
-    const links = (0, exports.parseTownsfolkPage)(response.body);
+    const { dailyFriend, links } = (0, exports.parseTownsfolkPage)(response.body);
     if (links.length === 0) {
         console.warn("[Farmhand] no townsfolk links found on the townsfolk page");
     }
-    return { links, updatedAt: Date.now() };
+    else if (dailyFriend) {
+        console.info(`[Farmhand] daily friend: ${dailyFriend.name} (${dailyFriend.matchedBy}: ${dailyFriend.reason})`);
+    }
+    else {
+        console.info("[Farmhand] no daily-friend highlight recognised on the townsfolk page — the row's markup is needed to pin it");
+    }
+    return { dailyFriend, links, updatedAt: Date.now() };
 }), {
-    timeout: 60 * 60 * 24, // 1 day
+    // the links change never, the daily friend changes at the game's reset;
+    // an hour keeps the badge honest for the cost of one read per hour of play
+    timeout: 60 * 60,
     defaultState: { links: [], updatedAt: 0 },
 });
 // Case-insensitive, and tolerant of the honorifics buddy.farm keeps that the
 // game's list might not ("Charles Horsington III" vs "Charles").
+const isSamePerson = (a, b) => {
+    const left = a.trim().toLowerCase();
+    const right = b.trim().toLowerCase();
+    return left === right || left.startsWith(right) || right.startsWith(left);
+};
+exports.isSamePerson = isSamePerson;
 const findTownsfolkLink = (links, name) => {
     var _a;
     const wanted = name.trim().toLowerCase();
-    return ((_a = links.find((link) => link.name.toLowerCase() === wanted)) !== null && _a !== void 0 ? _a : links.find((link) => wanted.startsWith(link.name.toLowerCase()) ||
-        link.name.toLowerCase().startsWith(wanted)));
+    return ((_a = links.find((link) => link.name.toLowerCase() === wanted)) !== null && _a !== void 0 ? _a : links.find((link) => (0, exports.isSamePerson)(link.name, wanted)));
 };
 exports.findTownsfolkLink = findTownsfolkLink;
 
@@ -3254,12 +3370,44 @@ const getAffinities = (itemName) => __awaiter(void 0, void 0, void 0, function* 
     const rank = (affinity) => affinity.relationship === "loves" ? 0 : 1;
     return affinities.sort((a, b) => rank(a) - rank(b));
 });
-const makeAffinityTags = (affinities, links) => affinities.slice(0, 4).map((affinity) => {
-    const link = (0, townsfolk_1.findTownsfolkLink)(links, affinity.name);
-    const tag = (0, shared_1.makeTag)(`${affinity.relationship === "loves" ? "♥" : "♡"} ${affinity.name}`, affinity.relationship === "loves" ? "accent" : "muted", link === null || link === void 0 ? void 0 : link.href);
-    tag.title = `${affinity.name} ${affinity.relationship} this${link ? " — open their page to give it" : ""}`;
-    return tag;
-});
+// Today's friend first, then loves before likes: a gift to the townsperson on
+// bonus XP is worth more than the same gift tomorrow, whoever loves it.
+const makeAffinityTags = (affinities, links, dailyFriend) => {
+    const isDaily = (affinity) => dailyFriend !== undefined && (0, townsfolk_1.isSamePerson)(affinity.name, dailyFriend.name);
+    const ordered = [...affinities].sort((a, b) => Number(isDaily(b)) - Number(isDaily(a)));
+    return ordered.slice(0, 4).map((affinity) => {
+        const link = (0, townsfolk_1.findTownsfolkLink)(links, affinity.name);
+        const heart = affinity.relationship === "loves" ? "♥" : "♡";
+        const daily = isDaily(affinity);
+        let tone = "muted";
+        if (daily) {
+            tone = "ok";
+        }
+        else if (affinity.relationship === "loves") {
+            tone = "accent";
+        }
+        const tag = (0, shared_1.makeTag)(`${daily ? "★ " : ""}${heart} ${affinity.name}`, tone, link === null || link === void 0 ? void 0 : link.href);
+        tag.title = `${affinity.name} ${affinity.relationship} this${daily
+            ? ` — and gets extra friendship XP today (${dailyFriend === null || dailyFriend === void 0 ? void 0 : dailyFriend.reason})`
+            : ""}${link ? " — open their page to give it" : ""}`;
+        return tag;
+    });
+};
+// The townsperson on bonus friendship XP today, as a card at the top of the
+// tab: it is the answer to "who do I give all this to" before any item is.
+const makeDailyFriendCard = (friend) => {
+    const { card, body } = (0, shared_1.makeCard)("Daily friend", {
+        aside: "extra XP today",
+        tone: "ok",
+    });
+    body.append((0, shared_1.makeRow)(`★ ${friend.name}`, {
+        href: friend.href,
+        icon: (0, shared_1.toIconUrl)(friend.image),
+        sub: [friend.reason],
+        tone: "ok",
+    }));
+    return card;
+};
 const makeCapRow = (item, cap) => (0, shared_1.makeRow)(item.name, {
     aside: [`${item.count.toLocaleString()} / ${cap.toLocaleString()}`],
     href: item.href,
@@ -3276,6 +3424,21 @@ const renderCapTab = (body, onRefresh) => {
         body.append((0, shared_1.makeEmpty)(view.isFetching ? "Reading your inventory…" : "Inventory not read yet."));
         return;
     }
+    // Read once for the tab: the daily friend for the card, the links for the
+    // tags. The card lands asynchronously at the top, ahead of everything the
+    // sync draw below puts there; the tags wait on the same read.
+    const townsfolk = (0, promise_1.orUndefined)(townsfolk_1.townsfolkState.get());
+    const dailyFriendSlot = document.createElement("div");
+    body.append(dailyFriendSlot);
+    townsfolk
+        .then((snapshot) => {
+        if ((snapshot === null || snapshot === void 0 ? void 0 : snapshot.dailyFriend) && dailyFriendSlot.isConnected) {
+            dailyFriendSlot.replaceWith(makeDailyFriendCard(snapshot.dailyFriend));
+        }
+    })
+        .catch((error) => {
+        console.error("Failed to read the townsfolk page", error);
+    });
     if (view.here) {
         const { card, body: cardBody } = (0, shared_1.makeCard)("Drops here at or near cap", {
             aside: view.here.length > 0 ? String(view.here.length) : undefined,
@@ -3362,10 +3525,12 @@ const renderCapTab = (body, onRefresh) => {
         return;
     }
     const fill = () => __awaiter(void 0, void 0, void 0, function* () {
-        const [links, ...affinities] = yield Promise.all([
-            (0, promise_1.orUndefined)(townsfolk_1.townsfolkState.get()).then((snapshot) => { var _a; return (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.links) !== null && _a !== void 0 ? _a : []; }),
+        var _a;
+        const [snapshot, ...affinities] = yield Promise.all([
+            townsfolk,
             ...lookups.map((item) => getAffinities(item.name)),
         ]);
+        const links = (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.links) !== null && _a !== void 0 ? _a : [];
         for (const [index, item] of lookups.entries()) {
             const row = rows.get(item.name);
             const found = affinities[index];
@@ -3378,7 +3543,7 @@ const renderCapTab = (body, onRefresh) => {
             }
             const tags = document.createElement("span");
             tags.className = "fh-row-tags";
-            tags.append(...makeAffinityTags(found, links));
+            tags.append(...makeAffinityTags(found, links, snapshot === null || snapshot === void 0 ? void 0 : snapshot.dailyFriend));
             main.append(tags);
         }
     });
@@ -4245,6 +4410,200 @@ const renderLookup = (body, context, lookup, focused, open) => __awaiter(void 0,
 exports.renderLookup = renderLookup;
 const lookupTitle = (lookup) => lookup.name;
 exports.lookupTitle = lookupTitle;
+
+
+/***/ }),
+
+/***/ 9454:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.renderQueuePlans = exports.buildQueuePlans = exports.isFedByDrops = exports.toSetName = void 0;
+const needs_1 = __webpack_require__(2538);
+const gameLinks_1 = __webpack_require__(1616);
+const craftworks_1 = __webpack_require__(7831);
+const craftworks_2 = __webpack_require__(920);
+const theme_1 = __webpack_require__(1178);
+// The game's set-name field is short; keep the prefix so the panel's own sets
+// are recognisable in "My Item Sets" and can be told from Reed's loadouts.
+const SET_NAME_LIMIT = 32;
+const SET_NAME_PREFIX = "Plan: ";
+const toSetName = (label) => `${SET_NAME_PREFIX}${label}`
+    .replaceAll(/[^\s\w':-]/g, "")
+    .replaceAll(/\s+/g, " ")
+    .trim()
+    .slice(0, SET_NAME_LIMIT)
+    .trim();
+exports.toSetName = toSetName;
+const describeScope = (context, focused) => {
+    const labels = context.resolved.scopes
+        .filter((scope) => focused.has(scope.rootId))
+        .map((scope) => scope.label);
+    if (labels.length === 0) {
+        return "all goals";
+    }
+    if (labels.length === 1) {
+        return labels[0];
+    }
+    return `${labels[0]} +${labels.length - 1}`;
+};
+// Whether anything in `name`'s craft chain drops at the spot in view. Walks
+// ingredients depth-first with a seen-set, so a cyclic or unknown recipe
+// costs nothing worse than a "no".
+const isFedByDrops = (graph, name, drops, seen = new Set()) => {
+    const node = graph.nodes.get(name);
+    if (!node) {
+        return false;
+    }
+    for (const ingredient of node.ingredients) {
+        if (drops.has(ingredient.name)) {
+            return true;
+        }
+        if (!seen.has(ingredient.name)) {
+            seen.add(ingredient.name);
+            if ((0, exports.isFedByDrops)(graph, ingredient.name, drops, seen)) {
+                return true;
+            }
+        }
+    }
+    return false;
+};
+exports.isFedByDrops = isFedByDrops;
+const toProposal = (context, steps, maxSlots) => {
+    var _a, _b;
+    return (0, craftworks_1.planCraftworksQueue)({ steps, target: (_b = (_a = steps[0]) === null || _a === void 0 ? void 0 : _a.name) !== null && _b !== void 0 ? _b : "" }, context.inventory, context.cap, maxSlots, context.unlimited);
+};
+const buildQueuePlans = (context, focused) => {
+    var _a;
+    const { craftworks, graph, here, inventory, resolved, unlimited } = context;
+    if (!craftworks) {
+        return [];
+    }
+    const maxSlots = (_a = craftworks.maxSlots) !== null && _a !== void 0 ? _a : craftworks.slots.length;
+    const desired = (0, needs_1.getDesiredQueueForNeeds)(graph, resolved, inventory, unlimited, focused);
+    if (desired.length === 0) {
+        return [];
+    }
+    const plans = [];
+    const label = describeScope(context, focused);
+    plans.push(Object.assign(Object.assign({}, toProposal(context, desired, maxSlots)), { label, setName: (0, exports.toSetName)(label) }));
+    if (here) {
+        const { location } = here;
+        const drops = new Set(location.drops.map((drop) => drop.name));
+        const fed = desired.filter((entry) => (0, exports.isFedByDrops)(graph, entry.name, drops));
+        // only worth a second list when it is genuinely narrower
+        if (fed.length > 0 && fed.length < desired.length) {
+            plans.push(Object.assign(Object.assign({}, toProposal(context, fed, maxSlots)), { label: `at ${location.name}`, setName: (0, exports.toSetName)(location.name) }));
+        }
+    }
+    return plans;
+};
+exports.buildQueuePlans = buildQueuePlans;
+// Two presses, like loading a set: the second names exactly what it saves.
+const makeSaveControl = (plan, context, reload, onFailure) => {
+    var _a;
+    const { graph } = context;
+    const ids = [];
+    const unknown = [];
+    for (const entry of plan.entries) {
+        const id = (_a = graph.nodes.get(entry.name)) === null || _a === void 0 ? void 0 : _a.id;
+        if (id) {
+            ids.push(String(id));
+        }
+        else {
+            unknown.push(entry.name);
+        }
+    }
+    const action = document.createElement("a");
+    action.href = "#";
+    action.style.color = theme_1.TEXT_SUCCESS;
+    action.style.fontSize = "12px";
+    action.style.textDecoration = "underline";
+    action.textContent = `save as set “${plan.setName}”`;
+    let armed = false;
+    action.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!armed) {
+            armed = true;
+            action.textContent = `confirm — saves ${ids.length} item${ids.length === 1 ? "" : "s"} as “${plan.setName}”${unknown.length > 0 ? ` (no id for ${unknown.join(", ")})` : ""}`;
+            action.style.color = theme_1.TEXT_WARNING;
+            return;
+        }
+        action.textContent = "saving…";
+        action.style.color = theme_1.TEXT_GRAY;
+        const result = yield (0, craftworks_2.saveSet)(plan.setName, ids);
+        if (result.ok) {
+            reload();
+            return;
+        }
+        action.textContent = "save failed";
+        action.style.color = theme_1.TEXT_ERROR;
+        onFailure((0, gameLinks_1.makeMutedText)(` ${result.message}`));
+    }));
+    return action;
+};
+const renderQueuePlans = (body, context, focused, reload, 
+// the panel's own set loader, so a saved plan loads the same confirmed,
+// restorable way as any other set
+makeLoadControl) => {
+    var _a, _b;
+    const { craftworks, graph } = context;
+    if (!craftworks) {
+        return;
+    }
+    const plans = (0, exports.buildQueuePlans)(context, focused);
+    for (const plan of plans) {
+        body.append((0, gameLinks_1.makeHeading)(`Queue plan — ${plan.label}`));
+        for (const entry of plan.entries) {
+            const slot = craftworks.slots.find((s) => s.name === entry.name);
+            const color = slot ? theme_1.TEXT_SUCCESS : theme_1.TEXT_WARNING;
+            const parts = [
+                `${entry.position}. `,
+                (0, gameLinks_1.makeItemLink)(entry.name, (_a = graph.nodes.get(entry.name)) === null || _a === void 0 ? void 0 : _a.id, color),
+                ` ×${entry.quantity.toLocaleString()}`,
+            ];
+            if (slot) {
+                parts.push(slot.position === entry.position
+                    ? " — queued"
+                    : ` — queued at ${slot.position}`);
+            }
+            else {
+                parts.push(" — not queued");
+            }
+            body.append((0, gameLinks_1.makeLinkedLine)(color, parts));
+        }
+        if (plan.dropped.length > 0) {
+            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+                `left out: ${plan.dropped
+                    .map((entry) => `${entry.name} (${entry.reason})`)
+                    .join(", ")}`,
+            ]));
+        }
+        const saved = ((_b = craftworks.sets) !== null && _b !== void 0 ? _b : []).find((set) => set.name.toLowerCase() === plan.setName.toLowerCase());
+        const line = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            saved ? `saved as “${saved.name}” — ` : "",
+        ]);
+        if (saved) {
+            line.append(makeLoadControl(saved, (node) => line.append(node)));
+        }
+        else if (plan.entries.length > 0) {
+            line.append(makeSaveControl(plan, context, reload, (node) => line.append(node)));
+        }
+        body.append(line);
+    }
+};
+exports.renderQueuePlans = renderQueuePlans;
 
 
 /***/ }),
@@ -5607,7 +5966,6 @@ const recipes_1 = __webpack_require__(498);
 const api_1 = __webpack_require__(3413);
 const inventoryCapWarnings_1 = __webpack_require__(6660);
 const page_1 = __webpack_require__(7952);
-const needs_1 = __webpack_require__(2538);
 const focusScope_1 = __webpack_require__(1307);
 const suggestions_1 = __webpack_require__(9262);
 const focus_1 = __webpack_require__(7167);
@@ -5626,6 +5984,8 @@ const promise_1 = __webpack_require__(6762);
 const unlimited_1 = __webpack_require__(4808);
 const cap_1 = __webpack_require__(2206);
 const here_1 = __webpack_require__(7190);
+const queuePlan_1 = __webpack_require__(9454);
+const needs_1 = __webpack_require__(2538);
 const theme_1 = __webpack_require__(1178);
 const SETTING_BRIEFING_PANEL = {
     id: settings_1.SettingId.BRIEFING_PANEL,
@@ -6232,8 +6592,8 @@ const makeQueueToggle = (craftworks, reload) => {
     return toggle;
 };
 const renderCraftworks = (body, context, reload, focused) => {
-    var _a, _b, _c;
-    const { advice, cap, craftworks, graph, inventory, mastery, resolved, unlimited, } = context;
+    var _a, _b;
+    const { advice, cap, craftworks, inventory, mastery, resolved } = context;
     if (!advice || !craftworks) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Could not read the Craftworks queue."]));
         return;
@@ -6300,34 +6660,19 @@ const renderCraftworks = (body, context, reload, focused) => {
                 .join(", ")}`,
         ]));
     }
-    // Suggestions are goal-driven when there are goals; otherwise the queue's own
-    // stalled slots are the only thing there is to reason from.
-    // Everything that wants something, at the quantity it wants: tracked goals,
-    // open requests and the queue's own stalled slots. The old list was tracked
-    // goals alone, falling back to ONE of each thing a slot was stalled on --
-    // which is how the queue filled up with single units of things nothing
-    // actually needed much of.
-    const desired = (0, needs_1.getDesiredQueueForNeeds)(graph, resolved, inventory, unlimited, 
-    // with focus set the queue works on those undertakings alone
-    focused);
-    const suggestions = (0, craftworks_2.suggestQueueChanges)(desired, craftworks.slots, inventory, cap, maxSlots, unlimited);
-    if (suggestions.length > 0) {
-        body.append((0, gameLinks_1.makeHeading)("Suggested changes"));
-        for (const suggestion of suggestions) {
-            const color = suggestion.action === "drop" ? theme_1.TEXT_ERROR : theme_1.TEXT_SUCCESS;
-            body.append((0, gameLinks_1.makeLinkedLine)(color, [
-                suggestion.action === "drop" ? "remove " : "add ",
-                (0, gameLinks_1.makeItemLink)(suggestion.name, (_c = graph.nodes.get(suggestion.name)) === null || _c === void 0 ? void 0 : _c.id, color),
-                ` — ${suggestion.reason}`,
-            ]));
-        }
-        // only when there is genuinely nothing to aim at -- suggestions now come
-        // from open requests and stalled slots too, not tracked goals alone
-        if (resolved.scopes.length === 0) {
-            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
-                "Track a goal to get suggestions aimed at something.",
-            ]));
-        }
+    // The queue the panel would build for what you are doing -- focused
+    // undertakings, and the slice of that fed by the spot you are standing at --
+    // each row marked queued / not queued against the live slots, and saveable
+    // as a set in one press. This replaced the add/remove diff ("Suggested
+    // changes"): the plan says the same thing in the order the queue wants, and
+    // dead slots are already red in the live list above.
+    (0, queuePlan_1.renderQueuePlans)(body, context, focused, reload, (set, onFailure) => makeSetLoadControl(set, context, reload, onFailure));
+    // only when there is genuinely nothing to aim at -- the plan costs open
+    // requests and stalled slots too, not tracked goals alone
+    if (resolved.scopes.length === 0) {
+        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
+            "Track a goal to get a queue plan aimed at something.",
+        ]));
     }
 };
 // Loading a set is destructive: it clears the queue first. So it takes two
@@ -12681,7 +13026,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.62" !== void 0 ? "1.1.62" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.63" !== void 0 ? "1.1.63" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
