@@ -1,5 +1,5 @@
 import { LocationRef } from "~/api/buddyfarm/api";
-import { TEXT_GRAY, TEXT_WHITE } from "~/utils/theme";
+import { TEXT_GRAY } from "~/utils/theme";
 
 // Framework7 only routes a click through its own navigation when the anchor
 // declares which view to load into. Without this the link does a full page
@@ -106,14 +106,19 @@ export const makeMutedText = (text: string): HTMLSpanElement => {
 
 // Section label inside the briefing panel. Shared so anything that renders a
 // block into that body -- or into a panel built like it -- looks the same.
+//
+// Same type as the briefing panel's card heads (briefing/styles.ts), so a tab
+// still built from plain headings sits next to one built from cards without a
+// visible seam.
 export const makeHeading = (text: string): HTMLDivElement => {
   const heading = document.createElement("div");
+  heading.className = "fh-heading";
   heading.textContent = text;
-  heading.style.color = TEXT_WHITE;
-  heading.style.fontSize = "11px";
-  heading.style.fontWeight = "bold";
-  heading.style.letterSpacing = "0.4px";
+  heading.style.color = "#9aa0a6";
+  heading.style.fontSize = "10.5px";
+  heading.style.fontWeight = "600";
+  heading.style.letterSpacing = "0.6px";
   heading.style.textTransform = "uppercase";
-  heading.style.margin = "12px 0 4px";
+  heading.style.margin = "12px 0 5px";
   return heading;
 };

@@ -178,8 +178,13 @@ export const questDataState = new CachedState<QuestDetail, string>(
 
 interface LocationDropProfile {
   ironDepot: boolean | null;
-  items: { item: { id: number; name: string }; rate: number }[];
+  items: {
+    item: { id: number; image?: string; name: string };
+    rate: number;
+  }[];
   runecube: boolean | null;
+  silverPerHit?: number;
+  xpPerHit?: number;
 }
 
 interface LocationPageDataResponse {
@@ -199,6 +204,7 @@ interface LocationPageDataResponse {
 
 export interface LocationDrop {
   id: number;
+  image?: string;
   name: string;
   // expected attempts for one unit, buddy.farm's "1 in N"
   rate: number;
@@ -209,7 +215,10 @@ export interface LocationRef {
   drops: LocationDrop[];
   id: number;
   name: string;
+  // per explore / cast, from the same no-perks profile the rates come from
+  silverPerHit?: number;
   type: "explore" | "fishing";
+  xpPerHit?: number;
 }
 
 // A location's in-game id, so drop advice can link straight to the place
@@ -250,7 +259,8 @@ export const locationDataState = new CachedState<LocationRef, string>(
       (profile) => !profile.ironDepot && !profile.runecube
     );
     const best = new Map<string, LocationDrop>();
-    for (const profile of plain.length > 0 ? plain : profiles) {
+    const chosen = plain.length > 0 ? plain : profiles;
+    for (const profile of chosen) {
       for (const entry of profile.items ?? []) {
         if (!entry.item?.name || !entry.rate) {
           continue;
@@ -259,17 +269,28 @@ export const locationDataState = new CachedState<LocationRef, string>(
         if (!existing || entry.rate < existing.rate) {
           best.set(entry.item.name, {
             id: entry.item.id,
+            image: entry.item.image,
             name: entry.item.name,
             rate: entry.rate,
           });
         }
       }
     }
+    // the per-hit figures come with the profile; take the best of the ones we
+    // quoted rates from, so the two never describe different assumptions
+    const silverPerHit = Math.max(
+      ...chosen.map((profile) => profile.silverPerHit ?? 0)
+    );
+    const xpPerHit = Math.max(
+      ...chosen.map((profile) => profile.xpPerHit ?? 0)
+    );
     return {
       drops: [...best.values()].sort((a, b) => a.rate - b.rate),
       id,
       name: location.name,
+      silverPerHit: silverPerHit > 0 ? silverPerHit : undefined,
       type: location.type,
+      xpPerHit: xpPerHit > 0 ? xpPerHit : undefined,
     };
   },
   {

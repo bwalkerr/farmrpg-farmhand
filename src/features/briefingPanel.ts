@@ -5,44 +5,32 @@ import {
   restoreQueue,
   setQueueRunning,
 } from "~/api/farmrpg/apis/craftworks";
-import {
-  addGoal,
-  getGoalProgress,
-  getGoals,
-  GoalProgress,
-  removeGoal,
-  TrackedGoal,
-} from "~/utils/goals";
+import { addGoal, getGoalProgress, getGoals, removeGoal } from "~/utils/goals";
 import { Advice, adviseOnSlots, suggestQueueChanges } from "~/utils/craftworks";
 import {
-  BORDER_GRAY,
-  TEXT_ERROR,
-  TEXT_GRAY,
-  TEXT_SUCCESS,
-  TEXT_WARNING,
-  TEXT_WHITE,
-} from "~/utils/theme";
+  appendMore,
+  BUTTON_ID,
+  Context,
+  formatAge,
+  MAX_LISTED,
+  PANEL_ID,
+  plural,
+} from "./briefing/shared";
 import { buildNeeds } from "~/utils/needAdapters";
-import {
-  CapItem,
-  getCapTrackerView,
-  onCapTrackerChange,
-  refreshCapTrackerNow,
-} from "./inventoryCapWarnings";
 import { Feature, FeatureSetting } from "../utils/feature";
 import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import {
   getBasicItems,
   getLocationEntries,
   locationDataState,
-  LocationRef,
 } from "~/api/buddyfarm/api";
-import { getCurrentPage, Page } from "~/utils/page";
 import {
-  getDesiredQueueForNeeds,
-  ResolvedNeeds,
-  resolveNeeds,
-} from "~/utils/needs";
+  getCapTrackerView,
+  onCapTrackerChange,
+  refreshCapTrackerNow,
+} from "./inventoryCapWarnings";
+import { getCurrentPage, Page } from "~/utils/page";
+import { getDesiredQueueForNeeds, resolveNeeds } from "~/utils/needs";
 import { getFocusedScopes, setFocusedScopes } from "~/utils/focusScope";
 import {
   getFrozenMastery,
@@ -52,20 +40,8 @@ import {
   getSetSuggestions,
   GoalSuggestion,
 } from "~/utils/suggestions";
-import {
-  getGoalStatuses,
-  getNearlyDone,
-  GoalStatus,
-  mergeMissing,
-  rankBottlenecks,
-} from "~/utils/focus";
+import { getGoalStatuses, getNearlyDone, GoalStatus } from "~/utils/focus";
 import { getHTML } from "~/api/farmrpg/utils/requests";
-import {
-  getLocationAdvice,
-  matchLocationByImage,
-  matchLocationName,
-  parseStamina,
-} from "~/utils/locationAdvice";
 import {
   getPerkLog,
   getPerkStatus,
@@ -73,20 +49,32 @@ import {
 } from "~/api/farmrpg/apis/perks";
 import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
 import { getSettingValues, SettingId } from "~/utils/settings";
+import { injectPanelStyles } from "./briefing/styles";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
 import {
   makeHeading,
   makeItemLink,
   makeLinkedLine,
-  makeLocationLink,
   makeMutedText,
   makeQuestLink,
 } from "~/utils/gameLinks";
-import { MasteryEntry, masteryState } from "~/api/farmrpg/apis/mastery";
-import { MOBILE_MAX_WIDTH } from "~/utils/layout";
+import { masteryState } from "~/api/farmrpg/apis/mastery";
+import {
+  matchLocationByImage,
+  matchLocationName,
+  parseStamina,
+} from "~/utils/locationAdvice";
 import { orUndefined } from "~/utils/promise";
-import { parseUnlimitedItems, UnlimitedItems } from "~/utils/unlimited";
-import { planSourcing, RecipeGraph } from "~/utils/craftPlanner";
+import { parseUnlimitedItems } from "~/utils/unlimited";
+import { renderCapTab } from "./briefing/cap";
+import { renderHereTab } from "./briefing/here";
+import {
+  TEXT_ERROR,
+  TEXT_GRAY,
+  TEXT_SUCCESS,
+  TEXT_WARNING,
+  TEXT_WHITE,
+} from "~/utils/theme";
 
 const SETTING_BRIEFING_PANEL: FeatureSetting = {
   id: SettingId.BRIEFING_PANEL,
@@ -99,478 +87,19 @@ const SETTING_BRIEFING_PANEL: FeatureSetting = {
   defaultValue: true,
 };
 
-const BUTTON_ID = "fh-briefing-button";
-const PANEL_ID = "fh-briefing-panel";
-const STYLE_ID = "fh-briefing-style";
-const MAX_LISTED = 5;
-
-// Bottom-left, clear of the bottom bar. (The cap tracker used to float on the
-// right; it lives in this panel now, so nothing else floats.)
-// env() keeps the button clear of the iOS home indicator and any notch; the
-// fallbacks make it identical to before on anything that does not report insets.
-const EDGE_OFFSET = "calc(8px + env(safe-area-inset-left, 0px))";
-const BOTTOM_OFFSET = "calc(62px + env(safe-area-inset-bottom, 0px))";
-// On a phone the button moves to the RIGHT, at Reed's request: that is where a
-// thumb rests.
-const RIGHT_OFFSET = "calc(8px + env(safe-area-inset-right, 0px))";
-
-type TabId = "now" | "goals" | "sets" | "craftworks" | "cap";
+type TabId = "now" | "here" | "goals" | "craftworks" | "cap";
 const TABS: { id: TabId; label: string }[] = [
+  // strictly what wants you this minute
   { id: "now", label: "Now" },
+  // the place you are standing, read against your needs -- or where to go
+  { id: "here", label: "Here" },
   { id: "goals", label: "Goals" },
-  // "Queue" rather than "Craftworks": five labels have to fit 380px, and the
-  // panel is already inside Craftworks by context
-  { id: "craftworks", label: "Queue" },
-  // Items at or near the inventory cap, filtered to what drops where you are.
-  // This used to be a row of icons in the bottom stats bar; see renderCap.
+  // the queue and its saved sets, together: sets are craftworks-only and the
+  // one thing you open on purpose, so they sit under the queue's alerts
+  { id: "craftworks", label: "Craftworks" },
+  // items at or near the inventory cap, and who would take them off your hands
   { id: "cap", label: "Cap" },
-  // Sets is last because it is the one tab you open on purpose rather than to
-  // be told something: it has no count badge and nothing in it is time-sensitive
-  { id: "sets", label: "Sets" },
 ];
-
-const injectStyles = (): void => {
-  if (document.querySelector(`#${STYLE_ID}`)) {
-    return;
-  }
-  document.head.insertAdjacentHTML(
-    "beforeend",
-    `<style id="${STYLE_ID}">
-      #${BUTTON_ID} {
-        position: fixed;
-        left: ${EDGE_OFFSET};
-        bottom: ${BOTTOM_OFFSET};
-        z-index: 5000;
-        width: 44px;
-        height: 44px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        border: 1px solid ${BORDER_GRAY};
-        background: rgba(20, 20, 20, 0.92);
-        color: ${TEXT_GRAY};
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
-        transition: transform 140ms ease, color 140ms ease,
-          border-color 140ms ease;
-        -webkit-backdrop-filter: blur(6px);
-        backdrop-filter: blur(6px);
-      }
-      #${BUTTON_ID}:hover { color: ${TEXT_WHITE}; border-color: #5a5a5a; }
-      #${BUTTON_ID}:active { transform: scale(0.94); }
-      #${BUTTON_ID}[data-open="true"] {
-        color: ${TEXT_WHITE};
-        transform: rotate(90deg);
-      }
-      #${BUTTON_ID} .fh-badge {
-        position: absolute;
-        top: -2px;
-        right: -2px;
-        min-width: 18px;
-        height: 18px;
-        padding: 0 4px;
-        border-radius: 9px;
-        background: ${TEXT_WARNING};
-        color: #111;
-        font-size: 11px;
-        font-weight: bold;
-        line-height: 18px;
-        text-align: center;
-      }
-      /* The cap tracker's count, on the other shoulder of the button: red for
-         items AT cap where you are (every drop of those is thrown away), amber
-         when the worst of it is only near. It is what the row of icons in the
-         stats bar used to be for -- a glance, without opening anything. */
-      #${BUTTON_ID} .fh-cap-badge {
-        position: absolute;
-        top: -2px;
-        left: -2px;
-        min-width: 18px;
-        height: 18px;
-        padding: 0 4px;
-        border-radius: 9px;
-        background: ${TEXT_ERROR};
-        color: #fff;
-        font-size: 11px;
-        font-weight: bold;
-        line-height: 18px;
-        text-align: center;
-      }
-      #${BUTTON_ID} .fh-cap-badge[data-level="near"] {
-        background: ${TEXT_WARNING};
-        color: #111;
-      }
-      #${PANEL_ID} .fh-cap-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 5px;
-        margin: 4px 0 8px;
-      }
-      #${PANEL_ID} .fh-cap-item {
-        display: block;
-        line-height: 0;
-        border-radius: 6px;
-        border: 2px solid ${TEXT_WARNING};
-      }
-      #${PANEL_ID} .fh-cap-item[data-at-cap="true"] { border-color: ${TEXT_ERROR}; }
-      #${PANEL_ID} .fh-cap-item img {
-        width: 28px;
-        height: 28px;
-        border-radius: 4px;
-        display: block;
-      }
-      #${PANEL_ID} .fh-cap-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 12px;
-        padding: 2px 0;
-      }
-      #${PANEL_ID} .fh-cap-row img {
-        width: 18px;
-        height: 18px;
-        border-radius: 3px;
-        flex-shrink: 0;
-      }
-      #${PANEL_ID} .fh-cap-row .fh-cap-count {
-        margin-left: auto;
-        color: ${TEXT_GRAY};
-        white-space: nowrap;
-      }
-      #${PANEL_ID} {
-        position: fixed;
-        left: ${EDGE_OFFSET};
-        bottom: calc(${BOTTOM_OFFSET} + 52px);
-        z-index: 5001;
-        width: 380px;
-        max-width: calc(100vw - 16px);
-        max-height: 70vh;
-        display: flex;
-        flex-direction: column;
-        padding: 12px 14px;
-        border-radius: 12px;
-        border: 1px solid ${BORDER_GRAY};
-        background: rgba(18, 18, 19, 0.97);
-        box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
-        -webkit-backdrop-filter: blur(10px);
-        backdrop-filter: blur(10px);
-        opacity: 0;
-        transform: translateY(8px);
-        pointer-events: none;
-        transition: opacity 140ms ease, transform 140ms ease;
-      }
-      #${PANEL_ID}[data-open="true"] {
-        opacity: 1;
-        transform: translateY(0);
-        pointer-events: auto;
-      }
-      /* Holds the tabs and the body. A column on a phone, exactly as before;
-         a row on a wide screen, which turns the tab strip into a vertical
-         rail. min-height:0 on both is what lets the body scroll inside a flex
-         parent instead of pushing the panel taller. */
-      #${PANEL_ID} .fh-briefing-main {
-        display: flex;
-        flex-direction: column;
-        flex: 1 1 auto;
-        min-height: 0;
-      }
-      #${PANEL_ID} .fh-briefing-body {
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        flex: 1 1 auto;
-        min-height: 0;
-      }
-      #${PANEL_ID} .fh-briefing-body::-webkit-scrollbar { width: 8px; }
-      #${PANEL_ID} .fh-briefing-body::-webkit-scrollbar-thumb {
-        background: #3a3a3a;
-        border-radius: 4px;
-      }
-      #${PANEL_ID} .fh-briefing-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 8px;
-      }
-      #${PANEL_ID} .fh-briefing-refresh {
-        cursor: pointer;
-        color: ${TEXT_GRAY};
-        font-size: 11px;
-      }
-      #${PANEL_ID} .fh-briefing-refresh:hover { color: ${TEXT_WHITE}; }
-      /* How old the numbers are. The panel outlives navigation, so without
-         this there is no telling whether it is showing this minute or whatever
-         was true when it was opened. Muted: it is a caveat, not a reading. */
-      #${PANEL_ID} .fh-briefing-age {
-        color: ${TEXT_GRAY};
-        font-size: 11px;
-        opacity: 0.75;
-      }
-      #${PANEL_ID} .fh-briefing-controls {
-        align-items: center;
-        display: flex;
-        gap: 8px;
-      }
-      /* The perk indicator is a button, not a label: its tooltip is the only
-         perk diagnostic there is, and a phone cannot show a tooltip. */
-      #${PANEL_ID} .fh-perk-chip {
-        align-items: center;
-        border-radius: 7px;
-        cursor: pointer;
-        display: flex;
-        gap: 5px;
-        padding: 3px 5px;
-      }
-      #${PANEL_ID} .fh-perk-chip:hover,
-      #${PANEL_ID} .fh-perk-chip[data-on="true"] {
-        background: rgba(255, 255, 255, 0.09);
-      }
-      #${PANEL_ID} .fh-perk-note {
-        display: none;
-        color: ${TEXT_GRAY};
-        font-size: 11px;
-        line-height: 1.4;
-        margin: -2px 0 8px;
-      }
-      #${PANEL_ID} .fh-perk-note[data-on="true"] { display: block; }
-      /* The log under the note: one line per perk decision, newest last, so an
-         ordering problem (a reconcile landing between a harvest's switch and
-         the harvest) is visible as two entries a second apart. */
-      #${PANEL_ID} .fh-perk-log {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        column-gap: 6px;
-        margin-top: 4px;
-        opacity: 0.85;
-      }
-      #${PANEL_ID} .fh-perk-log-time {
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-      }
-      #${PANEL_ID} .fh-briefing-tabs {
-        display: flex;
-        gap: 4px;
-        margin-bottom: 8px;
-        border-bottom: 1px solid ${BORDER_GRAY};
-        padding-bottom: 8px;
-      }
-      #${PANEL_ID} .fh-tab {
-        flex: 1 1 0;
-        text-align: center;
-        padding: 5px 8px;
-        border-radius: 7px;
-        font-size: 12px;
-        cursor: pointer;
-        color: ${TEXT_GRAY};
-        background: transparent;
-        transition: background 120ms ease, color 120ms ease;
-        user-select: none;
-      }
-      #${PANEL_ID} .fh-tab:hover { color: ${TEXT_WHITE}; }
-      #${PANEL_ID} .fh-tab[data-active="true"] {
-        color: ${TEXT_WHITE};
-        background: rgba(255, 255, 255, 0.09);
-      }
-      /* The count of things wanting attention in that tab. Muted, because it
-         is there to be scanned rather than read. */
-      #${PANEL_ID} .fh-tab-count {
-        margin-left: 5px;
-        font-size: 11px;
-        color: ${TEXT_WARNING};
-      }
-      #${PANEL_ID} .fh-tab[data-active="true"] .fh-tab-count {
-        color: ${TEXT_WARNING};
-      }
-
-      /* What you are focused on, and the way out of each one. Sits under the
-         title so it is present on every tab, not only the one focus was set
-         from. Wraps because focus is a list now -- two or three undertakings
-         that share a material are the normal case. */
-      #${PANEL_ID} .fh-focus-chip {
-        display: none;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 4px;
-        margin-bottom: 8px;
-        font-size: 11px;
-      }
-      #${PANEL_ID} .fh-focus-chip[data-on="true"] { display: flex; }
-      #${PANEL_ID} .fh-focus-tag {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 3px 8px;
-        border-radius: 7px;
-        border: 1px solid ${TEXT_WARNING};
-        color: ${TEXT_WARNING};
-        max-width: 100%;
-      }
-      #${PANEL_ID} .fh-focus-tag > span:first-child {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      #${PANEL_ID} .fh-chip-clear {
-        cursor: pointer;
-        opacity: 0.75;
-        flex: 0 0 auto;
-      }
-      #${PANEL_ID} .fh-chip-clear:hover { opacity: 1; }
-      /* Only appears once focus is a list: clearing three chips one at a time
-         is the sort of thing that stops people using focus at all. */
-      #${PANEL_ID} .fh-focus-all {
-        cursor: pointer;
-        color: ${TEXT_GRAY};
-        padding: 3px 4px;
-      }
-      #${PANEL_ID} .fh-focus-all:hover { color: ${TEXT_WHITE}; }
-      /* Dimmed, never hidden: a quest that disappeared because you focused
-         another is exactly what you would forget about. */
-      #${PANEL_ID} .fh-dim {
-        opacity: 0.38;
-        transition: opacity 160ms ease;
-      }
-      #${PANEL_ID} .fh-dim:hover { opacity: 0.75; }
-
-      /* Wide screens get a two-pane panel: a vertical rail of sections and a
-         content pane. The rail is what removes the four-tab ceiling -- a
-         column takes as many entries as we want, where the horizontal strip
-         could not fit a fifth at 380px. Below this width nothing changes. */
-      @media (min-width: 1024px) {
-        #${PANEL_ID} {
-          width: 920px;
-          max-height: 82vh;
-        }
-        #${PANEL_ID} .fh-briefing-main {
-          flex-direction: row;
-          gap: 14px;
-        }
-        #${PANEL_ID} .fh-briefing-tabs {
-          flex: 0 0 148px;
-          flex-direction: column;
-          gap: 2px;
-          margin-bottom: 0;
-          padding-bottom: 0;
-          padding-right: 12px;
-          border-bottom: none;
-          border-right: 1px solid ${BORDER_GRAY};
-        }
-        #${PANEL_ID} .fh-tab {
-          flex: 0 0 auto;
-          text-align: left;
-          padding: 7px 10px;
-          font-size: 13px;
-        }
-      }
-      /* Phone layout. Everything here is either a thumb target or a
-         consequence of there being no hover on touch -- the desktop panel is
-         driven by hover states a finger never produces. */
-      @media (max-width: ${MOBILE_MAX_WIDTH}px) {
-        /* Bottom RIGHT on a phone: that is where the thumb is, and the cap
-           tracker (the only other floating thing on that side) is not drawn
-           below this width, so the corner is free. */
-        #${BUTTON_ID} {
-          left: auto;
-          right: ${RIGHT_OFFSET};
-          width: 48px;
-          height: 48px;
-        }
-        #${PANEL_ID} {
-          left: auto;
-          right: ${RIGHT_OFFSET};
-          width: calc(100vw - 16px);
-          /* vh on iOS Safari is the LARGEST viewport, so 70vh can run under the
-             URL bar; dvh is the visible one. The fallback above still applies
-             where dvh is unsupported. */
-          max-height: min(70vh, calc(100dvh - 150px));
-        }
-        /* 5px of padding is a 22px-tall target. This makes the tab strip
-           thumb-sized without changing anything on a desktop. */
-        #${PANEL_ID} .fh-tab {
-          padding: 10px 8px;
-          font-size: 13px;
-        }
-        #${PANEL_ID} .fh-briefing-refresh {
-          font-size: 12px;
-          padding: 6px 2px 6px 10px;
-        }
-        /* The perk chip is the note's only way open on a phone, which is the
-           one place the note matters, so it gets a thumb-sized box. */
-        #${PANEL_ID} .fh-perk-chip {
-          padding: 7px 8px;
-        }
-        #${PANEL_ID} .fh-perk-note {
-          font-size: 12px;
-        }
-        /* A 14px glyph is not a target. Padding grows the hit box without
-           moving the glyph. */
-        #${PANEL_ID} .fh-goal-remove,
-        #${PANEL_ID} .fh-goal-action,
-        #${PANEL_ID} .fh-chip-clear {
-          padding: 6px 8px;
-          margin: -6px -8px -6px 0;
-        }
-        #${PANEL_ID} .fh-chip {
-          padding: 6px 12px;
-          font-size: 12px;
-        }
-        /* 0.38 relies on hover to read a dimmed row, and touch has no hover.
-           Dimmed still reads as secondary at 0.55 but stays legible. */
-        #${PANEL_ID} .fh-dim { opacity: 0.55; }
-      }
-      #${PANEL_ID} .fh-chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-        margin: 2px 0 8px;
-      }
-      #${PANEL_ID} .fh-chip {
-        padding: 2px 8px;
-        border-radius: 10px;
-        border: 1px solid ${BORDER_GRAY};
-        font-size: 11px;
-        cursor: pointer;
-        color: ${TEXT_GRAY};
-        user-select: none;
-        transition: background 120ms ease, color 120ms ease,
-          border-color 120ms ease;
-      }
-      #${PANEL_ID} .fh-chip:hover { color: ${TEXT_WHITE}; }
-      #${PANEL_ID} .fh-chip[data-active="true"] {
-        color: ${TEXT_WHITE};
-        background: rgba(255, 255, 255, 0.11);
-        border-color: #5a5a5a;
-      }
-      #${PANEL_ID} .fh-goal { margin-bottom: 10px; }
-      #${PANEL_ID} .fh-goal-top {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 8px;
-      }
-      #${PANEL_ID} .fh-goal-remove {
-        cursor: pointer;
-        color: #6a6a6a;
-        font-size: 14px;
-        line-height: 1;
-      }
-      #${PANEL_ID} .fh-goal-remove:hover { color: ${TEXT_ERROR}; }
-      #${PANEL_ID} .fh-bar {
-        height: 4px;
-        border-radius: 2px;
-        background: #2a2a2a;
-        margin: 4px 0 3px;
-        overflow: hidden;
-      }
-      #${PANEL_ID} .fh-bar > div {
-        height: 100%;
-        border-radius: 2px;
-        background: ${TEXT_SUCCESS};
-        transition: width 200ms ease;
-      }
-    </style>`
-  );
-};
 
 // Inline so it always draws: the game mixes Font Awesome 4 and 6 and neither
 // set is guaranteed to carry a given glyph.
@@ -582,17 +111,8 @@ const ICON = `
     <path d="M16 15l3 3 5-6" />
   </svg>`;
 
-const plural = (count: number, noun: string): string =>
-  `${count} ${noun}${count === 1 ? "" : "s"}`;
-
-// What the badge is counting, in words.
-//
-// The number alone mixes three unrelated things, so "1" could be a dead slot,
-// a mis-ordered queue or a request waiting to be handed in. The tooltip says
-// which, and both callers build it the same way so the figure cannot mean one
-// thing before the panel is opened and another after.
 // How many things in each tab actually want you. The point of the rail is to
-// answer "where is the work" without opening all four, so a tab with nothing
+// answer "where is the work" without opening all five, so a tab with nothing
 // outstanding shows no number at all rather than a zero -- a row of zeroes
 // reads as noise and hides the one number that matters.
 const getTabCounts = (context: Context): Partial<Record<TabId, number>> => {
@@ -604,16 +124,39 @@ const getTabCounts = (context: Context): Partial<Record<TabId, number>> => {
   if (attention.count > 0) {
     counts.now = attention.count;
   }
+  // what drops where you are that you are short of; the tab is the place to
+  // answer "is it worth staying"
+  if (context.here) {
+    const wanted = context.here.location.drops.filter((drop) =>
+      context.resolved.scopes.some((scope) =>
+        scope.missing.some((entry) => entry.name === drop.name)
+      )
+    ).length;
+    if (wanted > 0) {
+      counts.here = wanted;
+    }
+  }
   const unfinished = context.goalProgress.filter(
     (progress) => progress.ratio < 1
   ).length;
   if (unfinished > 0) {
     counts.goals = unfinished;
   }
-  // the blockers nothing in the queue produces: the only ones a trip fixes
+  // the blockers nothing in the queue produces: the only ones a trip fixes --
+  // or, failing those, a saved set that matches something you want and is not
+  // the one loaded (getRecommendedSet skips the active set, so anything it
+  // returns is by definition a change)
   const roots = context.advice?.roots.length ?? 0;
   if (roots > 0) {
     counts.craftworks = roots;
+  } else if (
+    getRecommendedSet(
+      getWantedNames(context),
+      context.craftworks?.sets ?? [],
+      context.itemNames
+    )
+  ) {
+    counts.craftworks = 1;
   }
   // items at cap where you are (or anywhere, before this spot is learned);
   // live tracker state rather than the context, same as the button's badge
@@ -623,19 +166,6 @@ const getTabCounts = (context: Context): Partial<Record<TabId, number>> => {
   ).length;
   if (capView.isEnabled && atCapHere > 0) {
     counts.cap = atCapHere;
-  }
-  // Sets is the last tab and has nothing time-sensitive in it, so it earns a
-  // badge only when there is a reason to open it: a saved set that matches
-  // something you want and is not the one loaded. getRecommendedSet skips the
-  // active set, so anything it returns is by definition a change.
-  if (
-    getRecommendedSet(
-      getWantedNames(context),
-      context.craftworks?.sets ?? [],
-      context.itemNames
-    )
-  ) {
-    counts.sets = 1;
   }
   return counts;
 };
@@ -660,122 +190,6 @@ const summarizeAttention = (
       readyRequests,
     parts,
   };
-};
-
-// The cap tracker, as a tab. It draws two things: what drops HERE and is at or
-// near cap (the icon grid -- the glance the old stats-bar row gave, now with
-// room to breathe), and everything at or near cap regardless of where you are
-// (the list). The data is the tracker's own live state, not the panel's
-// context: it refreshes itself off your actions every few seconds, and a
-// figure the panel read on open would be stale by the time it mattered.
-const renderCapItemRow = (item: CapItem, cap: number): HTMLElement => {
-  const row = document.createElement("a");
-  row.className = "fh-cap-row";
-  row.href = item.href;
-  const colour = item.isAtCap ? TEXT_ERROR : TEXT_WARNING;
-  if (item.image) {
-    const icon = document.createElement("img");
-    icon.src = item.image;
-    icon.alt = "";
-    row.append(icon);
-  }
-  const name = document.createElement("span");
-  name.textContent = item.name;
-  name.style.color = colour;
-  const count = document.createElement("span");
-  count.className = "fh-cap-count";
-  count.textContent = `${item.count.toLocaleString()} / ${cap.toLocaleString()}`;
-  row.append(name, count);
-  return row;
-};
-
-const renderCap = (body: HTMLElement, onRefresh: () => void): void => {
-  const view = getCapTrackerView();
-  if (!view.isEnabled) {
-    body.append(
-      makeLinkedLine(TEXT_GRAY, [
-        "The cap tracker is off — turn on “Inventory: Cap tracker” in settings.",
-      ])
-    );
-    return;
-  }
-  if (view.updatedAt === 0) {
-    body.append(
-      makeLinkedLine(TEXT_GRAY, [
-        view.isFetching ? "Reading your inventory…" : "Inventory not read yet.",
-      ])
-    );
-    return;
-  }
-
-  if (view.here) {
-    body.append(makeHeading("Drops here at or near cap"));
-    if (view.here.length === 0) {
-      body.append(
-        makeLinkedLine(TEXT_GRAY, ["Nothing — everything here still counts."])
-      );
-    } else {
-      const grid = document.createElement("div");
-      grid.className = "fh-cap-grid";
-      for (const item of view.here) {
-        const tile = document.createElement("a");
-        tile.className = "fh-cap-item";
-        tile.dataset.atCap = String(item.isAtCap);
-        tile.href = item.href;
-        tile.title = `${
-          item.name
-        }: ${item.count.toLocaleString()} / ${view.cap.toLocaleString()}${
-          item.isAtCap ? " — at cap, thrown away" : " — near cap"
-        }`;
-        if (item.image) {
-          const icon = document.createElement("img");
-          icon.src = item.image;
-          icon.alt = item.name;
-          tile.append(icon);
-        } else {
-          tile.textContent = item.name;
-          tile.style.lineHeight = "28px";
-          tile.style.padding = "0 5px";
-          tile.style.fontSize = "12px";
-          tile.style.color = TEXT_WHITE;
-        }
-        grid.append(tile);
-      }
-      body.append(grid);
-    }
-  }
-
-  const atCap = view.items.filter((item) => item.isAtCap);
-  const nearCap = view.items.filter((item) => !item.isAtCap);
-  body.append(
-    makeHeading(view.here ? "Everything at or near cap" : "At or near cap")
-  );
-  if (view.items.length === 0) {
-    body.append(makeLinkedLine(TEXT_GRAY, ["Nothing at or near cap."]));
-  }
-  for (const item of [...atCap, ...nearCap]) {
-    body.append(renderCapItemRow(item, view.cap));
-  }
-
-  const foot = document.createElement("div");
-  foot.style.marginTop = "8px";
-  foot.style.fontSize = "11px";
-  foot.style.color = TEXT_GRAY;
-  const refresh = document.createElement("span");
-  refresh.textContent = view.isFetching ? "reading…" : "refresh";
-  refresh.style.cursor = "pointer";
-  refresh.style.textDecoration = "underline";
-  refresh.addEventListener("click", (event) => {
-    event.stopPropagation();
-    onRefresh();
-  });
-  foot.append(
-    `cap ${view.cap.toLocaleString()} · inventory read ${formatAge(
-      view.updatedAt
-    )} · `,
-    refresh
-  );
-  body.append(foot);
 };
 
 // The count on the button's left shoulder. Counts what is AT cap where you are
@@ -837,30 +251,6 @@ const setBadge = (count: number, parts: string[], isStale = false): void => {
   }
 };
 
-// Deliberately coarse: the question this answers is "is this still true?",
-// and a number ticking by the second invites reading it as precision.
-// The alert sections cut at MAX_LISTED, but the button's badge counts them all,
-// so a truncated list reads as the panel disagreeing with itself. Say what was
-// left out instead.
-const appendMore = (body: HTMLElement, total: number): void => {
-  if (total <= MAX_LISTED) {
-    return;
-  }
-  body.append(makeLinkedLine(TEXT_GRAY, [`+${total - MAX_LISTED} more`]));
-};
-
-const formatAge = (readAt: number): string => {
-  const seconds = Math.max(0, Math.round((Date.now() - readAt) / 1000));
-  if (seconds < 60) {
-    return "just now";
-  }
-  const minutes = Math.round(seconds / 60);
-  return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
-};
-
-const formatHits = (hits: number): string =>
-  hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
-
 const fetchActiveQuests = async (): Promise<
   ReturnType<typeof parseActiveQuests> | undefined
 > => {
@@ -871,26 +261,6 @@ const fetchActiveQuests = async (): Promise<
     return undefined;
   }
 };
-
-interface Context {
-  advice?: Advice;
-  cap?: number;
-  craftworks?: CraftworksSnapshot;
-  goalProgress: GoalProgress[];
-  goals: TrackedGoal[];
-  graph: RecipeGraph;
-  inventory: Record<string, number>;
-  // the explore or fishing spot in view, when there is one
-  here?: { location: LocationRef; stamina?: number };
-  itemNames: string[];
-  mastery: MasteryEntry[];
-  questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
-  // every demand on you -- tracked goals, open requests, stalled queue slots --
-  // resolved once, so each tab reasons from the same numbers
-  resolved: ResolvedNeeds;
-  statuses: ReturnType<typeof getGoalStatuses>;
-  unlimited: UnlimitedItems;
-}
 
 // Identify the explore or fishing spot in view, if the panel was opened on one.
 //
@@ -944,9 +314,9 @@ const getHere = async (): Promise<Context["here"]> => {
     return undefined;
   }
   let location = await orUndefined(locationDataState.get({ query: name }));
-  // entries cached before drop tables existed carry no `drops`, and that cache
-  // lives a week
-  if (location && !location.drops) {
+  // entries cached before drop tables (or the per-hit figures and icons that
+  // came later) existed lack them, and that cache lives a week
+  if (location && (!location.drops || location.silverPerHit === undefined)) {
     location = await orUndefined(
       locationDataState.get({ query: name, ignoreCache: true })
     );
@@ -957,6 +327,7 @@ const getHere = async (): Promise<Context["here"]> => {
   }
   const staminaText = page.querySelector("#stamina")?.textContent ?? "";
   return {
+    image: locations.find((entry) => entry.name === name)?.image,
     location,
     stamina:
       Number(staminaText.replaceAll(",", "").trim()) ||
@@ -1044,149 +415,12 @@ const getWantedNames = (context: Context): string[] => {
   return [...names];
 };
 
-// Takes exactly what to source. It used to fold in quest bottlenecks itself
-// regardless of caller, which meant the Goals tab quoted trips for items no
-// tracked goal wanted — each tab now decides what its own list means.
-const renderWhereToGo = async (
+const renderNow = (
   body: HTMLElement,
   context: Context,
-  missing: { name: string; quantity: number }[]
-): Promise<void> => {
-  const { graph } = context;
-  const sourcing = planSourcing(graph, missing);
-  if (sourcing.locations.length === 0) {
-    return;
-  }
-  body.append(makeHeading("Where to go"));
-  const top = sourcing.locations.slice(0, MAX_LISTED);
-  const references = await Promise.all(
-    top.map((entry) =>
-      orUndefined(locationDataState.get({ query: entry.location }))
-    )
-  );
-  for (const [index, entry] of top.entries()) {
-    const color = entry.items.length > 1 ? TEXT_SUCCESS : TEXT_GRAY;
-    const parts: (string | Node)[] = [
-      makeLocationLink(entry.location, references[index], color),
-      ` ~${formatHits(entry.hits)} ${
-        entry.type === "fishing" ? "casts" : "explores"
-      } — `,
-    ];
-    for (const [itemIndex, item] of entry.items.slice(0, 4).entries()) {
-      if (itemIndex > 0) {
-        parts.push(", ");
-      }
-      parts.push(
-        makeItemLink(item.name, graph.nodes.get(item.name)?.id, color)
-      );
-    }
-    body.append(makeLinkedLine(color, parts));
-  }
-};
-
-// Why the scope wants an item, for the "Here" list -- standing in a place, the
-// question is which of your undertakings this drop is actually for.
-const getReasonsByItem = (
-  resolved: ResolvedNeeds,
-  only: ReadonlySet<string>
-): Map<string, string[]> => {
-  const reasons = new Map<string, string[]>();
-  for (const scope of resolved.scopes) {
-    if (only.size > 0 && !only.has(scope.rootId)) {
-      continue;
-    }
-    for (const entry of scope.missing) {
-      reasons.set(entry.name, [
-        ...(reasons.get(entry.name) ?? []),
-        scope.label,
-      ]);
-    }
-  }
-  return reasons;
-};
-
-// What the place you are standing in is worth right now.
-//
-// Both halves come from data the panel already paid for -- `getHere` fetches
-// the drop table on every open -- and neither is anywhere in the game: `needed`
-// is this location's table intersected with your backlog, and `wasted` is the
-// opposite and the sharper of the two, items you are already at cap on whose
-// every drop is discarded, along with the mastery that discard is costing you.
-const renderHere = (
-  body: HTMLElement,
-  context: Context,
-  missing: { name: string; quantity: number }[],
   focused: ReadonlySet<string>
 ): void => {
-  const { cap, here, inventory, mastery, resolved } = context;
-  if (!here) {
-    return;
-  }
-  const { location, stamina } = here;
-  const advice = getLocationAdvice(
-    location.drops,
-    missing,
-    getReasonsByItem(resolved, focused),
-    inventory,
-    cap,
-    mastery
-  );
-  if (advice.needed.length === 0 && advice.wasted.length === 0) {
-    return;
-  }
-  const attempts = location.type === "fishing" ? "casts" : "explores";
-  body.append(makeHeading(`Here: ${location.name}`));
-
-  for (const entry of advice.needed.slice(0, MAX_LISTED)) {
-    // Stamina is the whole reason to know this while standing here: whether
-    // the trip finishes the item or only dents it.
-    const covered =
-      stamina !== undefined && stamina >= entry.attempts
-        ? " — you have the stamina"
-        : "";
-    body.append(
-      makeLinkedLine(TEXT_SUCCESS, [
-        makeItemLink(entry.name, entry.id, TEXT_SUCCESS),
-        ` ${entry.quantity.toLocaleString()} needed, ~${formatHits(
-          entry.attempts
-        )} ${attempts}${covered}`,
-        entry.reasons.length > 0
-          ? ` — for ${entry.reasons.slice(0, 2).join(", ")}`
-          : "",
-      ])
-    );
-  }
-  if (advice.needed.length === 0) {
-    body.append(
-      makeLinkedLine(TEXT_GRAY, ["Nothing you are short of drops here."])
-    );
-  }
-
-  for (const entry of advice.wasted.slice(0, MAX_LISTED)) {
-    body.append(
-      makeLinkedLine(TEXT_ERROR, [
-        makeItemLink(entry.name, entry.id, TEXT_ERROR),
-        " is at cap — every one you find here is thrown away",
-        entry.masteryRemaining === undefined
-          ? ""
-          : `, and it still owes ${entry.masteryRemaining.toLocaleString()} mastery`,
-      ])
-    );
-  }
-  if (stamina !== undefined) {
-    body.append(
-      makeLinkedLine(TEXT_GRAY, [`${stamina.toLocaleString()} stamina banked`])
-    );
-  }
-};
-
-const renderNow = async (
-  body: HTMLElement,
-  context: Context,
-  focused: ReadonlySet<string>
-): Promise<void> => {
-  const { advice, goalProgress, graph, questGoals, resolved, statuses } =
-    context;
+  const { advice, graph, questGoals, resolved, statuses } = context;
   const focusedScopes = resolved.scopes.filter((scope) =>
     focused.has(scope.rootId)
   );
@@ -1247,34 +481,6 @@ const renderNow = async (
       );
     }
   }
-
-  // Craftworks says what a slot is out of but never how many it is short by,
-  // so a blocker counts as one unit; a request's shortfall is exact. Both are
-  // the same trip, which is why they merge rather than being listed twice.
-  //
-  // This is the ONE block focus narrows. The sections above are alerts and must
-  // never be filtered -- a request going unhanded-in because you focused
-  // something else is exactly the failure this panel exists to prevent -- but
-  // "where to go" is the block that answers what to do with the next hour, and
-  // that question is what focus is for.
-  const missing =
-    focusedScopes.length > 0
-      ? mergeMissing(...focusedScopes.map((scope) => scope.missing))
-      : mergeMissing(
-          rankBottlenecks(statuses).map((entry) => ({
-            name: entry.name,
-            quantity: entry.maxNeeded,
-          })),
-          (advice?.roots ?? []).map((root) => ({
-            name: root.name,
-            quantity: 1,
-          })),
-          // tracked goals steer this list too, so setting a goal changes where
-          // the panel sends you rather than only what the Goals tab says
-          ...goalProgress.map((entry) => entry.missing)
-        );
-  renderHere(body, context, missing, focused);
-  await renderWhereToGo(body, context, missing);
 
   if (body.childNodes.length === 0) {
     body.append(makeLinkedLine(TEXT_SUCCESS, ["Nothing needs attention."]));
@@ -1392,13 +598,13 @@ const renderUndertakings = (
   }
 };
 
-const renderGoals = async (
+const renderGoals = (
   body: HTMLElement,
   context: Context,
   rerender: () => void,
   focused: ReadonlySet<string>,
   onFocus: (scopeId: string) => void
-): Promise<void> => {
+): void => {
   const { goalProgress, goals, graph } = context;
   renderUndertakings(body, context, focused, onFocus);
   if (goals.length === 0) {
@@ -1473,14 +679,6 @@ const renderGoals = async (
     body.append(row);
   }
 
-  // only what the tracked goals themselves need
-  if (goalProgress.length > 0) {
-    await renderWhereToGo(
-      body,
-      context,
-      mergeMissing(...goalProgress.map((entry) => entry.missing))
-    );
-  }
   renderSuggestions(body, context, rerender);
 };
 
@@ -1977,7 +1175,7 @@ const ensurePanel = (): void => {
   if (document.querySelector(`#${BUTTON_ID}`)) {
     return;
   }
-  injectStyles();
+  injectPanelStyles();
 
   const button = document.createElement("div");
   button.id = BUTTON_ID;
@@ -2194,6 +1392,13 @@ const ensurePanel = (): void => {
 
         break;
       }
+      case "here": {
+        renderHereTab(body, context, focused).catch((error) => {
+          console.error("Failed to draw the Here tab", error);
+        });
+
+        break;
+      }
       case "goals": {
         renderGoals(
           body,
@@ -2208,13 +1413,8 @@ const ensurePanel = (): void => {
 
         break;
       }
-      case "sets": {
-        renderSets(body, context, () => load(true));
-
-        break;
-      }
       case "cap": {
-        renderCap(body, () => {
+        renderCapTab(body, () => {
           refreshCapTrackerNow().catch((error) => {
             console.error("Failed to refresh the cap tracker", error);
           });
@@ -2224,6 +1424,11 @@ const ensurePanel = (): void => {
       }
       default: {
         renderCraftworks(body, context, () => load(true), focused);
+        // the sets list only makes sense under a queue that was read; its own
+        // "haven't read the page" line would repeat the one above
+        if (context.craftworks) {
+          renderSets(body, context, () => load(true));
+        }
       }
     }
   };
@@ -2267,8 +1472,21 @@ const ensurePanel = (): void => {
     draw();
   };
 
+  // A tab switch crossfades where the browser can do it (View Transitions;
+  // the panel body is the only named element, so nothing else on the page
+  // moves) and simply redraws where it can't. Reduced-motion users get the
+  // plain redraw via the stylesheet.
   const selectTab = (id: TabId): void => {
+    if (id === active) {
+      return;
+    }
     active = id;
+    if (typeof document.startViewTransition === "function") {
+      document.startViewTransition(() => {
+        draw();
+      });
+      return;
+    }
     draw();
   };
   for (const tab of TABS) {
