@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.55
+// @version 1.1.56
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2108,20 +2108,47 @@ const applySet = (set) => __awaiter(void 0, void 0, void 0, function* () {
 const session = { apply: applySet };
 let perkQueue = Promise.resolve();
 let isTaskRunning = false;
-// Run `task` with exclusive use of the perks. Don't call it from inside another
-// task -- anything a task needs is on the session it is given.
+// How long a task waits for its turn before giving up on the queue and running
+// anyway. Normal traffic never gets near this: a switch is ~1.3 s (reset +
+// activate + settle), a gated action with its restore ~3-4 s, and even a few
+// stacked up clear in seconds. Only a HUNG request (a fetch that neither
+// resolves nor rejects) holds the queue this long, and without a limit that
+// one hang would leave perk switching dead for the rest of the session,
+// silently. Giving up is logged, and the abandoned task is dropped from the
+// chain so everything after it runs normally.
+const QUEUE_WAIT_LIMIT_MS = 30000;
+// Run `task` with exclusive use of the perks: tasks run one at a time, in call
+// order, and a task holds the queue until it resolves. Don't call it from
+// inside another task -- anything a task needs is on the session it is given,
+// and a task waiting on the queue it is itself holding would sit there until
+// the wait limit above.
 //
-// If something does anyway, it runs INLINE rather than joining the queue.
-// Waiting would be a deadlock on a queue the caller is itself holding, and that
-// queue would never drain again: perk switching dead for the rest of the
-// session, silently. Running inline is safe (a task already holds the perks, so
-// nothing else is touching them) and the log says it happened.
-const runPerkTask = (task) => {
+// There is deliberately NO shortcut for a task that arrives while another is
+// running. 1.1.55 had one -- a "re-entrant" call ran inline -- keyed on a flag
+// that only said SOME task was running, not that the caller was inside it. No
+// caller is ever inside one (the post-action restore is called directly), so
+// the shortcut fired only for the case it must never fire for: an independent
+// click or page-transition reconcile landing mid-task, which then ran
+// CONCURRENTLY with it, resets and activates interleaving. A banner harvest
+// clicked within ~1.5 s of arriving on a page raced that page's own switch.
+const runPerkTask = (task, label = "a perk task") => {
     if (isTaskRunning) {
-        logPerk("a perk task was started from inside another one — ran it inline");
-        return task(session);
+        // so the log shows the wait, not just the two entries either side of it
+        logPerk(`${label} is waiting for the perk queue`);
     }
-    const run = perkQueue.then(() => __awaiter(void 0, void 0, void 0, function* () {
+    const previous = perkQueue;
+    const run = (() => __awaiter(void 0, void 0, void 0, function* () {
+        let waitTimeout;
+        const gaveUp = yield Promise.race([
+            previous.then(() => false),
+            new Promise((resolve) => {
+                waitTimeout = setTimeout(() => resolve(true), QUEUE_WAIT_LIMIT_MS);
+            }),
+        ]);
+        clearTimeout(waitTimeout);
+        if (gaveUp) {
+            logPerk(`${label} waited ${QUEUE_WAIT_LIMIT_MS / 1000}s for the perk queue and ran anyway — a request may be hung`);
+        }
         isTaskRunning = true;
         try {
             return yield task(session);
@@ -2130,7 +2157,7 @@ const runPerkTask = (task) => {
             // eslint-disable-next-line require-atomic-updates
             isTaskRunning = false;
         }
-    }));
+    }))();
     // a failed task must not break the queue for the next one
     perkQueue = run.catch(() => {
         // swallowed here only; runPerkTask's own caller still sees the rejection
@@ -2139,7 +2166,7 @@ const runPerkTask = (task) => {
 };
 exports.runPerkTask = runPerkTask;
 // One-shot switch with no action behind it: the panel's manual "equip".
-const equipPerkSet = (set) => (0, exports.runPerkTask)((perks) => perks.apply(set));
+const equipPerkSet = (set) => (0, exports.runPerkTask)((perks) => perks.apply(set), `equip ${set.name}`);
 exports.equipPerkSet = equipPerkSet;
 let restorePerks;
 const onPerkRestore = (restore) => {
@@ -2172,7 +2199,7 @@ const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, }) => 
             yield restorePerks(perks);
         }
     }
-}));
+}), label);
 exports.runGatedAction = runGatedAction;
 
 
@@ -9858,7 +9885,7 @@ const applyDecision = (perks) => __awaiter(void 0, void 0, void 0, function* () 
 // in. Every path through applyDecision leaves a note, so this one does too.
 const reconcileSafely = () => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        yield (0, perks_1.runPerkTask)(applyDecision);
+        yield (0, perks_1.runPerkTask)(applyDecision, "reconcile");
     }
     catch (error) {
         console.error("Failed to reconcile perks", error);
@@ -10635,7 +10662,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.55" !== void 0 ? "1.1.55" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.56" !== void 0 ? "1.1.56" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
