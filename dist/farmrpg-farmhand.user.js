@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.58
+// @version 1.1.59
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -199,7 +199,8 @@ exports.locationDataState = new state_1.CachedState(state_1.StorageKey.LOCATION_
     const profiles = (_g = location.dropRates) !== null && _g !== void 0 ? _g : [];
     const plain = profiles.filter((profile) => !profile.ironDepot && !profile.runecube);
     const best = new Map();
-    for (const profile of plain.length > 0 ? plain : profiles) {
+    const chosen = plain.length > 0 ? plain : profiles;
+    for (const profile of chosen) {
         for (const entry of (_h = profile.items) !== null && _h !== void 0 ? _h : []) {
             if (!((_j = entry.item) === null || _j === void 0 ? void 0 : _j.name) || !entry.rate) {
                 continue;
@@ -208,17 +209,24 @@ exports.locationDataState = new state_1.CachedState(state_1.StorageKey.LOCATION_
             if (!existing || entry.rate < existing.rate) {
                 best.set(entry.item.name, {
                     id: entry.item.id,
+                    image: entry.item.image,
                     name: entry.item.name,
                     rate: entry.rate,
                 });
             }
         }
     }
+    // the per-hit figures come with the profile; take the best of the ones we
+    // quoted rates from, so the two never describe different assumptions
+    const silverPerHit = Math.max(...chosen.map((profile) => { var _a; return (_a = profile.silverPerHit) !== null && _a !== void 0 ? _a : 0; }));
+    const xpPerHit = Math.max(...chosen.map((profile) => { var _a; return (_a = profile.xpPerHit) !== null && _a !== void 0 ? _a : 0; }));
     return {
         drops: [...best.values()].sort((a, b) => a.rate - b.rate),
         id,
         name: location.name,
+        silverPerHit: silverPerHit > 0 ? silverPerHit : undefined,
         type: location.type,
+        xpPerHit: xpPerHit > 0 ? xpPerHit : undefined,
     };
 }), {
     timeout: 60 * 60 * 24 * 7, // 1 week
@@ -2393,6 +2401,76 @@ exports.getQuestGoals = getQuestGoals;
 
 /***/ }),
 
+/***/ 2161:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.findTownsfolkLink = exports.townsfolkState = exports.parseTownsfolkPage = void 0;
+const state_1 = __webpack_require__(4782);
+const requests_1 = __webpack_require__(3300);
+const page_1 = __webpack_require__(7952);
+const parseTownsfolkPage = (root) => {
+    var _a, _b, _c, _d;
+    const seen = new Map();
+    for (const anchor of root.querySelectorAll("a[href]")) {
+        const href = (_a = anchor.getAttribute("href")) !== null && _a !== void 0 ? _a : "";
+        // a townsperson's own page, whatever the game calls it, carries an id;
+        // navigation and the tab bar do not
+        if (!/\?.*\bid=\d+/.test(href)) {
+            continue;
+        }
+        // the visible name is the first line of the link's text; levels and
+        // hearts follow it on their own lines
+        const name = ((_b = anchor.textContent) !== null && _b !== void 0 ? _b : "")
+            .split("\n")
+            .map((line) => line.trim())
+            .find((line) => line.length > 0);
+        if (!name || seen.has(name.toLowerCase())) {
+            continue;
+        }
+        seen.set(name.toLowerCase(), {
+            href,
+            image: (_d = (_c = anchor.querySelector("img")) === null || _c === void 0 ? void 0 : _c.getAttribute("src")) !== null && _d !== void 0 ? _d : undefined,
+            name,
+        });
+    }
+    return [...seen.values()];
+};
+exports.parseTownsfolkPage = parseTownsfolkPage;
+exports.townsfolkState = new state_1.CachedState(state_1.StorageKey.TOWNSFOLK, () => __awaiter(void 0, void 0, void 0, function* () {
+    const response = yield (0, requests_1.getHTML)(page_1.Page.FRIENDSHIP, new URLSearchParams());
+    const links = (0, exports.parseTownsfolkPage)(response.body);
+    if (links.length === 0) {
+        console.warn("[Farmhand] no townsfolk links found on the townsfolk page");
+    }
+    return { links, updatedAt: Date.now() };
+}), {
+    timeout: 60 * 60 * 24, // 1 day
+    defaultState: { links: [], updatedAt: 0 },
+});
+// Case-insensitive, and tolerant of the honorifics buddy.farm keeps that the
+// game's list might not ("Charles Horsington III" vs "Charles").
+const findTownsfolkLink = (links, name) => {
+    var _a;
+    const wanted = name.trim().toLowerCase();
+    return ((_a = links.find((link) => link.name.toLowerCase() === wanted)) !== null && _a !== void 0 ? _a : links.find((link) => wanted.startsWith(link.name.toLowerCase()) ||
+        link.name.toLowerCase().startsWith(wanted)));
+};
+exports.findTownsfolkLink = findTownsfolkLink;
+
+
+/***/ }),
+
 /***/ 4203:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
@@ -3092,7 +3170,7 @@ exports.banker = {
 
 /***/ }),
 
-/***/ 5299:
+/***/ 2206:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 
@@ -3106,74 +3184,624 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.briefingPanel = void 0;
-const craftworks_1 = __webpack_require__(920);
-const goals_1 = __webpack_require__(1267);
-const craftworks_2 = __webpack_require__(7831);
-const theme_1 = __webpack_require__(1178);
-const needAdapters_1 = __webpack_require__(1903);
+exports.renderCapTab = void 0;
 const inventoryCapWarnings_1 = __webpack_require__(6660);
-const recipes_1 = __webpack_require__(498);
+const townsfolk_1 = __webpack_require__(2161);
+const shared_1 = __webpack_require__(4073);
 const api_1 = __webpack_require__(3413);
-const page_1 = __webpack_require__(7952);
-const needs_1 = __webpack_require__(2538);
-const focusScope_1 = __webpack_require__(1307);
-const suggestions_1 = __webpack_require__(9262);
-const focus_1 = __webpack_require__(7167);
-const requests_1 = __webpack_require__(3300);
-const locationAdvice_1 = __webpack_require__(4764);
-const perks_1 = __webpack_require__(5543);
-const quests_1 = __webpack_require__(303);
-const settings_1 = __webpack_require__(126);
-const inventory_1 = __webpack_require__(4514);
-const gameLinks_1 = __webpack_require__(1616);
-const mastery_1 = __webpack_require__(283);
-const layout_1 = __webpack_require__(6253);
 const promise_1 = __webpack_require__(6762);
-const unlimited_1 = __webpack_require__(4808);
-const craftPlanner_1 = __webpack_require__(5825);
-const SETTING_BRIEFING_PANEL = {
-    id: settings_1.SettingId.BRIEFING_PANEL,
-    title: "Briefing: Floating panel",
-    description: `
-    A button above the bottom bar that opens your goals, the Craftworks queue,
-    your open requests and where to go, from any page
-  `,
-    type: "boolean",
-    defaultValue: true,
+const theme_1 = __webpack_require__(1178);
+// The Cap tab: what is at or near the inventory cap, and what to DO about it.
+//
+// The tracker's row of icons said "these are full" and stopped there. The
+// useful half is the way out: buddy.farm knows which townsperson loves or
+// likes each item, and the game's own townsfolk page knows where each of them
+// lives, so a full stack becomes a gift rather than a discarded drop.
+// how many rows get the loves/likes lookup on one draw: each is one cached
+// buddy.farm read, and the list is at-cap first so the ones that matter come
+// first
+const RELATIONSHIP_LOOKUPS = 16;
+const getAffinities = (itemName) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    const item = yield (0, promise_1.orUndefined)(api_1.itemDataState.get({ query: itemName }));
+    const entries = ((_a = item === null || item === void 0 ? void 0 : item.npcItems) !== null && _a !== void 0 ? _a : []);
+    const affinities = [];
+    for (const entry of entries) {
+        const name = (_b = entry.npc) === null || _b === void 0 ? void 0 : _b.name;
+        if (!name) {
+            continue;
+        }
+        if (entry.relationship === "loves" || entry.relationship === "likes") {
+            affinities.push({ name, relationship: entry.relationship });
+        }
+    }
+    // loves before likes: it is the better gift, so it is the one to show first
+    const rank = (affinity) => affinity.relationship === "loves" ? 0 : 1;
+    return affinities.sort((a, b) => rank(a) - rank(b));
+});
+const makeAffinityTags = (affinities, links) => affinities.slice(0, 4).map((affinity) => {
+    const link = (0, townsfolk_1.findTownsfolkLink)(links, affinity.name);
+    const tag = (0, shared_1.makeTag)(`${affinity.relationship === "loves" ? "♥" : "♡"} ${affinity.name}`, affinity.relationship === "loves" ? "accent" : "muted", link === null || link === void 0 ? void 0 : link.href);
+    tag.title = `${affinity.name} ${affinity.relationship} this${link ? " — open their page to give it" : ""}`;
+    return tag;
+});
+const makeCapRow = (item, cap) => (0, shared_1.makeRow)(item.name, {
+    aside: [`${item.count.toLocaleString()} / ${cap.toLocaleString()}`],
+    href: item.href,
+    icon: (0, shared_1.toIconUrl)(item.image),
+    tone: item.isAtCap ? "err" : "warn",
+});
+const renderCapTab = (body, onRefresh) => {
+    const view = (0, inventoryCapWarnings_1.getCapTrackerView)();
+    if (!view.isEnabled) {
+        body.append((0, shared_1.makeEmpty)("The cap tracker is off — turn on “Inventory: Cap tracker” in settings."));
+        return;
+    }
+    if (view.updatedAt === 0) {
+        body.append((0, shared_1.makeEmpty)(view.isFetching ? "Reading your inventory…" : "Inventory not read yet."));
+        return;
+    }
+    if (view.here) {
+        const { card, body: cardBody } = (0, shared_1.makeCard)("Drops here at or near cap", {
+            aside: view.here.length > 0 ? String(view.here.length) : undefined,
+            tone: view.here.some((item) => item.isAtCap) ? "err" : undefined,
+        });
+        if (view.here.length === 0) {
+            cardBody.append((0, shared_1.makeEmpty)("Nothing — everything here still counts."));
+        }
+        else {
+            const grid = document.createElement("div");
+            grid.className = "fh-grid";
+            for (const item of view.here) {
+                const tile = document.createElement("a");
+                tile.className = "fh-grid-item";
+                tile.dataset.atCap = String(item.isAtCap);
+                tile.href = item.href;
+                tile.title = `${item.name}: ${item.count.toLocaleString()} / ${view.cap.toLocaleString()}${item.isAtCap ? " — at cap, thrown away" : " — near cap"}`;
+                const icon = (0, shared_1.toIconUrl)(item.image);
+                if (icon) {
+                    const img = document.createElement("img");
+                    img.src = icon;
+                    img.alt = item.name;
+                    tile.append(img);
+                }
+                else {
+                    tile.textContent = item.name;
+                    tile.style.lineHeight = "30px";
+                    tile.style.padding = "0 6px";
+                    tile.style.fontSize = "12px";
+                    tile.style.color = theme_1.TEXT_WHITE;
+                }
+                grid.append(tile);
+            }
+            cardBody.append(grid);
+        }
+        body.append(card);
+    }
+    const atCap = view.items.filter((item) => item.isAtCap);
+    const nearCap = view.items.filter((item) => !item.isAtCap);
+    const rows = new Map();
+    if (atCap.length > 0) {
+        const { card, body: cardBody } = (0, shared_1.makeCard)("At cap", {
+            aside: (0, shared_1.plural)(atCap.length, "item"),
+            tone: "err",
+        });
+        for (const item of atCap) {
+            const row = makeCapRow(item, view.cap);
+            rows.set(item.name, row);
+            cardBody.append(row);
+        }
+        body.append(card);
+    }
+    if (nearCap.length > 0) {
+        const { card, body: cardBody } = (0, shared_1.makeCard)("Near cap", {
+            aside: (0, shared_1.plural)(nearCap.length, "item"),
+            tone: "warn",
+        });
+        for (const item of nearCap) {
+            const row = makeCapRow(item, view.cap);
+            rows.set(item.name, row);
+            cardBody.append(row);
+        }
+        body.append(card);
+    }
+    if (view.items.length === 0) {
+        body.append((0, shared_1.makeEmpty)("Nothing at or near cap."));
+    }
+    const foot = document.createElement("div");
+    foot.className = "fh-foot";
+    const refresh = document.createElement("span");
+    refresh.className = "fh-link";
+    refresh.textContent = view.isFetching ? "reading…" : "refresh";
+    refresh.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onRefresh();
+    });
+    foot.append(`cap ${view.cap.toLocaleString()} · inventory read ${(0, shared_1.formatAge)(view.updatedAt)} · `, refresh);
+    body.append(foot);
+    // Who would want each of these, filled in as the lookups land. The rows are
+    // already on screen; a redraw in the meantime simply orphans these and the
+    // next draw asks again (from cache, so it is instant the second time).
+    const lookups = [...atCap, ...nearCap].slice(0, RELATIONSHIP_LOOKUPS);
+    if (lookups.length === 0) {
+        return;
+    }
+    const fill = () => __awaiter(void 0, void 0, void 0, function* () {
+        const [links, ...affinities] = yield Promise.all([
+            (0, promise_1.orUndefined)(townsfolk_1.townsfolkState.get()).then((snapshot) => { var _a; return (_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.links) !== null && _a !== void 0 ? _a : []; }),
+            ...lookups.map((item) => getAffinities(item.name)),
+        ]);
+        for (const [index, item] of lookups.entries()) {
+            const row = rows.get(item.name);
+            const found = affinities[index];
+            if (!(row === null || row === void 0 ? void 0 : row.isConnected) || found.length === 0) {
+                continue;
+            }
+            const main = row.querySelector(".fh-row-main");
+            if (!main || main.querySelector(".fh-row-tags")) {
+                continue;
+            }
+            const tags = document.createElement("span");
+            tags.className = "fh-row-tags";
+            tags.append(...makeAffinityTags(found, links));
+            main.append(tags);
+        }
+    });
+    fill().catch((error) => {
+        console.error("Failed to look up who wants the capped items", error);
+    });
 };
-const BUTTON_ID = "fh-briefing-button";
-const PANEL_ID = "fh-briefing-panel";
-const STYLE_ID = "fh-briefing-style";
-const MAX_LISTED = 5;
-// Bottom-left, clear of the bottom bar. (The cap tracker used to float on the
-// right; it lives in this panel now, so nothing else floats.)
-// env() keeps the button clear of the iOS home indicator and any notch; the
-// fallbacks make it identical to before on anything that does not report insets.
+exports.renderCapTab = renderCapTab;
+
+
+/***/ }),
+
+/***/ 7190:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.renderHereTab = void 0;
+const shared_1 = __webpack_require__(4073);
+const locationAdvice_1 = __webpack_require__(4764);
+const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
+const promise_1 = __webpack_require__(6762);
+const craftPlanner_1 = __webpack_require__(5825);
+const theme_1 = __webpack_require__(1178);
+// The Here tab: the place you are standing, read against what you need.
+//
+// buddy.farm's location page is the drop table; this is the drop table with
+// your inventory, your cap and your backlog laid over it, which is the part no
+// site can do. Standing nowhere in particular it turns into "where to go" --
+// the trips that would close the most of what you are short of.
+const NEAR_CAP_RATIO = 0.9;
+const attemptsNoun = (type) => type === "fishing" ? "casts" : "explores";
+const makeStat = (label, value) => {
+    const stat = document.createElement("div");
+    stat.className = "fh-stat";
+    const labelElement = document.createElement("div");
+    labelElement.className = "fh-stat-label";
+    labelElement.textContent = label;
+    const valueElement = document.createElement("div");
+    valueElement.className = "fh-stat-value";
+    valueElement.textContent = value;
+    stat.append(labelElement, valueElement);
+    return stat;
+};
+// Full-table row: one drop, with everything you know about it.
+const makeDropRow = (drop, context, wantedFor, needed) => {
+    var _a;
+    const { cap, inventory } = context;
+    const have = (_a = inventory[drop.name]) !== null && _a !== void 0 ? _a : 0;
+    const isAtCap = cap !== undefined && cap > 0 && have >= cap;
+    const isNearCap = !isAtCap && cap !== undefined && cap > 0 && have >= cap * NEAR_CAP_RATIO;
+    const tags = [];
+    if (isAtCap) {
+        tags.push((0, shared_1.makeTag)("at cap — wasted", "err"));
+    }
+    else if (isNearCap) {
+        tags.push((0, shared_1.makeTag)("near cap", "warn"));
+    }
+    if (wantedFor && wantedFor.length > 0) {
+        for (const reason of wantedFor.slice(0, 2)) {
+            tags.push((0, shared_1.makeTag)(reason, "ok"));
+        }
+        if (wantedFor.length > 2) {
+            tags.push((0, shared_1.makeTag)(`+${wantedFor.length - 2}`, "ok"));
+        }
+    }
+    let tone;
+    if (isAtCap) {
+        tone = "err";
+    }
+    else if (needed !== undefined) {
+        tone = "ok";
+    }
+    const aside = [];
+    const rate = document.createElement("strong");
+    rate.textContent = `1 in ${(0, shared_1.formatHits)(drop.rate)}`;
+    aside.push(rate);
+    if (cap !== undefined && cap > 0) {
+        aside.push(document.createElement("br"), `${have.toLocaleString()} / ${cap.toLocaleString()}`);
+    }
+    const sub = [];
+    if (needed !== undefined) {
+        sub.push(`${needed.toLocaleString()} needed · ~${(0, shared_1.formatHits)(needed * drop.rate)} tries`);
+    }
+    return (0, shared_1.makeRow)((0, gameLinks_1.makeItemLink)(drop.name, drop.id, theme_1.TEXT_WHITE), {
+        aside,
+        icon: (0, shared_1.toIconUrl)(drop.image),
+        sub,
+        tags,
+        tone,
+    });
+};
+const renderWhereToGo = (body, context, missing, title) => __awaiter(void 0, void 0, void 0, function* () {
+    const { graph } = context;
+    const sourcing = (0, craftPlanner_1.planSourcing)(graph, missing);
+    if (sourcing.locations.length === 0) {
+        return;
+    }
+    const top = sourcing.locations.slice(0, shared_1.MAX_LISTED);
+    const references = yield Promise.all(top.map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
+    const { card, body: cardBody } = (0, shared_1.makeCard)(title, {
+        aside: `${sourcing.locations.length} trips`,
+    });
+    for (const [index, entry] of top.entries()) {
+        const reference = references[index];
+        const tags = entry.items
+            .slice(0, 4)
+            .map((item) => {
+            var _a, _b;
+            return (0, shared_1.makeTag)(item.name, entry.items.length > 1 ? "ok" : "muted", ((_a = graph.nodes.get(item.name)) === null || _a === void 0 ? void 0 : _a.id)
+                ? `item.php?id=${(_b = graph.nodes.get(item.name)) === null || _b === void 0 ? void 0 : _b.id}`
+                : undefined);
+        });
+        if (entry.items.length > 4) {
+            tags.push((0, shared_1.makeTag)(`+${entry.items.length - 4}`));
+        }
+        cardBody.append((0, shared_1.makeRow)((0, gameLinks_1.makeLocationLink)(entry.location, reference, theme_1.TEXT_WHITE), {
+            aside: [
+                `~${(0, shared_1.formatHits)(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"}`,
+            ],
+            href: reference ? (0, gameLinks_1.toLocationHref)(reference) : undefined,
+            tags,
+            tone: entry.items.length > 1 ? "ok" : undefined,
+        }));
+    }
+    body.append(card);
+});
+const renderHereTab = (body, context, focused) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    const { cap, here, inventory, mastery, resolved } = context;
+    const missing = (0, shared_1.getMissingDemand)(context, focused);
+    if (!here) {
+        body.append((0, shared_1.makeEmpty)("Not at an explore area or fishing spot. Open the panel on one for its drop table against your needs."));
+        yield renderWhereToGo(body, context, missing, "Where to go");
+        return;
+    }
+    const { image, location, stamina } = here;
+    const reasons = (0, shared_1.getReasonsByItem)(resolved, focused);
+    const advice = (0, locationAdvice_1.getLocationAdvice)(location.drops, missing, reasons, inventory, cap, mastery);
+    const neededByName = new Map(advice.needed.map((entry) => [entry.name, entry]));
+    const wastedNames = new Set(advice.wasted.map((entry) => entry.name));
+    // header
+    const place = document.createElement("div");
+    place.className = "fh-place";
+    const icon = (0, shared_1.toIconUrl)(image);
+    if (icon) {
+        const img = document.createElement("img");
+        img.src = icon;
+        img.alt = "";
+        place.append(img);
+    }
+    const text = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "fh-place-name";
+    name.append((0, gameLinks_1.makeLocationLink)(location.name, location, theme_1.TEXT_WHITE));
+    const sub = document.createElement("div");
+    sub.className = "fh-place-sub";
+    sub.textContent = `${location.type === "fishing" ? "Fishing spot" : "Explore area"} · ${(0, shared_1.plural)(location.drops.length, "drop")}`;
+    text.append(name, sub);
+    place.append(text);
+    body.append(place);
+    // figures
+    const stats = document.createElement("div");
+    stats.className = "fh-stats";
+    if (stamina !== undefined) {
+        stats.append(makeStat("stamina", stamina.toLocaleString()));
+    }
+    if (location.silverPerHit !== undefined) {
+        stats.append(makeStat(`silver / ${location.type === "fishing" ? "cast" : "explore"}`, Math.round(location.silverPerHit).toLocaleString()));
+    }
+    if (location.xpPerHit !== undefined) {
+        stats.append(makeStat(`xp / ${location.type === "fishing" ? "cast" : "explore"}`, Math.round(location.xpPerHit).toLocaleString()));
+    }
+    if (stats.childElementCount > 0) {
+        body.append(stats);
+    }
+    // wanted here: cheapest to finish first, with whether the stamina covers it
+    if (advice.needed.length > 0) {
+        const { card, body: cardBody } = (0, shared_1.makeCard)("Wanted here", {
+            aside: String(advice.needed.length),
+            tone: "ok",
+        });
+        for (const entry of advice.needed.slice(0, shared_1.MAX_LISTED * 2)) {
+            const covered = stamina !== undefined && stamina >= entry.attempts
+                ? " — stamina covers it"
+                : "";
+            const drop = location.drops.find((candidate) => candidate.name === entry.name);
+            cardBody.append((0, shared_1.makeRow)((0, gameLinks_1.makeItemLink)(entry.name, entry.id, theme_1.TEXT_WHITE), {
+                aside: [
+                    `~${(0, shared_1.formatHits)(entry.attempts)}`,
+                    document.createElement("br"),
+                    attemptsNoun(location.type),
+                ],
+                icon: (0, shared_1.toIconUrl)(drop === null || drop === void 0 ? void 0 : drop.image),
+                sub: [`${entry.quantity.toLocaleString()} needed${covered}`],
+                tags: entry.reasons
+                    .slice(0, 3)
+                    .map((reason) => (0, shared_1.makeTag)(reason, "ok")),
+                tone: "ok",
+            }));
+        }
+        body.append(card);
+    }
+    // wasted here: at cap, every drop discarded, and the mastery it costs
+    if (advice.wasted.length > 0) {
+        const { card, body: cardBody } = (0, shared_1.makeCard)("Thrown away here", {
+            aside: String(advice.wasted.length),
+            tone: "err",
+        });
+        for (const entry of advice.wasted.slice(0, shared_1.MAX_LISTED * 2)) {
+            const drop = location.drops.find((candidate) => candidate.name === entry.name);
+            cardBody.append((0, shared_1.makeRow)((0, gameLinks_1.makeItemLink)(entry.name, entry.id, theme_1.TEXT_WHITE), {
+                aside: ["at cap"],
+                icon: (0, shared_1.toIconUrl)(drop === null || drop === void 0 ? void 0 : drop.image),
+                sub: [
+                    entry.masteryRemaining === undefined
+                        ? "every one you find is discarded"
+                        : `discarded — still owes ${entry.masteryRemaining.toLocaleString()} mastery`,
+                ],
+                tone: "err",
+            }));
+        }
+        body.append(card);
+    }
+    // the whole table, best rate first, everything you know laid over it
+    const { card, body: cardBody } = (0, shared_1.makeCard)("Everything that drops here", {
+        aside: "1 in N tries",
+    });
+    for (const drop of location.drops) {
+        const needed = (_a = neededByName.get(drop.name)) === null || _a === void 0 ? void 0 : _a.quantity;
+        cardBody.append(makeDropRow(drop, context, (_b = reasons.get(drop.name)) !== null && _b !== void 0 ? _b : (wastedNames.has(drop.name) ? [] : undefined), needed));
+    }
+    body.append(card);
+    yield renderWhereToGo(body, context, missing, "Elsewhere");
+});
+exports.renderHereTab = renderHereTab;
+
+
+/***/ }),
+
+/***/ 4073:
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.toIconUrl = exports.makeEmpty = exports.makeTag = exports.makeRow = exports.makeCard = exports.appendMore = exports.formatAge = exports.formatHits = exports.plural = exports.getReasonsByItem = exports.getMissingDemand = exports.MAX_LISTED = exports.STYLE_ID = exports.PANEL_ID = exports.BUTTON_ID = void 0;
+const focus_1 = __webpack_require__(7167);
+const gameLinks_1 = __webpack_require__(1616);
+const theme_1 = __webpack_require__(1178);
+// What the panel and its tabs share: the ids the styles hang off, the context
+// every tab reasons from, and the small primitives that make the tabs look
+// like one panel rather than five.
+exports.BUTTON_ID = "fh-briefing-button";
+exports.PANEL_ID = "fh-briefing-panel";
+exports.STYLE_ID = "fh-briefing-style";
+exports.MAX_LISTED = 5;
+// Everything you are short of, merged across every demand -- or, when
+// undertakings are focused, only what those want. This is the ONE list focus
+// narrows: alerts are never filtered, but "what do I go and get" is exactly
+// the question focus exists to answer.
+//
+// Craftworks says what a slot is out of but never how many it is short by, so
+// a blocker counts as one unit; a request's shortfall is exact. Both are the
+// same trip, which is why they merge rather than being listed twice.
+const getMissingDemand = (context, focused) => {
+    var _a;
+    const { advice, goalProgress, resolved, statuses } = context;
+    const focusedScopes = resolved.scopes.filter((scope) => focused.has(scope.rootId));
+    if (focusedScopes.length > 0) {
+        return (0, focus_1.mergeMissing)(...focusedScopes.map((scope) => scope.missing));
+    }
+    return (0, focus_1.mergeMissing)((0, focus_1.rankBottlenecks)(statuses).map((entry) => ({
+        name: entry.name,
+        quantity: entry.maxNeeded,
+    })), ((_a = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _a !== void 0 ? _a : []).map((root) => ({ name: root.name, quantity: 1 })), 
+    // tracked goals steer this list too, so setting a goal changes where the
+    // panel sends you rather than only what the Goals tab says
+    ...goalProgress.map((entry) => entry.missing));
+};
+exports.getMissingDemand = getMissingDemand;
+// Why the scope wants an item -- standing in a place, the question is which of
+// your undertakings this drop is actually for.
+const getReasonsByItem = (resolved, only) => {
+    var _a;
+    const reasons = new Map();
+    for (const scope of resolved.scopes) {
+        if (only.size > 0 && !only.has(scope.rootId)) {
+            continue;
+        }
+        for (const entry of scope.missing) {
+            reasons.set(entry.name, [
+                ...((_a = reasons.get(entry.name)) !== null && _a !== void 0 ? _a : []),
+                scope.label,
+            ]);
+        }
+    }
+    return reasons;
+};
+exports.getReasonsByItem = getReasonsByItem;
+const plural = (count, noun) => `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
+exports.plural = plural;
+const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
+exports.formatHits = formatHits;
+// Deliberately coarse: the question this answers is "is this still true?",
+// and a number ticking by the second invites reading it as precision.
+const formatAge = (readAt) => {
+    const seconds = Math.max(0, Math.round((Date.now() - readAt) / 1000));
+    if (seconds < 60) {
+        return "just now";
+    }
+    const minutes = Math.round(seconds / 60);
+    return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
+};
+exports.formatAge = formatAge;
+// The alert sections cut at MAX_LISTED, but the button's badge counts them all,
+// so a truncated list reads as the panel disagreeing with itself. Say what was
+// left out instead.
+const appendMore = (body, total) => {
+    if (total <= exports.MAX_LISTED) {
+        return;
+    }
+    body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`+${total - exports.MAX_LISTED} more`]));
+};
+exports.appendMore = appendMore;
+const makeCard = (title, options = {}) => {
+    const card = document.createElement("section");
+    card.className = "fh-card";
+    if (options.tone) {
+        card.dataset.tone = options.tone;
+    }
+    const head = document.createElement("header");
+    head.className = "fh-card-head";
+    const label = document.createElement("span");
+    label.textContent = title;
+    head.append(label);
+    if (options.aside !== undefined) {
+        const aside = document.createElement("span");
+        aside.className = "fh-card-aside";
+        aside.append(options.aside);
+        head.append(aside);
+    }
+    const body = document.createElement("div");
+    body.className = "fh-card-body";
+    card.append(head, body);
+    return { card, body };
+};
+exports.makeCard = makeCard;
+const makeRow = (title, options = {}) => {
+    const row = document.createElement(options.href ? "a" : "div");
+    row.className = "fh-row";
+    if (options.href) {
+        row.href = options.href;
+    }
+    if (options.tone) {
+        row.dataset.tone = options.tone;
+    }
+    const iconSlot = document.createElement("span");
+    iconSlot.className = "fh-row-icon";
+    if (options.icon) {
+        const img = document.createElement("img");
+        img.src = options.icon;
+        img.alt = "";
+        img.loading = "lazy";
+        iconSlot.append(img);
+    }
+    const main = document.createElement("span");
+    main.className = "fh-row-main";
+    const titleLine = document.createElement("span");
+    titleLine.className = "fh-row-title";
+    titleLine.append(title);
+    main.append(titleLine);
+    if (options.sub && options.sub.length > 0) {
+        const sub = document.createElement("span");
+        sub.className = "fh-row-sub";
+        sub.append(...options.sub);
+        main.append(sub);
+    }
+    if (options.tags && options.tags.length > 0) {
+        const tags = document.createElement("span");
+        tags.className = "fh-row-tags";
+        tags.append(...options.tags);
+        main.append(tags);
+    }
+    const aside = document.createElement("span");
+    aside.className = "fh-row-aside";
+    if (options.aside) {
+        aside.append(...options.aside);
+    }
+    row.append(iconSlot, main, aside);
+    return row;
+};
+exports.makeRow = makeRow;
+const makeTag = (text, tone = "muted", href) => {
+    const tag = document.createElement(href ? "a" : "span");
+    tag.className = "fh-tag";
+    tag.dataset.tone = tone;
+    tag.textContent = text;
+    if (href) {
+        tag.href = href;
+    }
+    return tag;
+};
+exports.makeTag = makeTag;
+const makeEmpty = (text) => {
+    const empty = document.createElement("div");
+    empty.className = "fh-empty";
+    empty.textContent = text;
+    return empty;
+};
+exports.makeEmpty = makeEmpty;
+// The buddy.farm image path is site-relative; the game serves the same icons.
+const toIconUrl = (image) => {
+    if (!image) {
+        return undefined;
+    }
+    if (/^(?:https?:)?\/\//.test(image) || image.startsWith("data:")) {
+        return image;
+    }
+    return image.startsWith("/") ? image : `/${image}`;
+};
+exports.toIconUrl = toIconUrl;
+
+
+/***/ }),
+
+/***/ 6306:
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.injectPanelStyles = void 0;
+const theme_1 = __webpack_require__(1178);
+const shared_1 = __webpack_require__(4073);
+const layout_1 = __webpack_require__(6253);
+// Bottom-left, clear of the bottom bar. env() keeps the button clear of the
+// iOS home indicator and any notch; the fallbacks make it identical to before
+// on anything that does not report insets.
 const EDGE_OFFSET = "calc(8px + env(safe-area-inset-left, 0px))";
 const BOTTOM_OFFSET = "calc(62px + env(safe-area-inset-bottom, 0px))";
 // On a phone the button moves to the RIGHT, at Reed's request: that is where a
 // thumb rests.
 const RIGHT_OFFSET = "calc(8px + env(safe-area-inset-right, 0px))";
-const TABS = [
-    { id: "now", label: "Now" },
-    { id: "goals", label: "Goals" },
-    // "Queue" rather than "Craftworks": five labels have to fit 380px, and the
-    // panel is already inside Craftworks by context
-    { id: "craftworks", label: "Queue" },
-    // Items at or near the inventory cap, filtered to what drops where you are.
-    // This used to be a row of icons in the bottom stats bar; see renderCap.
-    { id: "cap", label: "Cap" },
-    // Sets is last because it is the one tab you open on purpose rather than to
-    // be told something: it has no count badge and nothing in it is time-sensitive
-    { id: "sets", label: "Sets" },
-];
-const injectStyles = () => {
-    if (document.querySelector(`#${STYLE_ID}`)) {
+const injectPanelStyles = () => {
+    if (document.querySelector(`#${shared_1.STYLE_ID}`)) {
         return;
     }
-    document.head.insertAdjacentHTML("beforeend", `<style id="${STYLE_ID}">
-      #${BUTTON_ID} {
+    document.head.insertAdjacentHTML("beforeend", `<style id="${shared_1.STYLE_ID}">
+      #${shared_1.BUTTON_ID} {
         position: fixed;
         left: ${EDGE_OFFSET};
         bottom: ${BOTTOM_OFFSET};
@@ -3194,13 +3822,13 @@ const injectStyles = () => {
         -webkit-backdrop-filter: blur(6px);
         backdrop-filter: blur(6px);
       }
-      #${BUTTON_ID}:hover { color: ${theme_1.TEXT_WHITE}; border-color: #5a5a5a; }
-      #${BUTTON_ID}:active { transform: scale(0.94); }
-      #${BUTTON_ID}[data-open="true"] {
+      #${shared_1.BUTTON_ID}:hover { color: ${theme_1.TEXT_WHITE}; border-color: #5a5a5a; }
+      #${shared_1.BUTTON_ID}:active { transform: scale(0.94); }
+      #${shared_1.BUTTON_ID}[data-open="true"] {
         color: ${theme_1.TEXT_WHITE};
         transform: rotate(90deg);
       }
-      #${BUTTON_ID} .fh-badge {
+      #${shared_1.BUTTON_ID} .fh-badge {
         position: absolute;
         top: -2px;
         right: -2px;
@@ -3219,7 +3847,7 @@ const injectStyles = () => {
          items AT cap where you are (every drop of those is thrown away), amber
          when the worst of it is only near. It is what the row of icons in the
          stats bar used to be for -- a glance, without opening anything. */
-      #${BUTTON_ID} .fh-cap-badge {
+      #${shared_1.BUTTON_ID} .fh-cap-badge {
         position: absolute;
         top: -2px;
         left: -2px;
@@ -3234,48 +3862,68 @@ const injectStyles = () => {
         line-height: 18px;
         text-align: center;
       }
-      #${BUTTON_ID} .fh-cap-badge[data-level="near"] {
+      #${shared_1.BUTTON_ID} .fh-cap-badge[data-level="near"] {
         background: ${theme_1.TEXT_WARNING};
         color: #111;
       }
-      #${PANEL_ID} .fh-cap-grid {
+      #${shared_1.PANEL_ID} .fh-cap-grid {
         display: flex;
         flex-wrap: wrap;
         gap: 5px;
         margin: 4px 0 8px;
       }
-      #${PANEL_ID} .fh-cap-item {
+      #${shared_1.PANEL_ID} .fh-cap-item {
         display: block;
         line-height: 0;
         border-radius: 6px;
         border: 2px solid ${theme_1.TEXT_WARNING};
       }
-      #${PANEL_ID} .fh-cap-item[data-at-cap="true"] { border-color: ${theme_1.TEXT_ERROR}; }
-      #${PANEL_ID} .fh-cap-item img {
+      #${shared_1.PANEL_ID} .fh-cap-item[data-at-cap="true"] { border-color: ${theme_1.TEXT_ERROR}; }
+      #${shared_1.PANEL_ID} .fh-cap-item img {
         width: 28px;
         height: 28px;
         border-radius: 4px;
         display: block;
       }
-      #${PANEL_ID} .fh-cap-row {
+      #${shared_1.PANEL_ID} .fh-cap-row {
         display: flex;
         align-items: center;
         gap: 8px;
         font-size: 12px;
         padding: 2px 0;
       }
-      #${PANEL_ID} .fh-cap-row img {
+      #${shared_1.PANEL_ID} .fh-cap-row img {
         width: 18px;
         height: 18px;
         border-radius: 3px;
         flex-shrink: 0;
       }
-      #${PANEL_ID} .fh-cap-row .fh-cap-count {
+      #${shared_1.PANEL_ID} .fh-cap-row .fh-cap-count {
         margin-left: auto;
         color: ${theme_1.TEXT_GRAY};
         white-space: nowrap;
       }
-      #${PANEL_ID} {
+      /* Design tokens. Every colour and radius in the panel comes from here,
+         so a tab built later matches without copying hex values around, and
+         the tints (a warning row's wash, a tag's border) are mixed from the
+         same base rather than hand-picked. */
+      #${shared_1.PANEL_ID} {
+        --fh-bg: rgba(16, 17, 19, 0.94);
+        --fh-surface: rgba(255, 255, 255, 0.035);
+        --fh-surface-2: rgba(255, 255, 255, 0.07);
+        --fh-border: rgba(255, 255, 255, 0.08);
+        --fh-border-2: rgba(255, 255, 255, 0.14);
+        --fh-text: #eceef0;
+        --fh-muted: #9aa0a6;
+        --fh-ok: ${theme_1.TEXT_SUCCESS};
+        --fh-warn: ${theme_1.TEXT_WARNING};
+        --fh-err: #ff5c5c;
+        --fh-accent: #7cc4ff;
+        --fh-radius: 12px;
+        --fh-radius-s: 8px;
+        --fh-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+
         position: fixed;
         left: ${EDGE_OFFSET};
         bottom: calc(${BOTTOM_OFFSET} + 52px);
@@ -3286,18 +3934,25 @@ const injectStyles = () => {
         display: flex;
         flex-direction: column;
         padding: 12px 14px;
-        border-radius: 12px;
-        border: 1px solid ${theme_1.BORDER_GRAY};
-        background: rgba(18, 18, 19, 0.97);
-        box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
-        -webkit-backdrop-filter: blur(10px);
-        backdrop-filter: blur(10px);
+        border-radius: var(--fh-radius);
+        border: 1px solid var(--fh-border-2);
+        background:
+          radial-gradient(120% 80% at 0% 0%, rgba(124, 196, 255, 0.06), transparent 60%),
+          var(--fh-bg);
+        color: var(--fh-text);
+        font-family: var(--fh-font);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+        backdrop-filter: blur(14px) saturate(1.2);
         opacity: 0;
-        transform: translateY(8px);
+        transform: translateY(8px) scale(0.985);
+        transform-origin: bottom left;
         pointer-events: none;
-        transition: opacity 140ms ease, transform 140ms ease;
+        transition: opacity 160ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        container-type: inline-size;
+        container-name: panel;
       }
-      #${PANEL_ID}[data-open="true"] {
+      #${shared_1.PANEL_ID}[data-open="true"] {
         opacity: 1;
         transform: translateY(0);
         pointer-events: auto;
@@ -3306,51 +3961,55 @@ const injectStyles = () => {
          a row on a wide screen, which turns the tab strip into a vertical
          rail. min-height:0 on both is what lets the body scroll inside a flex
          parent instead of pushing the panel taller. */
-      #${PANEL_ID} .fh-briefing-main {
+      #${shared_1.PANEL_ID} .fh-briefing-main {
         display: flex;
         flex-direction: column;
         flex: 1 1 auto;
         min-height: 0;
       }
-      #${PANEL_ID} .fh-briefing-body {
+      #${shared_1.PANEL_ID} .fh-briefing-body {
         overflow-y: auto;
         overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
         flex: 1 1 auto;
         min-height: 0;
+        padding-right: 2px;
       }
-      #${PANEL_ID} .fh-briefing-body::-webkit-scrollbar { width: 8px; }
-      #${PANEL_ID} .fh-briefing-body::-webkit-scrollbar-thumb {
-        background: #3a3a3a;
+      #${shared_1.PANEL_ID} .fh-briefing-body::-webkit-scrollbar { width: 8px; }
+      #${shared_1.PANEL_ID} .fh-briefing-body::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.18);
         border-radius: 4px;
       }
-      #${PANEL_ID} .fh-briefing-head {
+      #${shared_1.PANEL_ID} .fh-briefing-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
         margin-bottom: 8px;
       }
-      #${PANEL_ID} .fh-briefing-refresh {
+      #${shared_1.PANEL_ID} .fh-briefing-refresh {
         cursor: pointer;
         color: ${theme_1.TEXT_GRAY};
         font-size: 11px;
       }
-      #${PANEL_ID} .fh-briefing-refresh:hover { color: ${theme_1.TEXT_WHITE}; }
+      #${shared_1.PANEL_ID} .fh-briefing-refresh:hover { color: ${theme_1.TEXT_WHITE}; }
       /* How old the numbers are. The panel outlives navigation, so without
          this there is no telling whether it is showing this minute or whatever
          was true when it was opened. Muted: it is a caveat, not a reading. */
-      #${PANEL_ID} .fh-briefing-age {
+      #${shared_1.PANEL_ID} .fh-briefing-age {
         color: ${theme_1.TEXT_GRAY};
         font-size: 11px;
         opacity: 0.75;
       }
-      #${PANEL_ID} .fh-briefing-controls {
+      #${shared_1.PANEL_ID} .fh-briefing-controls {
         align-items: center;
         display: flex;
         gap: 8px;
       }
       /* The perk indicator is a button, not a label: its tooltip is the only
          perk diagnostic there is, and a phone cannot show a tooltip. */
-      #${PANEL_ID} .fh-perk-chip {
+      #${shared_1.PANEL_ID} .fh-perk-chip {
         align-items: center;
         border-radius: 7px;
         cursor: pointer;
@@ -3358,64 +4017,68 @@ const injectStyles = () => {
         gap: 5px;
         padding: 3px 5px;
       }
-      #${PANEL_ID} .fh-perk-chip:hover,
-      #${PANEL_ID} .fh-perk-chip[data-on="true"] {
+      #${shared_1.PANEL_ID} .fh-perk-chip:hover,
+      #${shared_1.PANEL_ID} .fh-perk-chip[data-on="true"] {
         background: rgba(255, 255, 255, 0.09);
       }
-      #${PANEL_ID} .fh-perk-note {
+      #${shared_1.PANEL_ID} .fh-perk-note {
         display: none;
         color: ${theme_1.TEXT_GRAY};
         font-size: 11px;
         line-height: 1.4;
         margin: -2px 0 8px;
       }
-      #${PANEL_ID} .fh-perk-note[data-on="true"] { display: block; }
+      #${shared_1.PANEL_ID} .fh-perk-note[data-on="true"] { display: block; }
       /* The log under the note: one line per perk decision, newest last, so an
          ordering problem (a reconcile landing between a harvest's switch and
          the harvest) is visible as two entries a second apart. */
-      #${PANEL_ID} .fh-perk-log {
+      #${shared_1.PANEL_ID} .fh-perk-log {
         display: grid;
         grid-template-columns: auto 1fr;
         column-gap: 6px;
         margin-top: 4px;
         opacity: 0.85;
       }
-      #${PANEL_ID} .fh-perk-log-time {
+      #${shared_1.PANEL_ID} .fh-perk-log-time {
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
       }
-      #${PANEL_ID} .fh-briefing-tabs {
+      #${shared_1.PANEL_ID} .fh-briefing-tabs {
         display: flex;
-        gap: 4px;
-        margin-bottom: 8px;
-        border-bottom: 1px solid ${theme_1.BORDER_GRAY};
-        padding-bottom: 8px;
+        gap: 2px;
+        margin-bottom: 10px;
+        padding: 3px;
+        border-radius: var(--fh-radius-s);
+        background: var(--fh-surface);
+        border: 1px solid var(--fh-border);
       }
-      #${PANEL_ID} .fh-tab {
+      #${shared_1.PANEL_ID} .fh-tab {
         flex: 1 1 0;
         text-align: center;
-        padding: 5px 8px;
-        border-radius: 7px;
+        padding: 6px 8px;
+        border-radius: 6px;
         font-size: 12px;
         cursor: pointer;
-        color: ${theme_1.TEXT_GRAY};
+        color: var(--fh-muted);
         background: transparent;
         transition: background 120ms ease, color 120ms ease;
         user-select: none;
+        white-space: nowrap;
       }
-      #${PANEL_ID} .fh-tab:hover { color: ${theme_1.TEXT_WHITE}; }
-      #${PANEL_ID} .fh-tab[data-active="true"] {
-        color: ${theme_1.TEXT_WHITE};
-        background: rgba(255, 255, 255, 0.09);
+      #${shared_1.PANEL_ID} .fh-tab:hover { color: var(--fh-text); }
+      #${shared_1.PANEL_ID} .fh-tab[data-active="true"] {
+        color: var(--fh-text);
+        background: var(--fh-surface-2);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
       }
       /* The count of things wanting attention in that tab. Muted, because it
          is there to be scanned rather than read. */
-      #${PANEL_ID} .fh-tab-count {
+      #${shared_1.PANEL_ID} .fh-tab-count {
         margin-left: 5px;
         font-size: 11px;
         color: ${theme_1.TEXT_WARNING};
       }
-      #${PANEL_ID} .fh-tab[data-active="true"] .fh-tab-count {
+      #${shared_1.PANEL_ID} .fh-tab[data-active="true"] .fh-tab-count {
         color: ${theme_1.TEXT_WARNING};
       }
 
@@ -3423,7 +4086,7 @@ const injectStyles = () => {
          title so it is present on every tab, not only the one focus was set
          from. Wraps because focus is a list now -- two or three undertakings
          that share a material are the normal case. */
-      #${PANEL_ID} .fh-focus-chip {
+      #${shared_1.PANEL_ID} .fh-focus-chip {
         display: none;
         align-items: center;
         flex-wrap: wrap;
@@ -3431,8 +4094,8 @@ const injectStyles = () => {
         margin-bottom: 8px;
         font-size: 11px;
       }
-      #${PANEL_ID} .fh-focus-chip[data-on="true"] { display: flex; }
-      #${PANEL_ID} .fh-focus-tag {
+      #${shared_1.PANEL_ID} .fh-focus-chip[data-on="true"] { display: flex; }
+      #${shared_1.PANEL_ID} .fh-focus-tag {
         display: flex;
         align-items: center;
         gap: 6px;
@@ -3442,57 +4105,58 @@ const injectStyles = () => {
         color: ${theme_1.TEXT_WARNING};
         max-width: 100%;
       }
-      #${PANEL_ID} .fh-focus-tag > span:first-child {
+      #${shared_1.PANEL_ID} .fh-focus-tag > span:first-child {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      #${PANEL_ID} .fh-chip-clear {
+      #${shared_1.PANEL_ID} .fh-chip-clear {
         cursor: pointer;
         opacity: 0.75;
         flex: 0 0 auto;
       }
-      #${PANEL_ID} .fh-chip-clear:hover { opacity: 1; }
+      #${shared_1.PANEL_ID} .fh-chip-clear:hover { opacity: 1; }
       /* Only appears once focus is a list: clearing three chips one at a time
          is the sort of thing that stops people using focus at all. */
-      #${PANEL_ID} .fh-focus-all {
+      #${shared_1.PANEL_ID} .fh-focus-all {
         cursor: pointer;
         color: ${theme_1.TEXT_GRAY};
         padding: 3px 4px;
       }
-      #${PANEL_ID} .fh-focus-all:hover { color: ${theme_1.TEXT_WHITE}; }
+      #${shared_1.PANEL_ID} .fh-focus-all:hover { color: ${theme_1.TEXT_WHITE}; }
       /* Dimmed, never hidden: a quest that disappeared because you focused
          another is exactly what you would forget about. */
-      #${PANEL_ID} .fh-dim {
+      #${shared_1.PANEL_ID} .fh-dim {
         opacity: 0.38;
         transition: opacity 160ms ease;
       }
-      #${PANEL_ID} .fh-dim:hover { opacity: 0.75; }
+      #${shared_1.PANEL_ID} .fh-dim:hover { opacity: 0.75; }
 
       /* Wide screens get a two-pane panel: a vertical rail of sections and a
          content pane. The rail is what removes the four-tab ceiling -- a
          column takes as many entries as we want, where the horizontal strip
          could not fit a fifth at 380px. Below this width nothing changes. */
       @media (min-width: 1024px) {
-        #${PANEL_ID} {
+        #${shared_1.PANEL_ID} {
           width: 920px;
           max-height: 82vh;
         }
-        #${PANEL_ID} .fh-briefing-main {
+        #${shared_1.PANEL_ID} .fh-briefing-main {
           flex-direction: row;
           gap: 14px;
         }
-        #${PANEL_ID} .fh-briefing-tabs {
+        #${shared_1.PANEL_ID} .fh-briefing-tabs {
           flex: 0 0 148px;
           flex-direction: column;
           gap: 2px;
           margin-bottom: 0;
-          padding-bottom: 0;
-          padding-right: 12px;
-          border-bottom: none;
-          border-right: 1px solid ${theme_1.BORDER_GRAY};
+          padding: 0 12px 0 0;
+          background: transparent;
+          border: none;
+          border-right: 1px solid var(--fh-border);
+          border-radius: 0;
         }
-        #${PANEL_ID} .fh-tab {
+        #${shared_1.PANEL_ID} .fh-tab {
           flex: 0 0 auto;
           text-align: left;
           padding: 7px 10px;
@@ -3506,13 +4170,13 @@ const injectStyles = () => {
         /* Bottom RIGHT on a phone: that is where the thumb is, and the cap
            tracker (the only other floating thing on that side) is not drawn
            below this width, so the corner is free. */
-        #${BUTTON_ID} {
+        #${shared_1.BUTTON_ID} {
           left: auto;
           right: ${RIGHT_OFFSET};
           width: 48px;
           height: 48px;
         }
-        #${PANEL_ID} {
+        #${shared_1.PANEL_ID} {
           left: auto;
           right: ${RIGHT_OFFSET};
           width: calc(100vw - 16px);
@@ -3523,45 +4187,45 @@ const injectStyles = () => {
         }
         /* 5px of padding is a 22px-tall target. This makes the tab strip
            thumb-sized without changing anything on a desktop. */
-        #${PANEL_ID} .fh-tab {
+        #${shared_1.PANEL_ID} .fh-tab {
           padding: 10px 8px;
           font-size: 13px;
         }
-        #${PANEL_ID} .fh-briefing-refresh {
+        #${shared_1.PANEL_ID} .fh-briefing-refresh {
           font-size: 12px;
           padding: 6px 2px 6px 10px;
         }
         /* The perk chip is the note's only way open on a phone, which is the
            one place the note matters, so it gets a thumb-sized box. */
-        #${PANEL_ID} .fh-perk-chip {
+        #${shared_1.PANEL_ID} .fh-perk-chip {
           padding: 7px 8px;
         }
-        #${PANEL_ID} .fh-perk-note {
+        #${shared_1.PANEL_ID} .fh-perk-note {
           font-size: 12px;
         }
         /* A 14px glyph is not a target. Padding grows the hit box without
            moving the glyph. */
-        #${PANEL_ID} .fh-goal-remove,
-        #${PANEL_ID} .fh-goal-action,
-        #${PANEL_ID} .fh-chip-clear {
+        #${shared_1.PANEL_ID} .fh-goal-remove,
+        #${shared_1.PANEL_ID} .fh-goal-action,
+        #${shared_1.PANEL_ID} .fh-chip-clear {
           padding: 6px 8px;
           margin: -6px -8px -6px 0;
         }
-        #${PANEL_ID} .fh-chip {
+        #${shared_1.PANEL_ID} .fh-chip {
           padding: 6px 12px;
           font-size: 12px;
         }
         /* 0.38 relies on hover to read a dimmed row, and touch has no hover.
            Dimmed still reads as secondary at 0.55 but stays legible. */
-        #${PANEL_ID} .fh-dim { opacity: 0.55; }
+        #${shared_1.PANEL_ID} .fh-dim { opacity: 0.55; }
       }
-      #${PANEL_ID} .fh-chips {
+      #${shared_1.PANEL_ID} .fh-chips {
         display: flex;
         flex-wrap: wrap;
         gap: 4px;
         margin: 2px 0 8px;
       }
-      #${PANEL_ID} .fh-chip {
+      #${shared_1.PANEL_ID} .fh-chip {
         padding: 2px 8px;
         border-radius: 10px;
         border: 1px solid ${theme_1.BORDER_GRAY};
@@ -3572,41 +4236,318 @@ const injectStyles = () => {
         transition: background 120ms ease, color 120ms ease,
           border-color 120ms ease;
       }
-      #${PANEL_ID} .fh-chip:hover { color: ${theme_1.TEXT_WHITE}; }
-      #${PANEL_ID} .fh-chip[data-active="true"] {
+      #${shared_1.PANEL_ID} .fh-chip:hover { color: ${theme_1.TEXT_WHITE}; }
+      #${shared_1.PANEL_ID} .fh-chip[data-active="true"] {
         color: ${theme_1.TEXT_WHITE};
         background: rgba(255, 255, 255, 0.11);
         border-color: #5a5a5a;
       }
-      #${PANEL_ID} .fh-goal { margin-bottom: 10px; }
-      #${PANEL_ID} .fh-goal-top {
+      #${shared_1.PANEL_ID} .fh-goal { margin-bottom: 10px; }
+      #${shared_1.PANEL_ID} .fh-goal-top {
         display: flex;
         align-items: baseline;
         justify-content: space-between;
         gap: 8px;
       }
-      #${PANEL_ID} .fh-goal-remove {
+      #${shared_1.PANEL_ID} .fh-goal-remove {
         cursor: pointer;
         color: #6a6a6a;
         font-size: 14px;
         line-height: 1;
       }
-      #${PANEL_ID} .fh-goal-remove:hover { color: ${theme_1.TEXT_ERROR}; }
-      #${PANEL_ID} .fh-bar {
+      #${shared_1.PANEL_ID} .fh-goal-remove:hover { color: ${theme_1.TEXT_ERROR}; }
+      #${shared_1.PANEL_ID} .fh-bar {
         height: 4px;
         border-radius: 2px;
         background: #2a2a2a;
         margin: 4px 0 3px;
         overflow: hidden;
       }
-      #${PANEL_ID} .fh-bar > div {
+      #${shared_1.PANEL_ID} .fh-bar > div {
         height: 100%;
         border-radius: 2px;
         background: ${theme_1.TEXT_SUCCESS};
         transition: width 200ms ease;
       }
+
+      /* ---- primitives: cards, rows, tags ---------------------------------- */
+      #${shared_1.PANEL_ID} .fh-card {
+        background: var(--fh-surface);
+        border: 1px solid var(--fh-border);
+        border-radius: var(--fh-radius-s);
+        padding: 8px 10px 6px;
+        margin-bottom: 8px;
+        content-visibility: auto;
+        contain-intrinsic-size: auto 80px;
+      }
+      #${shared_1.PANEL_ID} .fh-card[data-tone="err"] {
+        border-color: color-mix(in srgb, var(--fh-err) 35%, transparent);
+        background: color-mix(in srgb, var(--fh-err) 7%, var(--fh-surface));
+      }
+      #${shared_1.PANEL_ID} .fh-card[data-tone="warn"] {
+        border-color: color-mix(in srgb, var(--fh-warn) 30%, transparent);
+      }
+      #${shared_1.PANEL_ID} .fh-card[data-tone="ok"] {
+        border-color: color-mix(in srgb, var(--fh-ok) 30%, transparent);
+      }
+      #${shared_1.PANEL_ID} .fh-card-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        color: var(--fh-muted);
+        margin-bottom: 4px;
+      }
+      #${shared_1.PANEL_ID} .fh-card-aside {
+        font-weight: 500;
+        letter-spacing: 0;
+        text-transform: none;
+        font-variant-numeric: tabular-nums;
+      }
+      #${shared_1.PANEL_ID} .fh-row {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 9px;
+        padding: 5px 4px;
+        margin: 0 -4px;
+        border-radius: 6px;
+        color: var(--fh-text);
+        text-decoration: none;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      #${shared_1.PANEL_ID} a.fh-row:hover { background: var(--fh-surface-2); }
+      #${shared_1.PANEL_ID} .fh-row + .fh-row {
+        border-top: 1px solid var(--fh-border);
+        border-radius: 0 0 6px 6px;
+      }
+      #${shared_1.PANEL_ID} .fh-row[data-tone="err"] .fh-row-title { color: var(--fh-err); }
+      #${shared_1.PANEL_ID} .fh-row[data-tone="warn"] .fh-row-title { color: var(--fh-warn); }
+      #${shared_1.PANEL_ID} .fh-row[data-tone="ok"] .fh-row-title { color: var(--fh-ok); }
+      #${shared_1.PANEL_ID} .fh-row[data-tone="muted"] { opacity: 0.6; }
+      #${shared_1.PANEL_ID} .fh-row-icon {
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border-radius: 6px;
+        background: var(--fh-surface-2);
+        overflow: hidden;
+      }
+      #${shared_1.PANEL_ID} .fh-row-icon:empty { visibility: hidden; }
+      #${shared_1.PANEL_ID} .fh-row-icon img { width: 22px; height: 22px; display: block; }
+      #${shared_1.PANEL_ID} .fh-row-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+      #${shared_1.PANEL_ID} .fh-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #${shared_1.PANEL_ID} .fh-row-title a { color: inherit; }
+      #${shared_1.PANEL_ID} .fh-row-sub { font-size: 11px; color: var(--fh-muted); }
+      #${shared_1.PANEL_ID} .fh-row-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+      #${shared_1.PANEL_ID} .fh-row-aside {
+        font-size: 11px;
+        color: var(--fh-muted);
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      #${shared_1.PANEL_ID} .fh-row-aside strong { color: var(--fh-text); font-weight: 600; }
+      #${shared_1.PANEL_ID} .fh-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 7px;
+        border-radius: 999px;
+        font-size: 10.5px;
+        line-height: 16px;
+        color: var(--fh-muted);
+        border: 1px solid var(--fh-border-2);
+        background: var(--fh-surface);
+        text-decoration: none;
+        white-space: nowrap;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #${shared_1.PANEL_ID} a.fh-tag:hover { border-color: var(--fh-text); color: var(--fh-text); }
+      #${shared_1.PANEL_ID} .fh-tag[data-tone="ok"] {
+        color: var(--fh-ok);
+        border-color: color-mix(in srgb, var(--fh-ok) 45%, transparent);
+        background: color-mix(in srgb, var(--fh-ok) 10%, transparent);
+      }
+      #${shared_1.PANEL_ID} .fh-tag[data-tone="warn"] {
+        color: var(--fh-warn);
+        border-color: color-mix(in srgb, var(--fh-warn) 45%, transparent);
+        background: color-mix(in srgb, var(--fh-warn) 10%, transparent);
+      }
+      #${shared_1.PANEL_ID} .fh-tag[data-tone="err"] {
+        color: var(--fh-err);
+        border-color: color-mix(in srgb, var(--fh-err) 45%, transparent);
+        background: color-mix(in srgb, var(--fh-err) 10%, transparent);
+      }
+      #${shared_1.PANEL_ID} .fh-tag[data-tone="accent"] {
+        color: var(--fh-accent);
+        border-color: color-mix(in srgb, var(--fh-accent) 45%, transparent);
+        background: color-mix(in srgb, var(--fh-accent) 10%, transparent);
+      }
+      #${shared_1.PANEL_ID} .fh-empty {
+        color: var(--fh-muted);
+        font-size: 12px;
+        padding: 6px 2px;
+      }
+      /* Key figures in a strip: stamina banked, silver and xp per hit. */
+      #${shared_1.PANEL_ID} .fh-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      #${shared_1.PANEL_ID} .fh-stat {
+        background: var(--fh-surface);
+        border: 1px solid var(--fh-border);
+        border-radius: var(--fh-radius-s);
+        padding: 6px 9px;
+      }
+      #${shared_1.PANEL_ID} .fh-stat-label {
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: var(--fh-muted);
+      }
+      #${shared_1.PANEL_ID} .fh-stat-value {
+        font-size: 15px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--fh-text);
+      }
+      /* The location header: icon, name, type. */
+      #${shared_1.PANEL_ID} .fh-place {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      #${shared_1.PANEL_ID} .fh-place img {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: var(--fh-surface-2);
+      }
+      #${shared_1.PANEL_ID} .fh-place-name { font-size: 14px; font-weight: 600; color: var(--fh-text); }
+      #${shared_1.PANEL_ID} .fh-place-name a { color: inherit; text-decoration: none; }
+      #${shared_1.PANEL_ID} .fh-place-sub { font-size: 11px; color: var(--fh-muted); }
+      /* Icon grids (the Cap tab's "drops here"). */
+      #${shared_1.PANEL_ID} .fh-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 2px 0 4px;
+      }
+      #${shared_1.PANEL_ID} .fh-grid-item {
+        display: block;
+        line-height: 0;
+        border-radius: 8px;
+        border: 2px solid var(--fh-warn);
+        background: var(--fh-surface-2);
+        transition: transform 120ms ease;
+      }
+      #${shared_1.PANEL_ID} .fh-grid-item:hover { transform: translateY(-1px); }
+      #${shared_1.PANEL_ID} .fh-grid-item[data-at-cap="true"] { border-color: var(--fh-err); }
+      #${shared_1.PANEL_ID} .fh-grid-item img { width: 30px; height: 30px; border-radius: 6px; display: block; }
+      #${shared_1.PANEL_ID} .fh-foot {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        margin-top: 6px;
+        font-size: 11px;
+        color: var(--fh-muted);
+      }
+      #${shared_1.PANEL_ID} .fh-link { cursor: pointer; text-decoration: underline; color: var(--fh-muted); }
+      #${shared_1.PANEL_ID} .fh-link:hover { color: var(--fh-text); }
+      #${shared_1.PANEL_ID} .fh-briefing-body { view-transition-name: fh-briefing-body; }
+      ::view-transition-old(fh-briefing-body),
+      ::view-transition-new(fh-briefing-body) {
+        animation-duration: 140ms;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #${shared_1.PANEL_ID}, #${shared_1.BUTTON_ID}, #${shared_1.PANEL_ID} * { transition: none !important; }
+        ::view-transition-group(*),
+        ::view-transition-old(*),
+        ::view-transition-new(*) { animation: none !important; }
+      }
     </style>`);
 };
+exports.injectPanelStyles = injectPanelStyles;
+
+
+/***/ }),
+
+/***/ 5299:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.briefingPanel = void 0;
+const craftworks_1 = __webpack_require__(920);
+const goals_1 = __webpack_require__(1267);
+const craftworks_2 = __webpack_require__(7831);
+const shared_1 = __webpack_require__(4073);
+const needAdapters_1 = __webpack_require__(1903);
+const recipes_1 = __webpack_require__(498);
+const api_1 = __webpack_require__(3413);
+const inventoryCapWarnings_1 = __webpack_require__(6660);
+const page_1 = __webpack_require__(7952);
+const needs_1 = __webpack_require__(2538);
+const focusScope_1 = __webpack_require__(1307);
+const suggestions_1 = __webpack_require__(9262);
+const focus_1 = __webpack_require__(7167);
+const requests_1 = __webpack_require__(3300);
+const perks_1 = __webpack_require__(5543);
+const quests_1 = __webpack_require__(303);
+const settings_1 = __webpack_require__(126);
+const styles_1 = __webpack_require__(6306);
+const inventory_1 = __webpack_require__(4514);
+const gameLinks_1 = __webpack_require__(1616);
+const mastery_1 = __webpack_require__(283);
+const locationAdvice_1 = __webpack_require__(4764);
+const promise_1 = __webpack_require__(6762);
+const unlimited_1 = __webpack_require__(4808);
+const cap_1 = __webpack_require__(2206);
+const here_1 = __webpack_require__(7190);
+const theme_1 = __webpack_require__(1178);
+const SETTING_BRIEFING_PANEL = {
+    id: settings_1.SettingId.BRIEFING_PANEL,
+    title: "Briefing: Floating panel",
+    description: `
+    A button above the bottom bar that opens your goals, the Craftworks queue,
+    your open requests and where to go, from any page
+  `,
+    type: "boolean",
+    defaultValue: true,
+};
+const TABS = [
+    // strictly what wants you this minute
+    { id: "now", label: "Now" },
+    // the place you are standing, read against your needs -- or where to go
+    { id: "here", label: "Here" },
+    { id: "goals", label: "Goals" },
+    // the queue and its saved sets, together: sets are craftworks-only and the
+    // one thing you open on purpose, so they sit under the queue's alerts
+    { id: "craftworks", label: "Craftworks" },
+    // items at or near the inventory cap, and who would take them off your hands
+    { id: "cap", label: "Cap" },
+];
 // Inline so it always draws: the game mixes Font Awesome 4 and 6 and neither
 // set is guaranteed to carry a given glyph.
 const ICON = `
@@ -3616,15 +4557,8 @@ const ICON = `
     <path d="M3 6h11M3 12h8M3 18h11" />
     <path d="M16 15l3 3 5-6" />
   </svg>`;
-const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
-// What the badge is counting, in words.
-//
-// The number alone mixes three unrelated things, so "1" could be a dead slot,
-// a mis-ordered queue or a request waiting to be handed in. The tooltip says
-// which, and both callers build it the same way so the figure cannot mean one
-// thing before the panel is opened and another after.
 // How many things in each tab actually want you. The point of the rail is to
-// answer "where is the work" without opening all four, so a tab with nothing
+// answer "where is the work" without opening all five, so a tab with nothing
 // outstanding shows no number at all rather than a zero -- a row of zeroes
 // reads as noise and hides the one number that matters.
 const getTabCounts = (context) => {
@@ -3634,143 +4568,54 @@ const getTabCounts = (context) => {
     if (attention.count > 0) {
         counts.now = attention.count;
     }
+    // what drops where you are that you are short of; the tab is the place to
+    // answer "is it worth staying"
+    if (context.here) {
+        const wanted = context.here.location.drops.filter((drop) => context.resolved.scopes.some((scope) => scope.missing.some((entry) => entry.name === drop.name))).length;
+        if (wanted > 0) {
+            counts.here = wanted;
+        }
+    }
     const unfinished = context.goalProgress.filter((progress) => progress.ratio < 1).length;
     if (unfinished > 0) {
         counts.goals = unfinished;
     }
-    // the blockers nothing in the queue produces: the only ones a trip fixes
+    // the blockers nothing in the queue produces: the only ones a trip fixes --
+    // or, failing those, a saved set that matches something you want and is not
+    // the one loaded (getRecommendedSet skips the active set, so anything it
+    // returns is by definition a change)
     const roots = (_b = (_a = context.advice) === null || _a === void 0 ? void 0 : _a.roots.length) !== null && _b !== void 0 ? _b : 0;
     if (roots > 0) {
         counts.craftworks = roots;
     }
+    else if ((0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_d = (_c = context.craftworks) === null || _c === void 0 ? void 0 : _c.sets) !== null && _d !== void 0 ? _d : [], context.itemNames)) {
+        counts.craftworks = 1;
+    }
     // items at cap where you are (or anywhere, before this spot is learned);
     // live tracker state rather than the context, same as the button's badge
     const capView = (0, inventoryCapWarnings_1.getCapTrackerView)();
-    const atCapHere = ((_c = capView.here) !== null && _c !== void 0 ? _c : capView.items).filter((item) => item.isAtCap).length;
+    const atCapHere = ((_e = capView.here) !== null && _e !== void 0 ? _e : capView.items).filter((item) => item.isAtCap).length;
     if (capView.isEnabled && atCapHere > 0) {
         counts.cap = atCapHere;
-    }
-    // Sets is the last tab and has nothing time-sensitive in it, so it earns a
-    // badge only when there is a reason to open it: a saved set that matches
-    // something you want and is not the one loaded. getRecommendedSet skips the
-    // active set, so anything it returns is by definition a change.
-    if ((0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_e = (_d = context.craftworks) === null || _d === void 0 ? void 0 : _d.sets) !== null && _e !== void 0 ? _e : [], context.itemNames)) {
-        counts.sets = 1;
     }
     return counts;
 };
 const summarizeAttention = (advice, readyRequests) => {
     const parts = [];
     if (advice && advice.dead.length > 0) {
-        parts.push(`${plural(advice.dead.length, "slot")} at cap`);
+        parts.push(`${(0, shared_1.plural)(advice.dead.length, "slot")} at cap`);
     }
     if (advice && advice.ordering.length > 0) {
-        parts.push(`${plural(advice.ordering.length, "slot")} out of order`);
+        parts.push(`${(0, shared_1.plural)(advice.ordering.length, "slot")} out of order`);
     }
     if (readyRequests > 0) {
-        parts.push(`${plural(readyRequests, "request")} ready`);
+        parts.push(`${(0, shared_1.plural)(readyRequests, "request")} ready`);
     }
     return {
         count: (advice ? advice.dead.length + advice.ordering.length : 0) +
             readyRequests,
         parts,
     };
-};
-// The cap tracker, as a tab. It draws two things: what drops HERE and is at or
-// near cap (the icon grid -- the glance the old stats-bar row gave, now with
-// room to breathe), and everything at or near cap regardless of where you are
-// (the list). The data is the tracker's own live state, not the panel's
-// context: it refreshes itself off your actions every few seconds, and a
-// figure the panel read on open would be stale by the time it mattered.
-const renderCapItemRow = (item, cap) => {
-    const row = document.createElement("a");
-    row.className = "fh-cap-row";
-    row.href = item.href;
-    const colour = item.isAtCap ? theme_1.TEXT_ERROR : theme_1.TEXT_WARNING;
-    if (item.image) {
-        const icon = document.createElement("img");
-        icon.src = item.image;
-        icon.alt = "";
-        row.append(icon);
-    }
-    const name = document.createElement("span");
-    name.textContent = item.name;
-    name.style.color = colour;
-    const count = document.createElement("span");
-    count.className = "fh-cap-count";
-    count.textContent = `${item.count.toLocaleString()} / ${cap.toLocaleString()}`;
-    row.append(name, count);
-    return row;
-};
-const renderCap = (body, onRefresh) => {
-    const view = (0, inventoryCapWarnings_1.getCapTrackerView)();
-    if (!view.isEnabled) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
-            "The cap tracker is off — turn on “Inventory: Cap tracker” in settings.",
-        ]));
-        return;
-    }
-    if (view.updatedAt === 0) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [
-            view.isFetching ? "Reading your inventory…" : "Inventory not read yet.",
-        ]));
-        return;
-    }
-    if (view.here) {
-        body.append((0, gameLinks_1.makeHeading)("Drops here at or near cap"));
-        if (view.here.length === 0) {
-            body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Nothing — everything here still counts."]));
-        }
-        else {
-            const grid = document.createElement("div");
-            grid.className = "fh-cap-grid";
-            for (const item of view.here) {
-                const tile = document.createElement("a");
-                tile.className = "fh-cap-item";
-                tile.dataset.atCap = String(item.isAtCap);
-                tile.href = item.href;
-                tile.title = `${item.name}: ${item.count.toLocaleString()} / ${view.cap.toLocaleString()}${item.isAtCap ? " — at cap, thrown away" : " — near cap"}`;
-                if (item.image) {
-                    const icon = document.createElement("img");
-                    icon.src = item.image;
-                    icon.alt = item.name;
-                    tile.append(icon);
-                }
-                else {
-                    tile.textContent = item.name;
-                    tile.style.lineHeight = "28px";
-                    tile.style.padding = "0 5px";
-                    tile.style.fontSize = "12px";
-                    tile.style.color = theme_1.TEXT_WHITE;
-                }
-                grid.append(tile);
-            }
-            body.append(grid);
-        }
-    }
-    const atCap = view.items.filter((item) => item.isAtCap);
-    const nearCap = view.items.filter((item) => !item.isAtCap);
-    body.append((0, gameLinks_1.makeHeading)(view.here ? "Everything at or near cap" : "At or near cap"));
-    if (view.items.length === 0) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Nothing at or near cap."]));
-    }
-    for (const item of [...atCap, ...nearCap]) {
-        body.append(renderCapItemRow(item, view.cap));
-    }
-    const foot = document.createElement("div");
-    foot.style.marginTop = "8px";
-    foot.style.fontSize = "11px";
-    foot.style.color = theme_1.TEXT_GRAY;
-    const refresh = document.createElement("span");
-    refresh.textContent = view.isFetching ? "reading…" : "refresh";
-    refresh.style.cursor = "pointer";
-    refresh.style.textDecoration = "underline";
-    refresh.addEventListener("click", (event) => {
-        event.stopPropagation();
-        onRefresh();
-    });
-    foot.append(`cap ${view.cap.toLocaleString()} · inventory read ${formatAge(view.updatedAt)} · `, refresh);
-    body.append(foot);
 };
 // The count on the button's left shoulder. Counts what is AT cap where you are
 // (or anywhere, when this location's drops aren't known yet); when nothing is
@@ -3779,7 +4624,7 @@ const renderCap = (body, onRefresh) => {
 // only when the panel loads.
 const setCapBadge = () => {
     var _a;
-    const button = document.querySelector(`#${BUTTON_ID}`);
+    const button = document.querySelector(`#${shared_1.BUTTON_ID}`);
     if (!button) {
         return;
     }
@@ -3799,14 +4644,14 @@ const setCapBadge = () => {
     const where = view.here ? "here" : "in your inventory";
     badge.title =
         atCap > 0
-            ? `${plural(atCap, "item")} at cap ${where}${nearCap > 0 ? `, ${nearCap} near` : ""}`
-            : `${plural(nearCap, "item")} near cap ${where}`;
+            ? `${(0, shared_1.plural)(atCap, "item")} at cap ${where}${nearCap > 0 ? `, ${nearCap} near` : ""}`
+            : `${(0, shared_1.plural)(nearCap, "item")} near cap ${where}`;
     if (!existing) {
         button.append(badge);
     }
 };
 const setBadge = (count, parts, isStale = false) => {
-    const button = document.querySelector(`#${BUTTON_ID}`);
+    const button = document.querySelector(`#${shared_1.BUTTON_ID}`);
     if (!button) {
         return;
     }
@@ -3826,26 +4671,6 @@ const setBadge = (count, parts, isStale = false) => {
         button.append(badge);
     }
 };
-// Deliberately coarse: the question this answers is "is this still true?",
-// and a number ticking by the second invites reading it as precision.
-// The alert sections cut at MAX_LISTED, but the button's badge counts them all,
-// so a truncated list reads as the panel disagreeing with itself. Say what was
-// left out instead.
-const appendMore = (body, total) => {
-    if (total <= MAX_LISTED) {
-        return;
-    }
-    body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`+${total - MAX_LISTED} more`]));
-};
-const formatAge = (readAt) => {
-    const seconds = Math.max(0, Math.round((Date.now() - readAt) / 1000));
-    if (seconds < 60) {
-        return "just now";
-    }
-    const minutes = Math.round(seconds / 60);
-    return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;
-};
-const formatHits = (hits) => hits >= 100 ? Math.round(hits).toLocaleString() : hits.toFixed(1);
 const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const response = yield (0, requests_1.getHTML)(page_1.Page.QUESTS, new URLSearchParams());
@@ -3861,7 +4686,7 @@ const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
 // the surface that reliably renders: injecting a card into the explore page
 // meant guessing at its structure, and a wrong guess fails silently.
 const getHere = () => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
     const page = (0, page_1.getCurrentPage)();
     if (!page) {
         return undefined;
@@ -3896,9 +4721,9 @@ const getHere = () => __awaiter(void 0, void 0, void 0, function* () {
         return undefined;
     }
     let location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name }));
-    // entries cached before drop tables existed carry no `drops`, and that cache
-    // lives a week
-    if (location && !location.drops) {
+    // entries cached before drop tables (or the per-hit figures and icons that
+    // came later) existed lack them, and that cache lives a week
+    if (location && (!location.drops || location.silverPerHit === undefined)) {
         location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name, ignoreCache: true }));
     }
     if (!((_j = location === null || location === void 0 ? void 0 : location.drops) === null || _j === void 0 ? void 0 : _j.length)) {
@@ -3907,9 +4732,10 @@ const getHere = () => __awaiter(void 0, void 0, void 0, function* () {
     }
     const staminaText = (_l = (_k = page.querySelector("#stamina")) === null || _k === void 0 ? void 0 : _k.textContent) !== null && _l !== void 0 ? _l : "";
     return {
+        image: (_m = locations.find((entry) => entry.name === name)) === null || _m === void 0 ? void 0 : _m.image,
         location,
         stamina: Number(staminaText.replaceAll(",", "").trim()) ||
-            (0, locationAdvice_1.parseStamina)((_m = page.textContent) !== null && _m !== void 0 ? _m : ""),
+            (0, locationAdvice_1.parseStamina)((_o = page.textContent) !== null && _o !== void 0 ? _o : ""),
     };
 });
 // Everything the three tabs need, gathered once. Switching tabs re-renders from
@@ -3973,104 +4799,9 @@ const getWantedNames = (context) => {
     }
     return [...names];
 };
-// Takes exactly what to source. It used to fold in quest bottlenecks itself
-// regardless of caller, which meant the Goals tab quoted trips for items no
-// tracked goal wanted — each tab now decides what its own list means.
-const renderWhereToGo = (body, context, missing) => __awaiter(void 0, void 0, void 0, function* () {
+const renderNow = (body, context, focused) => {
     var _a;
-    const { graph } = context;
-    const sourcing = (0, craftPlanner_1.planSourcing)(graph, missing);
-    if (sourcing.locations.length === 0) {
-        return;
-    }
-    body.append((0, gameLinks_1.makeHeading)("Where to go"));
-    const top = sourcing.locations.slice(0, MAX_LISTED);
-    const references = yield Promise.all(top.map((entry) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: entry.location }))));
-    for (const [index, entry] of top.entries()) {
-        const color = entry.items.length > 1 ? theme_1.TEXT_SUCCESS : theme_1.TEXT_GRAY;
-        const parts = [
-            (0, gameLinks_1.makeLocationLink)(entry.location, references[index], color),
-            ` ~${formatHits(entry.hits)} ${entry.type === "fishing" ? "casts" : "explores"} — `,
-        ];
-        for (const [itemIndex, item] of entry.items.slice(0, 4).entries()) {
-            if (itemIndex > 0) {
-                parts.push(", ");
-            }
-            parts.push((0, gameLinks_1.makeItemLink)(item.name, (_a = graph.nodes.get(item.name)) === null || _a === void 0 ? void 0 : _a.id, color));
-        }
-        body.append((0, gameLinks_1.makeLinkedLine)(color, parts));
-    }
-});
-// Why the scope wants an item, for the "Here" list -- standing in a place, the
-// question is which of your undertakings this drop is actually for.
-const getReasonsByItem = (resolved, only) => {
-    var _a;
-    const reasons = new Map();
-    for (const scope of resolved.scopes) {
-        if (only.size > 0 && !only.has(scope.rootId)) {
-            continue;
-        }
-        for (const entry of scope.missing) {
-            reasons.set(entry.name, [
-                ...((_a = reasons.get(entry.name)) !== null && _a !== void 0 ? _a : []),
-                scope.label,
-            ]);
-        }
-    }
-    return reasons;
-};
-// What the place you are standing in is worth right now.
-//
-// Both halves come from data the panel already paid for -- `getHere` fetches
-// the drop table on every open -- and neither is anywhere in the game: `needed`
-// is this location's table intersected with your backlog, and `wasted` is the
-// opposite and the sharper of the two, items you are already at cap on whose
-// every drop is discarded, along with the mastery that discard is costing you.
-const renderHere = (body, context, missing, focused) => {
-    const { cap, here, inventory, mastery, resolved } = context;
-    if (!here) {
-        return;
-    }
-    const { location, stamina } = here;
-    const advice = (0, locationAdvice_1.getLocationAdvice)(location.drops, missing, getReasonsByItem(resolved, focused), inventory, cap, mastery);
-    if (advice.needed.length === 0 && advice.wasted.length === 0) {
-        return;
-    }
-    const attempts = location.type === "fishing" ? "casts" : "explores";
-    body.append((0, gameLinks_1.makeHeading)(`Here: ${location.name}`));
-    for (const entry of advice.needed.slice(0, MAX_LISTED)) {
-        // Stamina is the whole reason to know this while standing here: whether
-        // the trip finishes the item or only dents it.
-        const covered = stamina !== undefined && stamina >= entry.attempts
-            ? " — you have the stamina"
-            : "";
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
-            (0, gameLinks_1.makeItemLink)(entry.name, entry.id, theme_1.TEXT_SUCCESS),
-            ` ${entry.quantity.toLocaleString()} needed, ~${formatHits(entry.attempts)} ${attempts}${covered}`,
-            entry.reasons.length > 0
-                ? ` — for ${entry.reasons.slice(0, 2).join(", ")}`
-                : "",
-        ]));
-    }
-    if (advice.needed.length === 0) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Nothing you are short of drops here."]));
-    }
-    for (const entry of advice.wasted.slice(0, MAX_LISTED)) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
-            (0, gameLinks_1.makeItemLink)(entry.name, entry.id, theme_1.TEXT_ERROR),
-            " is at cap — every one you find here is thrown away",
-            entry.masteryRemaining === undefined
-                ? ""
-                : `, and it still owes ${entry.masteryRemaining.toLocaleString()} mastery`,
-        ]));
-    }
-    if (stamina !== undefined) {
-        body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`${stamina.toLocaleString()} stamina banked`]));
-    }
-};
-const renderNow = (body, context, focused) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
-    const { advice, goalProgress, graph, questGoals, resolved, statuses } = context;
+    const { advice, graph, questGoals, resolved, statuses } = context;
     const focusedScopes = resolved.scopes.filter((scope) => focused.has(scope.rootId));
     // Scope ids are `kind:label`, and the legacy statuses this tab still reads
     // are keyed by that same label, so this is how focus reaches them without
@@ -4085,16 +4816,16 @@ const renderNow = (body, context, focused) => __awaiter(void 0, void 0, void 0, 
     const nearlyDone = (0, focus_1.getNearlyDone)(statuses).sort(byFocus);
     if (ready.length > 0) {
         body.append((0, gameLinks_1.makeHeading)("Ready to turn in"));
-        for (const status of ready.slice(0, MAX_LISTED)) {
+        for (const status of ready.slice(0, shared_1.MAX_LISTED)) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, [
                 (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_SUCCESS),
             ]));
         }
-        appendMore(body, ready.length);
+        (0, shared_1.appendMore)(body, ready.length);
     }
     if (nearlyDone.length > 0) {
         body.append((0, gameLinks_1.makeHeading)("One item away"));
-        for (const status of nearlyDone.slice(0, MAX_LISTED)) {
+        for (const status of nearlyDone.slice(0, shared_1.MAX_LISTED)) {
             const [only] = status.missing;
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
                 (0, gameLinks_1.makeQuestLink)(status.goal.label, status.goal.href, theme_1.TEXT_WARNING),
@@ -4102,46 +4833,23 @@ const renderNow = (body, context, focused) => __awaiter(void 0, void 0, void 0, 
                 (0, gameLinks_1.makeItemLink)(only.name, (_a = graph.nodes.get(only.name)) === null || _a === void 0 ? void 0 : _a.id, theme_1.TEXT_WARNING),
             ]));
         }
-        appendMore(body, nearlyDone.length);
+        (0, shared_1.appendMore)(body, nearlyDone.length);
     }
     if (advice && advice.dead.length + advice.ordering.length > 0) {
         body.append((0, gameLinks_1.makeHeading)("Craftworks needs a hand"));
-        for (const slot of advice.dead.slice(0, MAX_LISTED)) {
+        for (const slot of advice.dead.slice(0, shared_1.MAX_LISTED)) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
                 (0, gameLinks_1.makeItemLink)(slot.name, Number(slot.id) || undefined, theme_1.TEXT_ERROR),
                 " is at cap — dead slot",
             ]));
         }
-        appendMore(body, advice.dead.length);
+        (0, shared_1.appendMore)(body, advice.dead.length);
         for (const { producer, slot } of advice.ordering) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_WARNING, [
                 `move #${producer.position} ${producer.name} above #${slot.position} ${slot.name}`,
             ]));
         }
     }
-    // Craftworks says what a slot is out of but never how many it is short by,
-    // so a blocker counts as one unit; a request's shortfall is exact. Both are
-    // the same trip, which is why they merge rather than being listed twice.
-    //
-    // This is the ONE block focus narrows. The sections above are alerts and must
-    // never be filtered -- a request going unhanded-in because you focused
-    // something else is exactly the failure this panel exists to prevent -- but
-    // "where to go" is the block that answers what to do with the next hour, and
-    // that question is what focus is for.
-    const missing = focusedScopes.length > 0
-        ? (0, focus_1.mergeMissing)(...focusedScopes.map((scope) => scope.missing))
-        : (0, focus_1.mergeMissing)((0, focus_1.rankBottlenecks)(statuses).map((entry) => ({
-            name: entry.name,
-            quantity: entry.maxNeeded,
-        })), ((_b = advice === null || advice === void 0 ? void 0 : advice.roots) !== null && _b !== void 0 ? _b : []).map((root) => ({
-            name: root.name,
-            quantity: 1,
-        })), 
-        // tracked goals steer this list too, so setting a goal changes where
-        // the panel sends you rather than only what the Goals tab says
-        ...goalProgress.map((entry) => entry.missing));
-    renderHere(body, context, missing, focused);
-    yield renderWhereToGo(body, context, missing);
     if (body.childNodes.length === 0) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_SUCCESS, ["Nothing needs attention."]));
     }
@@ -4149,7 +4857,7 @@ const renderNow = (body, context, focused) => __awaiter(void 0, void 0, void 0, 
     if (unmatched === null || unmatched === void 0 ? void 0 : unmatched.length) {
         body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, [`not on buddy.farm: ${unmatched.join(", ")}`]));
     }
-});
+};
 // The whole-undertaking view: one row per thing you are working toward, with
 // its own roll-up rather than a flat list of items. This is what the scope axis
 // in needs.ts is for -- a quest's items share a pool, so "3 of 5 ready" and the
@@ -4243,7 +4951,7 @@ const renderUndertakings = (body, context, focused, onFocus) => {
         body.append(row);
     }
 };
-const renderGoals = (body, context, rerender, focused, onFocus) => __awaiter(void 0, void 0, void 0, function* () {
+const renderGoals = (body, context, rerender, focused, onFocus) => {
     var _a, _b;
     const { goalProgress, goals, graph } = context;
     renderUndertakings(body, context, focused, onFocus);
@@ -4295,12 +5003,8 @@ const renderGoals = (body, context, rerender, focused, onFocus) => __awaiter(voi
         }
         body.append(row);
     }
-    // only what the tracked goals themselves need
-    if (goalProgress.length > 0) {
-        yield renderWhereToGo(body, context, (0, focus_1.mergeMissing)(...goalProgress.map((entry) => entry.missing)));
-    }
     renderSuggestions(body, context, rerender);
-});
+};
 // Panel-scoped, not persisted: a filter is a way to read the list right now,
 // not a preference worth carrying between sessions.
 let suggestionFilter = "all";
@@ -4481,7 +5185,7 @@ const renderCraftworks = (body, context, reload, focused) => {
     const frozen = (0, suggestions_1.getFrozenMastery)(mastery, inventory, cap);
     if (frozen.length > 0) {
         body.append((0, gameLinks_1.makeHeading)("Mastery frozen at cap"));
-        for (const entry of frozen.slice(0, MAX_LISTED)) {
+        for (const entry of frozen.slice(0, shared_1.MAX_LISTED)) {
             body.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_ERROR, [
                 (0, gameLinks_1.makeItemLink)(entry.name, entry.id, theme_1.TEXT_ERROR),
                 ` ${entry.value.toLocaleString()}/${entry.required.toLocaleString()} — ${entry.remaining.toLocaleString()} more, but you are at cap so none of it counts`,
@@ -4649,16 +5353,16 @@ const renderSets = (body, context, reload) => {
 // body sidesteps page swaps entirely, and the same trick keeps the cap tracker
 // single.
 const ensurePanel = () => {
-    if (document.querySelector(`#${BUTTON_ID}`)) {
+    if (document.querySelector(`#${shared_1.BUTTON_ID}`)) {
         return;
     }
-    injectStyles();
+    (0, styles_1.injectPanelStyles)();
     const button = document.createElement("div");
-    button.id = BUTTON_ID;
+    button.id = shared_1.BUTTON_ID;
     button.title = "Farmhand briefing";
     button.innerHTML = ICON;
     const panel = document.createElement("div");
-    panel.id = PANEL_ID;
+    panel.id = shared_1.PANEL_ID;
     const head = document.createElement("div");
     head.className = "fh-briefing-head";
     const heading = document.createElement("div");
@@ -4858,6 +5562,12 @@ const ensurePanel = () => {
                 renderNow(body, context, focused);
                 break;
             }
+            case "here": {
+                (0, here_1.renderHereTab)(body, context, focused).catch((error) => {
+                    console.error("Failed to draw the Here tab", error);
+                });
+                break;
+            }
             case "goals": {
                 renderGoals(body, context, () => {
                     // a removed goal changes the list itself, so reload before redrawing
@@ -4865,12 +5575,8 @@ const ensurePanel = () => {
                 }, focused, toggleFocus);
                 break;
             }
-            case "sets": {
-                renderSets(body, context, () => load(true));
-                break;
-            }
             case "cap": {
-                renderCap(body, () => {
+                (0, cap_1.renderCapTab)(body, () => {
                     (0, inventoryCapWarnings_1.refreshCapTrackerNow)().catch((error) => {
                         console.error("Failed to refresh the cap tracker", error);
                     });
@@ -4879,6 +5585,11 @@ const ensurePanel = () => {
             }
             default: {
                 renderCraftworks(body, context, () => load(true), focused);
+                // the sets list only makes sense under a queue that was read; its own
+                // "haven't read the page" line would repeat the one above
+                if (context.craftworks) {
+                    renderSets(body, context, () => load(true));
+                }
             }
         }
     };
@@ -4895,7 +5606,7 @@ const ensurePanel = () => {
     // a figure on screen can be from any point in the session.
     let readAt;
     const paintAge = () => {
-        age.textContent = readAt === undefined ? "" : `read ${formatAge(readAt)}`;
+        age.textContent = readAt === undefined ? "" : `read ${(0, shared_1.formatAge)(readAt)}`;
     };
     // Only while it is open, and only once a minute: the label's whole job is to
     // stop a five-minute-old number reading as live.
@@ -4915,8 +5626,21 @@ const ensurePanel = () => {
         setBadge(attention.count, attention.parts);
         draw();
     });
+    // A tab switch crossfades where the browser can do it (View Transitions;
+    // the panel body is the only named element, so nothing else on the page
+    // moves) and simply redraws where it can't. Reduced-motion users get the
+    // plain redraw via the stylesheet.
     const selectTab = (id) => {
+        if (id === active) {
+            return;
+        }
         active = id;
+        if (typeof document.startViewTransition === "function") {
+            document.startViewTransition(() => {
+                draw();
+            });
+            return;
+        }
         draw();
     };
     for (const tab of TABS) {
@@ -5025,8 +5749,8 @@ exports.briefingPanel = {
     onPageLoad: (settings) => {
         var _a, _b;
         if (!settings[settings_1.SettingId.BRIEFING_PANEL]) {
-            (_a = document.querySelector(`#${BUTTON_ID}`)) === null || _a === void 0 ? void 0 : _a.remove();
-            (_b = document.querySelector(`#${PANEL_ID}`)) === null || _b === void 0 ? void 0 : _b.remove();
+            (_a = document.querySelector(`#${shared_1.BUTTON_ID}`)) === null || _a === void 0 ? void 0 : _a.remove();
+            (_b = document.querySelector(`#${shared_1.PANEL_ID}`)) === null || _b === void 0 ? void 0 : _b.remove();
             return;
         }
         // cheap: returns immediately once the button exists. Covers the case where
@@ -10777,7 +11501,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.58" !== void 0 ? "1.1.58" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.59" !== void 0 ? "1.1.59" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -12215,15 +12939,20 @@ const makeMutedText = (text) => {
 exports.makeMutedText = makeMutedText;
 // Section label inside the briefing panel. Shared so anything that renders a
 // block into that body -- or into a panel built like it -- looks the same.
+//
+// Same type as the briefing panel's card heads (briefing/styles.ts), so a tab
+// still built from plain headings sits next to one built from cards without a
+// visible seam.
 const makeHeading = (text) => {
     const heading = document.createElement("div");
+    heading.className = "fh-heading";
     heading.textContent = text;
-    heading.style.color = theme_1.TEXT_WHITE;
-    heading.style.fontSize = "11px";
-    heading.style.fontWeight = "bold";
-    heading.style.letterSpacing = "0.4px";
+    heading.style.color = "#9aa0a6";
+    heading.style.fontSize = "10.5px";
+    heading.style.fontWeight = "600";
+    heading.style.letterSpacing = "0.6px";
     heading.style.textTransform = "uppercase";
-    heading.style.margin = "12px 0 4px";
+    heading.style.margin = "12px 0 5px";
     return heading;
 };
 exports.makeHeading = makeHeading;
@@ -13807,6 +14536,7 @@ var StorageKey;
     StorageKey["RECENT_UPDATE"] = "recentUpdate";
     StorageKey["STATS"] = "stats";
     StorageKey["USERNAME"] = "username";
+    StorageKey["TOWNSFOLK"] = "townsfolk";
     StorageKey["USER_ID"] = "userId";
 })(StorageKey || (exports.StorageKey = StorageKey = {}));
 const QUERYLESS_KEY = "__QUERYLESS__";
