@@ -121,6 +121,56 @@ export const activateSet = async (
   return { message: "Set loaded.", ok: true, previous };
 };
 
+export interface SaveSetResult {
+  message: string;
+  ok: boolean;
+}
+
+// Save an ordered list of items as a named set WITHOUT touching the live queue.
+//
+// This is the game's own share-page button (`.saveitemsetbtn` -> `savecwset`
+// with `cwsetname` and `cwitems`), which saves someone else's shared set as
+// yours in one request; the only difference here is that the list comes from
+// the panel's plan rather than a share code. `cwitems` is `id|1,id|2,...`, the
+// same string craftworks.js builds from the queue when saving from the page.
+// Loading the saved set afterwards is the usual (destructive, confirmed)
+// activateSet.
+export const saveSet = async (
+  name: string,
+  itemIds: readonly string[]
+): Promise<SaveSetResult> => {
+  const cwitems = itemIds.map((id, index) => `${id}|${index + 1}`).join(",");
+  let result: string;
+  try {
+    result = await postWorker(
+      new URLSearchParams({ go: "savecwset", cwsetname: name, cwitems })
+    );
+  } catch {
+    return { message: "The set could not be saved.", ok: false };
+  }
+  switch (result) {
+    case "success": {
+      await craftworksState.get({ ignoreCache: true });
+      return { message: "Set saved.", ok: true };
+    }
+    case "invalidname": {
+      return {
+        message: "The game rejected that set name (already used, or too long).",
+        ok: false,
+      };
+    }
+    case "missingfields": {
+      return { message: "The game wanted a name and items.", ok: false };
+    }
+    default: {
+      return {
+        message: `The game answered "${result || "nothing"}".`,
+        ok: false,
+      };
+    }
+  }
+};
+
 // Start or stop every slot. Neither call takes parameters, and both are
 // reversible, so this needs no confirmation the way loading a set does.
 export const setQueueRunning = async (play: boolean): Promise<boolean> => {

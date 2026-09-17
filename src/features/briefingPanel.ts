@@ -6,7 +6,7 @@ import {
   setQueueRunning,
 } from "~/api/farmrpg/apis/craftworks";
 import { addGoal, getGoalProgress, getGoals, removeGoal } from "~/utils/goals";
-import { Advice, adviseOnSlots, suggestQueueChanges } from "~/utils/craftworks";
+import { Advice, adviseOnSlots } from "~/utils/craftworks";
 import {
   appendMore,
   BUTTON_ID,
@@ -30,7 +30,6 @@ import {
   refreshCapTrackerNow,
 } from "./inventoryCapWarnings";
 import { getCurrentPage, Page } from "~/utils/page";
-import { getDesiredQueueForNeeds, resolveNeeds } from "~/utils/needs";
 import { getFocusedScopes, setFocusedScopes } from "~/utils/focusScope";
 import {
   getFrozenMastery,
@@ -70,6 +69,8 @@ import { orUndefined } from "~/utils/promise";
 import { parseUnlimitedItems } from "~/utils/unlimited";
 import { renderCapTab } from "./briefing/cap";
 import { renderHereTab } from "./briefing/here";
+import { renderQueuePlans } from "./briefing/queuePlan";
+import { resolveNeeds } from "~/utils/needs";
 import {
   TEXT_ERROR,
   TEXT_GRAY,
@@ -876,16 +877,7 @@ const renderCraftworks = (
   reload: () => void,
   focused: ReadonlySet<string>
 ): void => {
-  const {
-    advice,
-    cap,
-    craftworks,
-    graph,
-    inventory,
-    mastery,
-    resolved,
-    unlimited,
-  } = context;
+  const { advice, cap, craftworks, inventory, mastery, resolved } = context;
   if (!advice || !craftworks) {
     body.append(
       makeLinkedLine(TEXT_GRAY, ["Could not read the Craftworks queue."])
@@ -964,54 +956,23 @@ const renderCraftworks = (
     );
   }
 
-  // Suggestions are goal-driven when there are goals; otherwise the queue's own
-  // stalled slots are the only thing there is to reason from.
-  // Everything that wants something, at the quantity it wants: tracked goals,
-  // open requests and the queue's own stalled slots. The old list was tracked
-  // goals alone, falling back to ONE of each thing a slot was stalled on --
-  // which is how the queue filled up with single units of things nothing
-  // actually needed much of.
-  const desired = getDesiredQueueForNeeds(
-    graph,
-    resolved,
-    inventory,
-    unlimited,
-    // with focus set the queue works on those undertakings alone
-    focused
+  // The queue the panel would build for what you are doing -- focused
+  // undertakings, and the slice of that fed by the spot you are standing at --
+  // each row marked queued / not queued against the live slots, and saveable
+  // as a set in one press. This replaced the add/remove diff ("Suggested
+  // changes"): the plan says the same thing in the order the queue wants, and
+  // dead slots are already red in the live list above.
+  renderQueuePlans(body, context, focused, reload, (set, onFailure) =>
+    makeSetLoadControl(set, context, reload, onFailure)
   );
-  const suggestions = suggestQueueChanges(
-    desired,
-    craftworks.slots,
-    inventory,
-    cap,
-    maxSlots,
-    unlimited
-  );
-  if (suggestions.length > 0) {
-    body.append(makeHeading("Suggested changes"));
-    for (const suggestion of suggestions) {
-      const color = suggestion.action === "drop" ? TEXT_ERROR : TEXT_SUCCESS;
-      body.append(
-        makeLinkedLine(color, [
-          suggestion.action === "drop" ? "remove " : "add ",
-          makeItemLink(
-            suggestion.name,
-            graph.nodes.get(suggestion.name)?.id,
-            color
-          ),
-          ` — ${suggestion.reason}`,
-        ])
-      );
-    }
-    // only when there is genuinely nothing to aim at -- suggestions now come
-    // from open requests and stalled slots too, not tracked goals alone
-    if (resolved.scopes.length === 0) {
-      body.append(
-        makeLinkedLine(TEXT_GRAY, [
-          "Track a goal to get suggestions aimed at something.",
-        ])
-      );
-    }
+  // only when there is genuinely nothing to aim at -- the plan costs open
+  // requests and stalled slots too, not tracked goals alone
+  if (resolved.scopes.length === 0) {
+    body.append(
+      makeLinkedLine(TEXT_GRAY, [
+        "Track a goal to get a queue plan aimed at something.",
+      ])
+    );
   }
 };
 
