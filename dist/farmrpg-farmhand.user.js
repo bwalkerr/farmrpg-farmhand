@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.56
+// @version 1.1.57
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -9373,6 +9373,7 @@ exports.renderPerkIndicator = void 0;
 const perks_1 = __webpack_require__(5543);
 const settings_1 = __webpack_require__(126);
 const layout_1 = __webpack_require__(6253);
+const theme_1 = __webpack_require__(1178);
 // A small "● Crafting" pill in the bottom stats bar, right of the currency
 // counts and the cap tracker, showing which perk set is equipped right now.
 //
@@ -9389,10 +9390,22 @@ const layout_1 = __webpack_require__(6253);
 // mid-screen right and top collide with the chat panel, bottom-left is the
 // game's own help tracker, and the left nav never rendered.
 const INDICATOR_ID = "fh-perk-indicator";
-// gray for the resting/default set, orange for an activity set that's on
-const COLOR_RESTING = "#9e9e9e";
-const COLOR_ACTIVE = "#f0932b";
-const isRestingSet = (name) => name.trim().toLowerCase() === "default";
+// The same colours, with the same meaning, as the chip in the briefing panel's
+// header: green when we drove the game to the set and watched it land, amber
+// while a switch is in flight, grey when the name is only what the (optimistic)
+// cache says. The pill used to colour by KIND of set instead -- orange for an
+// activity set, grey for Default -- which looked identical whether the set was
+// verified or not, so the panel read as the truthful one and this as
+// decoration. One vocabulary now, so the two can't disagree.
+const colourFor = (status) => {
+    if (status.isConfirmed) {
+        return theme_1.TEXT_SUCCESS;
+    }
+    if (status.isPending) {
+        return theme_1.TEXT_WARNING;
+    }
+    return theme_1.TEXT_GRAY;
+};
 // The game boots with <body class="f7-booting"> and only clears it in
 // index-app.js, on the line right after `new Framework7()` and its addView()
 // calls — the same line that sets window.farmAppReady. Adding our own elements
@@ -9500,7 +9513,11 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     // game's own home and chat buttons and nothing more, and the panel shows the
     // equipped set already -- in a surface we control, which is the better place
     // for it. Same call the cap tracker in this bar already makes.
-    if (!settings[settings_1.SettingId.PERK_MANAGER] || !status.name || (0, layout_1.isMobileLayout)()) {
+    //
+    // An unknown set is shown as "no set", as the panel shows it, rather than
+    // hiding the pill: a pill that vanishes looks like the feature is off, and
+    // "no set" before the first switch of a session is information.
+    if (!settings[settings_1.SettingId.PERK_MANAGER] || (0, layout_1.isMobileLayout)()) {
         pill === null || pill === void 0 ? void 0 : pill.remove();
         return;
     }
@@ -9515,35 +9532,44 @@ const renderPerkIndicator = () => __awaiter(void 0, void 0, void 0, function* ()
     // order we happened to mount in (also re-attaches an orphaned pill)
     keepRightmost(statsZone, pill);
     watchOrder(statsZone);
-    const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
+    paintIndicator(pill, status);
+});
+exports.renderPerkIndicator = renderPerkIndicator;
+// Synchronous, like the panel's paint: a status change repaints the pill in the
+// same tick it happens. Going through the full render for every change put an
+// await (the settings read) between the change and the paint, so the pill was
+// always a beat behind the panel chip on the same event.
+const paintIndicator = (pill, status) => {
+    var _a, _b;
+    const name = (_a = status.name) !== null && _a !== void 0 ? _a : "no set";
+    const signature = [
+        name,
+        status.isPending,
+        status.isConfirmed,
+        (_b = status.note) !== null && _b !== void 0 ? _b : "",
+    ].join("|");
     if (pill.dataset.fhSignature === signature) {
         return;
     }
     pill.dataset.fhSignature = signature;
-    const color = isRestingSet(status.name) ? COLOR_RESTING : COLOR_ACTIVE;
+    const colour = colourFor(status);
     const dot = pill.querySelector("[data-fh-role='dot']");
     const label = pill.querySelector("[data-fh-role='label']");
     if (!dot || !label) {
         return;
     }
-    // in flight: hollow dot + faded label, so a real switch is visible while it
-    // happens (the settle wait makes it ~1s — long enough to see it land)
-    dot.style.backgroundColor = status.isPending ? "transparent" : color;
-    dot.style.border = status.isPending ? `1px solid ${color}` : "none";
-    label.textContent = status.isPending ? `${status.name}…` : status.name;
-    label.style.color = color;
-    pill.style.opacity = status.isPending ? "0.6" : "1";
-    if (status.isPending) {
-        pill.title = `Switching to the ${status.name} perk set…`;
-    }
-    else if (status.isConfirmed) {
-        pill.title = `${status.name} perks equipped`;
-    }
-    else {
-        pill.title = `${status.name} perk set selected (not verified this session)`;
-    }
-});
-exports.renderPerkIndicator = renderPerkIndicator;
+    // in flight: hollow dot + trailing ellipsis, so a real switch is visible
+    // while it happens (the settle wait makes it ~1s — long enough to see)
+    dot.style.backgroundColor = status.isPending ? "transparent" : colour;
+    dot.style.border = status.isPending ? `1px solid ${colour}` : "none";
+    label.textContent = status.isPending ? `${name}…` : name;
+    label.style.color = colour;
+    // the panel shows the manager's last note under its chip; here the bar has
+    // no room, so it rides in the tooltip in the same shape
+    pill.title = status.note
+        ? `Perks: ${name} — ${status.note}`
+        : `Perks: ${name}`;
+};
 // rotating a phone or dragging a window across the breakpoint has to repaint,
 // or the pill keeps whatever shape it happened to mount in
 (0, layout_1.onLayoutChange)(() => {
@@ -9551,8 +9577,15 @@ exports.renderPerkIndicator = renderPerkIndicator;
         console.error("Failed to render perk indicator", error);
     });
 });
-// re-render whenever a switch starts or finishes
+// Repaint whenever a switch starts, lands, or logs. A mounted pill is painted
+// right here, synchronously; only when there is none yet (first status of the
+// session, or the game rebuilt the bar) does this go through the full render.
 (0, perks_1.onPerkStatusChange)(() => {
+    const pill = document.querySelector(`#${INDICATOR_ID}`);
+    if (pill === null || pill === void 0 ? void 0 : pill.isConnected) {
+        paintIndicator(pill, (0, perks_1.getPerkStatus)());
+        return;
+    }
     (0, exports.renderPerkIndicator)().catch((error) => {
         console.error("Failed to render perk indicator", error);
     });
@@ -10662,7 +10695,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.56" !== void 0 ? "1.1.56" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.57" !== void 0 ? "1.1.57" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
