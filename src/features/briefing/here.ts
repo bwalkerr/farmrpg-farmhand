@@ -159,24 +159,17 @@ const renderWhereToGo = async (
   body.append(card);
 };
 
-export const renderHereTab = async (
+// A location's drop table laid over your inventory, cap and backlog. The Here
+// tab draws the place you are standing; the lookup draws any place you search
+// for, through the same function.
+export const renderLocationView = (
   body: HTMLElement,
   context: Context,
+  here: NonNullable<Context["here"]>,
   focused: ReadonlySet<string>
-): Promise<void> => {
-  const { cap, here, inventory, mastery, resolved } = context;
+): void => {
+  const { cap, inventory, mastery, resolved } = context;
   const missing = getMissingDemand(context, focused);
-
-  if (!here) {
-    body.append(
-      makeEmpty(
-        "Not at an explore area or fishing spot. Open the panel on one for its drop table against your needs."
-      )
-    );
-    await renderWhereToGo(body, context, missing, "Where to go");
-    return;
-  }
-
   const { image, location, stamina } = here;
   const reasons = getReasonsByItem(resolved, focused);
   const advice = getLocationAdvice(
@@ -316,6 +309,23 @@ export const renderHereTab = async (
     );
   }
   body.append(card);
+};
 
+export const renderHereTab = async (
+  body: HTMLElement,
+  context: Context,
+  focused: ReadonlySet<string>
+): Promise<void> => {
+  const missing = getMissingDemand(context, focused);
+  if (!context.here) {
+    body.append(
+      makeEmpty(
+        "Not at an explore area or fishing spot. Open the panel on one for its drop table against your needs."
+      )
+    );
+    await renderWhereToGo(body, context, missing, "Where to go");
+    return;
+  }
+  renderLocationView(body, context, context.here, focused);
   await renderWhereToGo(body, context, missing, "Elsewhere");
 };

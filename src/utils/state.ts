@@ -37,6 +37,7 @@ export enum StorageKey {
   STATS = "stats",
   USERNAME = "username",
   TOWNSFOLK = "townsfolk",
+  TOWNSFOLK_DATA = "townsfolkData",
   USER_ID = "userId",
 }
 

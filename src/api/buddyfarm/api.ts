@@ -3,6 +3,7 @@ import {
   BasicEntity,
   BuddyFarmPage,
   Item,
+  NPCDetail,
   BuddyFarmPageData as PageData,
   QuestDetail,
 } from "./types";
@@ -140,6 +141,7 @@ interface QuestPageDataResponse {
         quests: QuestDetail[];
       };
     };
+    pageContext?: { id?: number; name?: string };
   };
 }
 
@@ -169,7 +171,9 @@ export const questDataState = new CachedState<QuestDetail, string>(
       console.error(`Quest ${questName} not found`);
       return previous;
     }
-    return quest;
+    // the page context's id is the game's quest id (verified: "Fake Fishing
+    // I" is quest.php?id=1 in both), which is what lets a quest link in-game
+    return { ...quest, id: data.result.pageContext?.id ?? quest.id };
   },
   {
     timeout: 60 * 60 * 24 * 7, // 1 week
@@ -292,6 +296,48 @@ export const locationDataState = new CachedState<LocationRef, string>(
       type: location.type,
       xpPerHit: xpPerHit > 0 ? xpPerHit : undefined,
     };
+  },
+  {
+    timeout: 60 * 60 * 24 * 7, // 1 week
+  }
+);
+
+interface NPCPageDataResponse {
+  result: {
+    data: {
+      farmrpg: {
+        npcs: NPCDetail[];
+      };
+    };
+  };
+}
+
+// A townsperson's loves, likes and hates, keyed by buddy.farm SLUG (the
+// search index hands those out; names like "Charles Horsington III" don't slug
+// predictably). Cached a week like items.
+export const townsfolkDataState = new CachedState<NPCDetail, string>(
+  StorageKey.TOWNSFOLK_DATA,
+  async (state, slug) => {
+    if (!slug) {
+      return;
+    }
+    const previous = state.state[slug];
+    if (previous) {
+      return previous;
+    }
+    const response = await fetch(
+      `https://buddy.farm/page-data/t/${slug}/page-data.json`
+    );
+    if (!response.ok) {
+      return previous;
+    }
+    const data = (await response.json()) as NPCPageDataResponse;
+    const npc = data?.result?.data?.farmrpg?.npcs?.[0];
+    if (!npc) {
+      console.error(`Townsperson ${slug} not found`);
+      return previous;
+    }
+    return npc;
   },
   {
     timeout: 60 * 60 * 24 * 7, // 1 week

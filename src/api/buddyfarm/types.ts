@@ -102,9 +102,20 @@ export interface Item {
     quantityMin: number;
   }[];
   manualFishingOnly: boolean;
-  manualProductions: unknown[];
+  // buildings and other hand-listed sources: "Ironworks / Building / 3 Minutes"
+  manualProductions: {
+    image: string;
+    lineOne: string;
+    lineTwo: string;
+    value: string;
+    sort: number;
+  }[];
   name: string;
-  npcItems: unknown[];
+  npcItems: {
+    relationship: "loves" | "likes" | "hates";
+    specialXp: number | null;
+    npc: AbridgedNPC;
+  }[];
   npcRewards: { level: number; quantity: number; npc: AbridgedNPC }[];
   passwordItems: {
     password: {
@@ -120,8 +131,15 @@ export interface Item {
     item: AbridgedItem;
     quantity: number;
   }[];
-  requiredForQuests: { quantity: number; quest: AbridgedQuest }[];
-  rewardForQuests: { quantity: number; quest: AbridgedQuest }[];
+  // the quest here carries the game's own id, so it links straight to quest.php
+  requiredForQuests: {
+    quantity: number;
+    quest: AbridgedQuest & { id: number };
+  }[];
+  rewardForQuests: {
+    quantity: number;
+    quest: AbridgedQuest & { id: number };
+  }[];
   skillLevelRewards: {
     itemQuantity: number;
     level: number;
@@ -142,6 +160,9 @@ export type AbridgedItem = Pick<Item, "id" | "image" | "name" | "__typename">;
 
 export interface QuestDetail {
   __typename: "FarmRPG_Quest";
+  // the game's id (buddy.farm's page context carries it); absent on entries
+  // cached before it was recorded
+  id?: number;
   cleanDescription: string;
   endDate: string | null;
   image: string;
@@ -212,6 +233,20 @@ interface NPC {
 }
 
 type AbridgedNPC = Pick<NPC, "name" | "image" | "__typename">;
+
+// A townsperson's page: what they love, like and hate, and what they hand out.
+export interface NPCDetail {
+  __typename: "FarmRPG_NPC";
+  image: string;
+  name: string;
+  npcItems: {
+    relationship: "loves" | "likes" | "hates";
+    specialXp: number | null;
+    item: AbridgedItem;
+  }[];
+  npcRewards: { level: number; quantity: number; item: AbridgedItem }[];
+  quests: AbridgedQuest[];
+}
 
 interface Location {
   __typename: "FarmRPG_Location";

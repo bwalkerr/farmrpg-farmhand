@@ -439,6 +439,11 @@ export const injectPanelStyles = (): void => {
           padding: 6px 12px;
           font-size: 12px;
         }
+        #${PANEL_ID} .fh-search-input { padding: 10px 12px; font-size: 14px; }
+        #${PANEL_ID} .fh-search-kbd { display: none; }
+        #${PANEL_ID} .fh-search-row { padding: 9px 8px; font-size: 13px; }
+        #${PANEL_ID} .fh-open-here { padding: 4px 9px; font-size: 14px; }
+        #${PANEL_ID} .fh-lookup-back { padding: 8px 8px 8px 2px; }
         /* 0.38 relies on hover to read a dimmed row, and touch has no hover.
            Dimmed still reads as secondary at 0.55 but stays legible. */
         #${PANEL_ID} .fh-dim { opacity: 0.55; }
@@ -690,6 +695,108 @@ export const injectPanelStyles = (): void => {
       }
       #${PANEL_ID} .fh-link { cursor: pointer; text-decoration: underline; color: var(--fh-muted); }
       #${PANEL_ID} .fh-link:hover { color: var(--fh-text); }
+      /* ---- search + lookup ------------------------------------------------ */
+      #${PANEL_ID} .fh-search {
+        position: relative;
+        margin-bottom: 8px;
+      }
+      #${PANEL_ID} .fh-search-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 58px 7px 10px;
+        border-radius: var(--fh-radius-s);
+        border: 1px solid var(--fh-border-2);
+        background: var(--fh-surface);
+        color: var(--fh-text);
+        font: 12.5px var(--fh-font);
+        outline: none;
+        transition: border-color 120ms ease, background 120ms ease;
+      }
+      #${PANEL_ID} .fh-search-input::placeholder { color: var(--fh-muted); }
+      #${PANEL_ID} .fh-search-input:focus {
+        border-color: color-mix(in srgb, var(--fh-accent) 60%, transparent);
+        background: var(--fh-surface-2);
+      }
+      #${PANEL_ID} .fh-search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
+      #${PANEL_ID} .fh-search-kbd {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        font: 10px var(--fh-font);
+        color: var(--fh-muted);
+        border: 1px solid var(--fh-border-2);
+        border-radius: 5px;
+        padding: 1px 5px;
+        pointer-events: none;
+      }
+      #${PANEL_ID} .fh-search-input:focus ~ .fh-search-kbd { opacity: 0; }
+      #${PANEL_ID} .fh-search-results {
+        display: none;
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: calc(100% + 4px);
+        z-index: 2;
+        max-height: 320px;
+        overflow-y: auto;
+        padding: 4px;
+        border-radius: var(--fh-radius-s);
+        border: 1px solid var(--fh-border-2);
+        background: rgba(22, 23, 26, 0.98);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      }
+      #${PANEL_ID} .fh-search-results[data-on="true"] { display: block; }
+      #${PANEL_ID} .fh-search-row {
+        display: grid;
+        grid-template-columns: 22px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 7px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--fh-text);
+      }
+      #${PANEL_ID} .fh-search-row[data-active="true"] { background: var(--fh-surface-2); }
+      #${PANEL_ID} .fh-search-row img { width: 20px; height: 20px; border-radius: 4px; }
+      #${PANEL_ID} .fh-search-row img:not([src]) { visibility: hidden; }
+      #${PANEL_ID} .fh-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #${PANEL_ID} .fh-search-kind { font-size: 10px; color: var(--fh-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+      #${PANEL_ID} .fh-lookup-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        font-size: 12px;
+      }
+      #${PANEL_ID} .fh-lookup-back {
+        cursor: pointer;
+        color: var(--fh-accent);
+        padding: 4px 6px 4px 2px;
+        border-radius: 6px;
+      }
+      #${PANEL_ID} .fh-lookup-back:hover { background: var(--fh-surface-2); }
+      #${PANEL_ID} .fh-lookup-kind {
+        font-size: 10px;
+        color: var(--fh-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      #${PANEL_ID} .fh-open-here {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 0 5px;
+        border-radius: 5px;
+        cursor: pointer;
+        color: var(--fh-muted);
+        opacity: 0.7;
+      }
+      #${PANEL_ID} .fh-open-here:hover {
+        color: var(--fh-accent);
+        background: var(--fh-surface-2);
+        opacity: 1;
+      }
       #${PANEL_ID} .fh-briefing-body { view-transition-name: fh-briefing-body; }
       ::view-transition-old(fh-briefing-body),
       ::view-transition-new(fh-briefing-body) {

@@ -51,6 +51,7 @@ import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
 import { getSettingValues, SettingId } from "~/utils/settings";
 import { injectPanelStyles } from "./briefing/styles";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
+import { Lookup, renderLookup, toLookup } from "./briefing/lookup";
 import {
   makeHeading,
   makeItemLink,
@@ -58,6 +59,7 @@ import {
   makeMutedText,
   makeQuestLink,
 } from "~/utils/gameLinks";
+import { makeSearchBox } from "./briefing/search";
 import { masteryState } from "~/api/farmrpg/apis/mastery";
 import {
   matchLocationByImage,
@@ -1171,6 +1173,12 @@ const renderSets = (
 // at this ended up drawn twice with only one of them responding. Living on the
 // body sidesteps page swaps entirely, and the same trick keeps the cap tracker
 // single.
+const makeLoadingLine = (): HTMLElement => {
+  const line = makeLinkedLine(TEXT_GRAY, ["Reading buddy.farm…"]);
+  line.className = "fh-loading";
+  return line;
+};
+
 const ensurePanel = (): void => {
   if (document.querySelector(`#${BUTTON_ID}`)) {
     return;
@@ -1291,11 +1299,22 @@ const ensurePanel = (): void => {
   const main = document.createElement("div");
   main.className = "fh-briefing-main";
   main.append(tabs, body);
-  panel.append(head, perkNote, chip, main);
+  // buddy.farm, searched from here and opened in here (see briefing/lookup.ts)
+  const search = makeSearchBox((entry) => {
+    const lookup = toLookup(entry);
+    if (lookup) {
+      openLookup(lookup);
+    }
+  });
+  panel.append(head, search.element, perkNote, chip, main);
   document.body.append(button, panel);
 
   let active: TabId = "now";
   let context: Context | undefined;
+  // A lookup replaces the active tab's body until you go back; walking
+  // item → quest → item pushes, and back pops. The tabs stay put underneath,
+  // so leaving is one press whatever depth you reached.
+  const lookups: Lookup[] = [];
   let focused: Set<string> = new Set();
   getFocusedScopes()
     .then((scopeIds) => {
@@ -1377,14 +1396,51 @@ const ensurePanel = (): void => {
 
     paintAge();
     const counts = getTabCounts(context);
+    const lookup = lookups.at(-1);
     for (const tab of tabs.children) {
       const element = tab as HTMLElement;
-      element.dataset.active = String(element.dataset.tab === active);
+      element.dataset.active = String(
+        lookup === undefined && element.dataset.tab === active
+      );
       const count = counts[element.dataset.tab as TabId];
       const badge = element.querySelector<HTMLElement>(".fh-tab-count");
       if (badge) {
         badge.textContent = count === undefined ? "" : String(count);
       }
+    }
+    if (lookup) {
+      const bar = document.createElement("div");
+      bar.className = "fh-lookup-bar";
+      const back = document.createElement("span");
+      back.className = "fh-lookup-back";
+      back.textContent =
+        lookups.length > 1
+          ? `‹ ${lookups.at(-2)?.name ?? "back"}`
+          : `‹ ${TABS.find((tab) => tab.id === active)?.label ?? "back"}`;
+      back.addEventListener("click", (event) => {
+        event.stopPropagation();
+        lookups.pop();
+        draw();
+      });
+      const kind = document.createElement("span");
+      kind.className = "fh-lookup-kind";
+      kind.textContent = lookup.kind;
+      bar.append(back, kind);
+      body.append(bar);
+      const view = document.createElement("div");
+      body.append(view, makeLoadingLine());
+      const snapshot = context;
+      renderLookup(view, snapshot, lookup, focused, openLookup)
+        .catch((error) => {
+          console.error("Failed to draw the lookup", error);
+          view.append(
+            makeLinkedLine(TEXT_GRAY, ["Could not load that from buddy.farm."])
+          );
+        })
+        .finally(() => {
+          body.querySelector(".fh-loading")?.remove();
+        });
+      return;
     }
     switch (active) {
       case "now": {
@@ -1472,14 +1528,29 @@ const ensurePanel = (): void => {
     draw();
   };
 
+  const openLookup = (lookup: Lookup): void => {
+    const top = lookups.at(-1);
+    if (top && top.kind === lookup.kind && top.name === lookup.name) {
+      return;
+    }
+    lookups.push(lookup);
+    if (panel.dataset.open !== "true") {
+      setOpen(true);
+    }
+    if (context) {
+      draw();
+    }
+  };
+
   // A tab switch crossfades where the browser can do it (View Transitions;
   // the panel body is the only named element, so nothing else on the page
   // moves) and simply redraws where it can't. Reduced-motion users get the
   // plain redraw via the stylesheet.
   const selectTab = (id: TabId): void => {
-    if (id === active) {
+    if (id === active && lookups.length === 0) {
       return;
     }
+    lookups.length = 0;
     active = id;
     if (typeof document.startViewTransition === "function") {
       document.startViewTransition(() => {
@@ -1565,6 +1636,19 @@ const ensurePanel = (): void => {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       setOpen(false);
+      return;
+    }
+    // Ctrl/⌘-K: the panel, with the search ready to type into, from anywhere
+    // in the game -- the shortcut every launcher uses, and one the game does
+    // not bind
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("#chatarea, textarea") && !event.metaKey) {
+        return;
+      }
+      event.preventDefault();
+      setOpen(true);
+      search.focus();
     }
   });
 
