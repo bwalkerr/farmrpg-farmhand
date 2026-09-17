@@ -1,6 +1,8 @@
 import { CapItem, getCapTrackerView } from "../inventoryCapWarnings";
 import {
+  DailyFriend,
   findTownsfolkLink,
+  isSamePerson,
   TownsfolkLink,
   townsfolkState,
 } from "~/api/farmrpg/apis/townsfolk";
@@ -56,22 +58,59 @@ const getAffinities = async (itemName: string): Promise<Affinity[]> => {
   return affinities.sort((a, b) => rank(a) - rank(b));
 };
 
+// Today's friend first, then loves before likes: a gift to the townsperson on
+// bonus XP is worth more than the same gift tomorrow, whoever loves it.
 const makeAffinityTags = (
   affinities: Affinity[],
-  links: readonly TownsfolkLink[]
-): Node[] =>
-  affinities.slice(0, 4).map((affinity) => {
+  links: readonly TownsfolkLink[],
+  dailyFriend: DailyFriend | undefined
+): Node[] => {
+  const isDaily = (affinity: Affinity): boolean =>
+    dailyFriend !== undefined && isSamePerson(affinity.name, dailyFriend.name);
+  const ordered = [...affinities].sort(
+    (a, b) => Number(isDaily(b)) - Number(isDaily(a))
+  );
+  return ordered.slice(0, 4).map((affinity) => {
     const link = findTownsfolkLink(links, affinity.name);
+    const heart = affinity.relationship === "loves" ? "♥" : "♡";
+    const daily = isDaily(affinity);
+    let tone: "ok" | "accent" | "muted" = "muted";
+    if (daily) {
+      tone = "ok";
+    } else if (affinity.relationship === "loves") {
+      tone = "accent";
+    }
     const tag = makeTag(
-      `${affinity.relationship === "loves" ? "♥" : "♡"} ${affinity.name}`,
-      affinity.relationship === "loves" ? "accent" : "muted",
+      `${daily ? "★ " : ""}${heart} ${affinity.name}`,
+      tone,
       link?.href
     );
     tag.title = `${affinity.name} ${affinity.relationship} this${
-      link ? " — open their page to give it" : ""
-    }`;
+      daily
+        ? ` — and gets extra friendship XP today (${dailyFriend?.reason})`
+        : ""
+    }${link ? " — open their page to give it" : ""}`;
     return tag;
   });
+};
+
+// The townsperson on bonus friendship XP today, as a card at the top of the
+// tab: it is the answer to "who do I give all this to" before any item is.
+const makeDailyFriendCard = (friend: DailyFriend): HTMLElement => {
+  const { card, body } = makeCard("Daily friend", {
+    aside: "extra XP today",
+    tone: "ok",
+  });
+  body.append(
+    makeRow(`★ ${friend.name}`, {
+      href: friend.href,
+      icon: toIconUrl(friend.image),
+      sub: [friend.reason],
+      tone: "ok",
+    })
+  );
+  return card;
+};
 
 const makeCapRow = (item: CapItem, cap: number): HTMLElement =>
   makeRow(item.name, {
@@ -102,6 +141,22 @@ export const renderCapTab = (
     );
     return;
   }
+
+  // Read once for the tab: the daily friend for the card, the links for the
+  // tags. The card lands asynchronously at the top, ahead of everything the
+  // sync draw below puts there; the tags wait on the same read.
+  const townsfolk = orUndefined(townsfolkState.get());
+  const dailyFriendSlot = document.createElement("div");
+  body.append(dailyFriendSlot);
+  townsfolk
+    .then((snapshot) => {
+      if (snapshot?.dailyFriend && dailyFriendSlot.isConnected) {
+        dailyFriendSlot.replaceWith(makeDailyFriendCard(snapshot.dailyFriend));
+      }
+    })
+    .catch((error) => {
+      console.error("Failed to read the townsfolk page", error);
+    });
 
   if (view.here) {
     const { card, body: cardBody } = makeCard("Drops here at or near cap", {
@@ -200,12 +255,11 @@ export const renderCapTab = (
     return;
   }
   const fill = async (): Promise<void> => {
-    const [links, ...affinities] = await Promise.all([
-      orUndefined(townsfolkState.get()).then(
-        (snapshot) => snapshot?.links ?? []
-      ),
+    const [snapshot, ...affinities] = await Promise.all([
+      townsfolk,
       ...lookups.map((item) => getAffinities(item.name)),
     ]);
+    const links = snapshot?.links ?? [];
     for (const [index, item] of lookups.entries()) {
       const row = rows.get(item.name);
       const found = affinities[index];
@@ -218,7 +272,7 @@ export const renderCapTab = (
       }
       const tags = document.createElement("span");
       tags.className = "fh-row-tags";
-      tags.append(...makeAffinityTags(found, links));
+      tags.append(...makeAffinityTags(found, links, snapshot?.dailyFriend));
       main.append(tags);
     }
   };
