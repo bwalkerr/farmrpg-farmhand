@@ -1,6 +1,11 @@
-import { getPerkStatus, onPerkStatusChange } from "~/api/farmrpg/apis/perks";
+import {
+  getPerkStatus,
+  onPerkStatusChange,
+  PerkStatus,
+} from "~/api/farmrpg/apis/perks";
 import { getSettingValues, SettingId } from "~/utils/settings";
 import { isMobileLayout, onLayoutChange } from "~/utils/layout";
+import { TEXT_GRAY, TEXT_SUCCESS, TEXT_WARNING } from "~/utils/theme";
 
 // A small "● Crafting" pill in the bottom stats bar, right of the currency
 // counts and the cap tracker, showing which perk set is equipped right now.
@@ -20,12 +25,22 @@ import { isMobileLayout, onLayoutChange } from "~/utils/layout";
 
 const INDICATOR_ID = "fh-perk-indicator";
 
-// gray for the resting/default set, orange for an activity set that's on
-const COLOR_RESTING = "#9e9e9e";
-const COLOR_ACTIVE = "#f0932b";
-
-const isRestingSet = (name: string): boolean =>
-  name.trim().toLowerCase() === "default";
+// The same colours, with the same meaning, as the chip in the briefing panel's
+// header: green when we drove the game to the set and watched it land, amber
+// while a switch is in flight, grey when the name is only what the (optimistic)
+// cache says. The pill used to colour by KIND of set instead -- orange for an
+// activity set, grey for Default -- which looked identical whether the set was
+// verified or not, so the panel read as the truthful one and this as
+// decoration. One vocabulary now, so the two can't disagree.
+const colourFor = (status: PerkStatus): string => {
+  if (status.isConfirmed) {
+    return TEXT_SUCCESS;
+  }
+  if (status.isPending) {
+    return TEXT_WARNING;
+  }
+  return TEXT_GRAY;
+};
 
 // The game boots with <body class="f7-booting"> and only clears it in
 // index-app.js, on the line right after `new Framework7()` and its addView()
@@ -150,7 +165,11 @@ export const renderPerkIndicator = async (): Promise<void> => {
   // game's own home and chat buttons and nothing more, and the panel shows the
   // equipped set already -- in a surface we control, which is the better place
   // for it. Same call the cap tracker in this bar already makes.
-  if (!settings[SettingId.PERK_MANAGER] || !status.name || isMobileLayout()) {
+  //
+  // An unknown set is shown as "no set", as the panel shows it, rather than
+  // hiding the pill: a pill that vanishes looks like the feature is off, and
+  // "no set" before the first switch of a session is information.
+  if (!settings[SettingId.PERK_MANAGER] || isMobileLayout()) {
     pill?.remove();
     return;
   }
@@ -167,33 +186,43 @@ export const renderPerkIndicator = async (): Promise<void> => {
   keepRightmost(statsZone, pill);
   watchOrder(statsZone);
 
-  const signature = `${status.name}|${status.isPending}|${status.isConfirmed}`;
+  paintIndicator(pill, status);
+};
+
+// Synchronous, like the panel's paint: a status change repaints the pill in the
+// same tick it happens. Going through the full render for every change put an
+// await (the settings read) between the change and the paint, so the pill was
+// always a beat behind the panel chip on the same event.
+const paintIndicator = (pill: HTMLElement, status: PerkStatus): void => {
+  const name = status.name ?? "no set";
+  const signature = [
+    name,
+    status.isPending,
+    status.isConfirmed,
+    status.note ?? "",
+  ].join("|");
   if (pill.dataset.fhSignature === signature) {
     return;
   }
   pill.dataset.fhSignature = signature;
 
-  const color = isRestingSet(status.name) ? COLOR_RESTING : COLOR_ACTIVE;
+  const colour = colourFor(status);
   const dot = pill.querySelector<HTMLElement>("[data-fh-role='dot']");
   const label = pill.querySelector<HTMLElement>("[data-fh-role='label']");
   if (!dot || !label) {
     return;
   }
-
-  // in flight: hollow dot + faded label, so a real switch is visible while it
-  // happens (the settle wait makes it ~1s — long enough to see it land)
-  dot.style.backgroundColor = status.isPending ? "transparent" : color;
-  dot.style.border = status.isPending ? `1px solid ${color}` : "none";
-  label.textContent = status.isPending ? `${status.name}…` : status.name;
-  label.style.color = color;
-  pill.style.opacity = status.isPending ? "0.6" : "1";
-  if (status.isPending) {
-    pill.title = `Switching to the ${status.name} perk set…`;
-  } else if (status.isConfirmed) {
-    pill.title = `${status.name} perks equipped`;
-  } else {
-    pill.title = `${status.name} perk set selected (not verified this session)`;
-  }
+  // in flight: hollow dot + trailing ellipsis, so a real switch is visible
+  // while it happens (the settle wait makes it ~1s — long enough to see)
+  dot.style.backgroundColor = status.isPending ? "transparent" : colour;
+  dot.style.border = status.isPending ? `1px solid ${colour}` : "none";
+  label.textContent = status.isPending ? `${name}…` : name;
+  label.style.color = colour;
+  // the panel shows the manager's last note under its chip; here the bar has
+  // no room, so it rides in the tooltip in the same shape
+  pill.title = status.note
+    ? `Perks: ${name} — ${status.note}`
+    : `Perks: ${name}`;
 };
 
 // rotating a phone or dragging a window across the breakpoint has to repaint,
@@ -204,8 +233,15 @@ onLayoutChange(() => {
   });
 });
 
-// re-render whenever a switch starts or finishes
+// Repaint whenever a switch starts, lands, or logs. A mounted pill is painted
+// right here, synchronously; only when there is none yet (first status of the
+// session, or the game rebuilt the bar) does this go through the full render.
 onPerkStatusChange(() => {
+  const pill = document.querySelector<HTMLElement>(`#${INDICATOR_ID}`);
+  if (pill?.isConnected) {
+    paintIndicator(pill, getPerkStatus());
+    return;
+  }
   renderPerkIndicator().catch((error) => {
     console.error("Failed to render perk indicator", error);
   });
