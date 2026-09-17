@@ -379,7 +379,7 @@ onPerkRestore(applyDecision);
 // in. Every path through applyDecision leaves a note, so this one does too.
 const reconcileSafely = async (): Promise<void> => {
   try {
-    await runPerkTask(applyDecision);
+    await runPerkTask(applyDecision, "reconcile");
   } catch (error) {
     console.error("Failed to reconcile perks", error);
     setPerkStatusNote(

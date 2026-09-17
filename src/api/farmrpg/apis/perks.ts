@@ -391,22 +391,58 @@ const session: PerkSession = { apply: applySet };
 let perkQueue: Promise<unknown> = Promise.resolve();
 let isTaskRunning = false;
 
-// Run `task` with exclusive use of the perks. Don't call it from inside another
-// task -- anything a task needs is on the session it is given.
+// How long a task waits for its turn before giving up on the queue and running
+// anyway. Normal traffic never gets near this: a switch is ~1.3 s (reset +
+// activate + settle), a gated action with its restore ~3-4 s, and even a few
+// stacked up clear in seconds. Only a HUNG request (a fetch that neither
+// resolves nor rejects) holds the queue this long, and without a limit that
+// one hang would leave perk switching dead for the rest of the session,
+// silently. Giving up is logged, and the abandoned task is dropped from the
+// chain so everything after it runs normally.
+const QUEUE_WAIT_LIMIT_MS = 30_000;
+
+// Run `task` with exclusive use of the perks: tasks run one at a time, in call
+// order, and a task holds the queue until it resolves. Don't call it from
+// inside another task -- anything a task needs is on the session it is given,
+// and a task waiting on the queue it is itself holding would sit there until
+// the wait limit above.
 //
-// If something does anyway, it runs INLINE rather than joining the queue.
-// Waiting would be a deadlock on a queue the caller is itself holding, and that
-// queue would never drain again: perk switching dead for the rest of the
-// session, silently. Running inline is safe (a task already holds the perks, so
-// nothing else is touching them) and the log says it happened.
+// There is deliberately NO shortcut for a task that arrives while another is
+// running. 1.1.55 had one -- a "re-entrant" call ran inline -- keyed on a flag
+// that only said SOME task was running, not that the caller was inside it. No
+// caller is ever inside one (the post-action restore is called directly), so
+// the shortcut fired only for the case it must never fire for: an independent
+// click or page-transition reconcile landing mid-task, which then ran
+// CONCURRENTLY with it, resets and activates interleaving. A banner harvest
+// clicked within ~1.5 s of arriving on a page raced that page's own switch.
 export const runPerkTask = <T>(
-  task: (perks: PerkSession) => Promise<T>
+  task: (perks: PerkSession) => Promise<T>,
+  label = "a perk task"
 ): Promise<T> => {
   if (isTaskRunning) {
-    logPerk("a perk task was started from inside another one — ran it inline");
-    return task(session);
+    // so the log shows the wait, not just the two entries either side of it
+    logPerk(`${label} is waiting for the perk queue`);
   }
-  const run = perkQueue.then(async () => {
+  const previous = perkQueue;
+  const run = (async () => {
+    let waitTimeout: number | undefined;
+    const gaveUp = await Promise.race([
+      previous.then(() => false),
+      new Promise<boolean>((resolve) => {
+        waitTimeout = setTimeout(
+          () => resolve(true),
+          QUEUE_WAIT_LIMIT_MS
+        ) as unknown as number;
+      }),
+    ]);
+    clearTimeout(waitTimeout);
+    if (gaveUp) {
+      logPerk(
+        `${label} waited ${
+          QUEUE_WAIT_LIMIT_MS / 1000
+        }s for the perk queue and ran anyway — a request may be hung`
+      );
+    }
     isTaskRunning = true;
     try {
       return await task(session);
@@ -414,7 +450,7 @@ export const runPerkTask = <T>(
       // eslint-disable-next-line require-atomic-updates
       isTaskRunning = false;
     }
-  });
+  })();
   // a failed task must not break the queue for the next one
   perkQueue = run.catch(() => {
     // swallowed here only; runPerkTask's own caller still sees the rejection
@@ -424,7 +460,7 @@ export const runPerkTask = <T>(
 
 // One-shot switch with no action behind it: the panel's manual "equip".
 export const equipPerkSet = (set: PerkSet): Promise<boolean> =>
-  runPerkTask((perks) => perks.apply(set));
+  runPerkTask((perks) => perks.apply(set), `equip ${set.name}`);
 
 // How the perks get put back after a gated action. Registered by
 // features/perkManagement.ts, which owns the page-to-set policy; this module
@@ -486,4 +522,4 @@ export const runGatedAction = ({
         await restorePerks(perks);
       }
     }
-  });
+  }, label);
