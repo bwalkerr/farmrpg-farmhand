@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.59
+// @version 1.1.60
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -39,7 +39,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getLocationNames = exports.getLocationEntries = exports.locationDataState = exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
+exports.getLocationNames = exports.getLocationEntries = exports.townsfolkDataState = exports.locationDataState = exports.questDataState = exports.pageDataState = exports.isItem = exports.getBasicItems = exports.getAbridgedItem = exports.itemDataState = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(6747);
 exports.itemDataState = new state_1.CachedState(state_1.StorageKey.ITEM_DATA, (state, itemName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -146,7 +146,7 @@ exports.pageDataState = new state_1.CachedState(state_1.StorageKey.PAGE_DATA, ()
 // thing the two share. Cached for a week alongside item data; quest definitions
 // change about as often.
 exports.questDataState = new state_1.CachedState(state_1.StorageKey.QUEST_DATA, (state, questName) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     if (!questName) {
         return;
     }
@@ -164,7 +164,9 @@ exports.questDataState = new state_1.CachedState(state_1.StorageKey.QUEST_DATA, 
         console.error(`Quest ${questName} not found`);
         return previous;
     }
-    return quest;
+    // the page context's id is the game's quest id (verified: "Fake Fishing
+    // I" is quest.php?id=1 in both), which is what lets a quest link in-game
+    return Object.assign(Object.assign({}, quest), { id: (_f = (_e = data.result.pageContext) === null || _e === void 0 ? void 0 : _e.id) !== null && _f !== void 0 ? _f : quest.id });
 }), {
     timeout: 60 * 60 * 24 * 7, // 1 week
 });
@@ -228,6 +230,32 @@ exports.locationDataState = new state_1.CachedState(state_1.StorageKey.LOCATION_
         type: location.type,
         xpPerHit: xpPerHit > 0 ? xpPerHit : undefined,
     };
+}), {
+    timeout: 60 * 60 * 24 * 7, // 1 week
+});
+// A townsperson's loves, likes and hates, keyed by buddy.farm SLUG (the
+// search index hands those out; names like "Charles Horsington III" don't slug
+// predictably). Cached a week like items.
+exports.townsfolkDataState = new state_1.CachedState(state_1.StorageKey.TOWNSFOLK_DATA, (state, slug) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d;
+    if (!slug) {
+        return;
+    }
+    const previous = state.state[slug];
+    if (previous) {
+        return previous;
+    }
+    const response = yield fetch(`https://buddy.farm/page-data/t/${slug}/page-data.json`);
+    if (!response.ok) {
+        return previous;
+    }
+    const data = (yield response.json());
+    const npc = (_d = (_c = (_b = (_a = data === null || data === void 0 ? void 0 : data.result) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.farmrpg) === null || _c === void 0 ? void 0 : _c.npcs) === null || _d === void 0 ? void 0 : _d[0];
+    if (!npc) {
+        console.error(`Townsperson ${slug} not found`);
+        return previous;
+    }
+    return npc;
 }), {
     timeout: 60 * 60 * 24 * 7, // 1 week
 });
@@ -3370,7 +3398,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.renderHereTab = void 0;
+exports.renderHereTab = exports.renderLocationView = void 0;
 const shared_1 = __webpack_require__(4073);
 const locationAdvice_1 = __webpack_require__(4764);
 const api_1 = __webpack_require__(3413);
@@ -3481,15 +3509,13 @@ const renderWhereToGo = (body, context, missing, title) => __awaiter(void 0, voi
     }
     body.append(card);
 });
-const renderHereTab = (body, context, focused) => __awaiter(void 0, void 0, void 0, function* () {
+// A location's drop table laid over your inventory, cap and backlog. The Here
+// tab draws the place you are standing; the lookup draws any place you search
+// for, through the same function.
+const renderLocationView = (body, context, here, focused) => {
     var _a, _b;
-    const { cap, here, inventory, mastery, resolved } = context;
+    const { cap, inventory, mastery, resolved } = context;
     const missing = (0, shared_1.getMissingDemand)(context, focused);
-    if (!here) {
-        body.append((0, shared_1.makeEmpty)("Not at an explore area or fishing spot. Open the panel on one for its drop table against your needs."));
-        yield renderWhereToGo(body, context, missing, "Where to go");
-        return;
-    }
     const { image, location, stamina } = here;
     const reasons = (0, shared_1.getReasonsByItem)(resolved, focused);
     const advice = (0, locationAdvice_1.getLocationAdvice)(location.drops, missing, reasons, inventory, cap, mastery);
@@ -3587,9 +3613,968 @@ const renderHereTab = (body, context, focused) => __awaiter(void 0, void 0, void
         cardBody.append(makeDropRow(drop, context, (_b = reasons.get(drop.name)) !== null && _b !== void 0 ? _b : (wastedNames.has(drop.name) ? [] : undefined), needed));
     }
     body.append(card);
+};
+exports.renderLocationView = renderLocationView;
+const renderHereTab = (body, context, focused) => __awaiter(void 0, void 0, void 0, function* () {
+    const missing = (0, shared_1.getMissingDemand)(context, focused);
+    if (!context.here) {
+        body.append((0, shared_1.makeEmpty)("Not at an explore area or fishing spot. Open the panel on one for its drop table against your needs."));
+        yield renderWhereToGo(body, context, missing, "Where to go");
+        return;
+    }
+    (0, exports.renderLocationView)(body, context, context.here, focused);
     yield renderWhereToGo(body, context, missing, "Elsewhere");
 });
 exports.renderHereTab = renderHereTab;
+
+
+/***/ }),
+
+/***/ 2294:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.lookupTitle = exports.renderLookup = exports.toLookup = void 0;
+const shared_1 = __webpack_require__(4073);
+const townsfolk_1 = __webpack_require__(2161);
+const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
+const promise_1 = __webpack_require__(6762);
+const here_1 = __webpack_require__(7190);
+const search_1 = __webpack_require__(5164);
+const theme_1 = __webpack_require__(1178);
+const toLookup = (entry) => {
+    switch (entry.kind) {
+        case "item": {
+            return { kind: "item", name: entry.name };
+        }
+        case "quest": {
+            return { kind: "quest", name: entry.name };
+        }
+        case "townsfolk": {
+            return { kind: "townsfolk", name: entry.name, slug: (0, search_1.slugOf)(entry) };
+        }
+        case "location": {
+            return { kind: "location", name: entry.name };
+        }
+        default: {
+            return undefined;
+        }
+    }
+};
+exports.toLookup = toLookup;
+const MAX_ROWS = 8;
+// a row's trailing "open here" control
+const makeOpenHere = (open, lookup) => {
+    const button = document.createElement("span");
+    button.className = "fh-open-here";
+    button.textContent = "▸";
+    button.title = "Open in the panel";
+    button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        open(lookup);
+    });
+    return button;
+};
+const makeMore = (total, shown, onMore) => {
+    if (total <= shown) {
+        return undefined;
+    }
+    const more = document.createElement("div");
+    more.className = "fh-foot";
+    const link = document.createElement("span");
+    link.className = "fh-link";
+    link.textContent = `show all ${total}`;
+    link.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onMore();
+    });
+    more.append(link);
+    return more;
+};
+// A list that shows MAX_ROWS and expands in place.
+const fillList = (body, entries, toRow) => {
+    const paint = (limit) => {
+        body.replaceChildren();
+        for (const entry of entries.slice(0, limit)) {
+            body.append(toRow(entry));
+        }
+        const more = makeMore(entries.length, limit, () => paint(entries.length));
+        if (more) {
+            body.append(more);
+        }
+    };
+    paint(MAX_ROWS);
+};
+const makeHeader = (image, name, sub) => {
+    const place = document.createElement("div");
+    place.className = "fh-place";
+    const icon = (0, shared_1.toIconUrl)(image);
+    if (icon) {
+        const img = document.createElement("img");
+        img.src = icon;
+        img.alt = "";
+        place.append(img);
+    }
+    const text = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "fh-place-name";
+    title.append(name);
+    const subline = document.createElement("div");
+    subline.className = "fh-place-sub";
+    subline.append(...sub);
+    text.append(title, subline);
+    place.append(text);
+    return place;
+};
+const haveOf = (context, name) => { var _a; return (_a = context.inventory[name]) !== null && _a !== void 0 ? _a : 0; };
+// which of your undertakings are short of this item
+const wantedBy = (context, name) => context.resolved.scopes
+    .filter((scope) => scope.missing.some((entry) => entry.name === name))
+    .map((scope) => scope.label);
+const itemHref = (id) => id ? `item.php?id=${id}` : undefined;
+const questHref = (id) => id ? `quest.php?id=${id}` : undefined;
+const makeCountAside = (context, name, needed) => {
+    const have = haveOf(context, name);
+    const strong = document.createElement("strong");
+    strong.textContent = have.toLocaleString();
+    if (needed !== undefined) {
+        strong.style.color = have >= needed ? "var(--fh-ok)" : "var(--fh-warn)";
+        return [strong, ` / ${needed.toLocaleString()}`];
+    }
+    if (context.cap) {
+        return [strong, ` / ${context.cap.toLocaleString()}`];
+    }
+    return [strong];
+};
+// ---------------------------------------------------------------------------
+// Item
+// ---------------------------------------------------------------------------
+const renderItem = (body, context, name, open) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v;
+    const item = yield (0, promise_1.orUndefined)(api_1.itemDataState.get({ query: name }));
+    if (!item) {
+        body.append((0, shared_1.makeEmpty)(`buddy.farm has no page for “${name}”.`));
+        return;
+    }
+    const have = haveOf(context, item.name);
+    const { cap } = context;
+    const isAtCap = cap !== undefined && cap > 0 && have >= cap;
+    const sub = [];
+    const gameLink = itemHref(item.id);
+    if (gameLink) {
+        sub.push((0, gameLinks_1.makeLink)(gameLink, "open item page ↗", "var(--fh-accent)"));
+    }
+    body.append(makeHeader(item.image, item.name, sub));
+    // your standing with it, in one strip
+    const tags = document.createElement("div");
+    tags.className = "fh-row-tags";
+    tags.style.marginBottom = "8px";
+    tags.append((0, shared_1.makeTag)(`you have ${have.toLocaleString()}${cap ? ` / ${cap.toLocaleString()}` : ""}`, isAtCap ? "err" : "muted"));
+    for (const label of wantedBy(context, item.name).slice(0, 3)) {
+        tags.append((0, shared_1.makeTag)(`wanted: ${label}`, "ok"));
+    }
+    if (item.canBuy && item.buyPrice > 0) {
+        tags.append((0, shared_1.makeTag)(`store ${item.buyPrice.toLocaleString()} silver`, "muted"));
+    }
+    if (item.fleaMarketPrice > 0) {
+        tags.append((0, shared_1.makeTag)(`flea market ${item.fleaMarketPrice.toLocaleString()} gold`, "muted"));
+    }
+    if (item.craftingLevel > 0) {
+        tags.append((0, shared_1.makeTag)(`crafting ${item.craftingLevel}`, "accent"));
+    }
+    if (item.cookingLevel > 0) {
+        tags.append((0, shared_1.makeTag)(`cooking ${item.cookingLevel}`, "accent"));
+    }
+    body.append(tags);
+    if (item.description) {
+        const description = document.createElement("div");
+        description.className = "fh-empty";
+        description.style.padding = "0 2px 8px";
+        description.textContent = item.description;
+        body.append(description);
+    }
+    // where it comes from
+    const sources = (0, shared_1.makeCard)("Obtainable from");
+    let sourceCount = 0;
+    const byLocation = new Map();
+    for (const entry of (_a = item.dropRatesItems) !== null && _a !== void 0 ? _a : []) {
+        const location = (_b = entry.dropRates) === null || _b === void 0 ? void 0 : _b.location;
+        if (!(location === null || location === void 0 ? void 0 : location.name) || !entry.rate) {
+            continue;
+        }
+        const existing = byLocation.get(location.name);
+        if (!existing || entry.rate < existing.rate) {
+            byLocation.set(location.name, {
+                image: location.image,
+                rate: entry.rate,
+                type: location.type,
+            });
+        }
+    }
+    const locationNames = [...byLocation.keys()];
+    const references = yield Promise.all(locationNames.map((locationName) => (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: locationName }))));
+    const { resolved } = context;
+    const wanted = Math.max(0, ...resolved.scopes
+        .flatMap((scope) => scope.missing)
+        .filter((entry) => entry.name === item.name)
+        .map((entry) => entry.quantity));
+    for (const [index, locationName] of locationNames
+        .sort((a, b) => { var _a, _b, _c, _d; return ((_b = (_a = byLocation.get(a)) === null || _a === void 0 ? void 0 : _a.rate) !== null && _b !== void 0 ? _b : 0) - ((_d = (_c = byLocation.get(b)) === null || _c === void 0 ? void 0 : _c.rate) !== null && _d !== void 0 ? _d : 0); })
+        .entries()) {
+        const drop = byLocation.get(locationName);
+        const reference = references[locationNames.indexOf(locationName)];
+        if (!drop) {
+            continue;
+        }
+        const rate = document.createElement("strong");
+        rate.textContent = `1 in ${(0, shared_1.formatHits)(drop.rate)}`;
+        const subParts = [
+            drop.type === "fishing" ? "fishing" : "exploring",
+        ];
+        if (wanted > 0) {
+            subParts.push(` · ~${(0, shared_1.formatHits)(wanted * drop.rate)} ${drop.type === "fishing" ? "casts" : "explores"} for the ${wanted.toLocaleString()} you need`);
+        }
+        sources.body.append((0, shared_1.makeRow)(reference
+            ? (0, gameLinks_1.makeLink)((0, gameLinks_1.toLocationHref)(reference), locationName, theme_1.TEXT_WHITE)
+            : locationName, {
+            aside: [
+                rate,
+                makeOpenHere(open, { kind: "location", name: locationName }),
+            ],
+            icon: (0, shared_1.toIconUrl)(drop.image),
+            sub: subParts,
+            tone: index === 0 ? "ok" : undefined,
+        }));
+        sourceCount += 1;
+    }
+    for (const production of (_c = item.manualProductions) !== null && _c !== void 0 ? _c : []) {
+        sources.body.append((0, shared_1.makeRow)(production.lineOne, {
+            aside: [production.value],
+            icon: (0, shared_1.toIconUrl)(production.image),
+            sub: [production.lineTwo],
+        }));
+        sourceCount += 1;
+    }
+    for (const entry of (_d = item.petItems) !== null && _d !== void 0 ? _d : []) {
+        sources.body.append((0, shared_1.makeRow)(entry.pet.name, {
+            aside: [`level ${entry.level}`],
+            icon: (0, shared_1.toIconUrl)(entry.pet.image),
+            sub: ["pet"],
+        }));
+        sourceCount += 1;
+    }
+    for (const entry of (_e = item.locksmithOutputItems) !== null && _e !== void 0 ? _e : []) {
+        sources.body.append((0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_f = itemHref(entry.item.id)) !== null && _f !== void 0 ? _f : "#", entry.item.name, theme_1.TEXT_WHITE), {
+            aside: [
+                entry.quantityMin === entry.quantityMax
+                    ? `×${entry.quantityMax}`
+                    : `×${entry.quantityMin}–${entry.quantityMax}`,
+                makeOpenHere(open, { kind: "item", name: entry.item.name }),
+            ],
+            icon: (0, shared_1.toIconUrl)(entry.item.image),
+            sub: ["locksmith"],
+        }));
+        sourceCount += 1;
+    }
+    for (const entry of (_g = item.npcRewards) !== null && _g !== void 0 ? _g : []) {
+        sources.body.append((0, shared_1.makeRow)(entry.npc.name, {
+            aside: [`×${entry.quantity}`],
+            icon: (0, shared_1.toIconUrl)(entry.npc.image),
+            sub: [`friendship level ${entry.level}`],
+        }));
+        sourceCount += 1;
+    }
+    for (const entry of (_h = item.rewardForQuests) !== null && _h !== void 0 ? _h : []) {
+        sources.body.append((0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_j = questHref(entry.quest.id)) !== null && _j !== void 0 ? _j : "#", entry.quest.name, theme_1.TEXT_WHITE), {
+            aside: [
+                `×${entry.quantity}`,
+                makeOpenHere(open, { kind: "quest", name: entry.quest.name }),
+            ],
+            icon: (0, shared_1.toIconUrl)(entry.quest.image),
+            sub: ["quest reward"],
+        }));
+        sourceCount += 1;
+    }
+    for (const entry of (_k = item.towerRewards) !== null && _k !== void 0 ? _k : []) {
+        sources.body.append((0, shared_1.makeRow)(`Tower floor ${entry.level}`, {
+            aside: [`×${entry.itemQuantity.toLocaleString()}`],
+            sub: ["tower"],
+        }));
+        sourceCount += 1;
+    }
+    for (const entry of (_l = item.skillLevelRewards) !== null && _l !== void 0 ? _l : []) {
+        sources.body.append((0, shared_1.makeRow)(`${entry.skill} level ${entry.level}`, {
+            aside: [`×${entry.itemQuantity.toLocaleString()}`],
+            sub: ["level reward"],
+        }));
+        sourceCount += 1;
+    }
+    for (const entry of (_m = item.exchangeCenterOutputs) !== null && _m !== void 0 ? _m : []) {
+        sources.body.append((0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_o = itemHref(entry.inputItem.id)) !== null && _o !== void 0 ? _o : "#", entry.inputItem.name, theme_1.TEXT_WHITE), {
+            aside: [`${entry.inputQuantity} → ${entry.outputQuantity}`],
+            icon: (0, shared_1.toIconUrl)(entry.inputItem.image),
+            sub: ["exchange center"],
+        }));
+        sourceCount += 1;
+    }
+    if (sourceCount === 0) {
+        sources.body.append((0, shared_1.makeEmpty)("No listed source."));
+    }
+    body.append(sources.card);
+    // its recipe, with your counts against it
+    if ((_p = item.recipeItems) === null || _p === void 0 ? void 0 : _p.length) {
+        const recipe = (0, shared_1.makeCard)(item.canCook ? "Cooked from" : "Crafted from", {
+            aside: (0, shared_1.plural)(item.recipeItems.length, "ingredient"),
+        });
+        for (const entry of item.recipeItems) {
+            const ingredientHave = haveOf(context, entry.item.name);
+            recipe.body.append((0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_q = itemHref(entry.item.id)) !== null && _q !== void 0 ? _q : "#", entry.item.name, theme_1.TEXT_WHITE), {
+                aside: [
+                    ...makeCountAside(context, entry.item.name, entry.quantity),
+                    makeOpenHere(open, { kind: "item", name: entry.item.name }),
+                ],
+                icon: (0, shared_1.toIconUrl)(entry.item.image),
+                tone: ingredientHave >= entry.quantity ? "ok" : "warn",
+            }));
+        }
+        body.append(recipe.card);
+    }
+    // what it goes into
+    if ((_r = item.recipeIngredientItems) === null || _r === void 0 ? void 0 : _r.length) {
+        const usedIn = (0, shared_1.makeCard)("Used in", {
+            aside: (0, shared_1.plural)(item.recipeIngredientItems.length, "recipe"),
+        });
+        fillList(usedIn.body, item.recipeIngredientItems, (entry) => {
+            var _a;
+            return (0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_a = itemHref(entry.item.id)) !== null && _a !== void 0 ? _a : "#", entry.item.name, theme_1.TEXT_WHITE), {
+                aside: [
+                    `×${entry.quantity}`,
+                    makeOpenHere(open, { kind: "item", name: entry.item.name }),
+                ],
+                icon: (0, shared_1.toIconUrl)(entry.item.image),
+            });
+        });
+        body.append(usedIn.card);
+    }
+    // the quests that want it, most demanding first
+    if ((_s = item.requiredForQuests) === null || _s === void 0 ? void 0 : _s.length) {
+        const quests = [...item.requiredForQuests].sort((a, b) => b.quantity - a.quantity);
+        const total = quests.reduce((sum, entry) => sum + entry.quantity, 0);
+        const needed = (0, shared_1.makeCard)("Needed for quests", {
+            aside: `${(0, shared_1.plural)(quests.length, "quest")} · ${total.toLocaleString()} total`,
+        });
+        fillList(needed.body, quests, (entry) => {
+            var _a;
+            return (0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_a = questHref(entry.quest.id)) !== null && _a !== void 0 ? _a : "#", entry.quest.name, theme_1.TEXT_WHITE), {
+                aside: [
+                    `×${entry.quantity.toLocaleString()}`,
+                    makeOpenHere(open, { kind: "quest", name: entry.quest.name }),
+                ],
+                icon: (0, shared_1.toIconUrl)(entry.quest.image),
+                tone: have >= entry.quantity ? "ok" : undefined,
+            });
+        });
+        body.append(needed.card);
+    }
+    // who wants it as a gift
+    if ((_t = item.npcItems) === null || _t === void 0 ? void 0 : _t.length) {
+        const snapshot = yield (0, promise_1.orUndefined)(townsfolk_1.townsfolkState.get());
+        const links = (_u = snapshot === null || snapshot === void 0 ? void 0 : snapshot.links) !== null && _u !== void 0 ? _u : [];
+        const townsfolk = (0, shared_1.makeCard)("Townsfolk");
+        const order = { loves: 0, likes: 1, hates: 2 };
+        const tone = {
+            hates: "err",
+            likes: "muted",
+            loves: "accent",
+        };
+        const glyph = {
+            hates: "✕",
+            likes: "♡",
+            loves: "♥",
+        };
+        const tagRow = document.createElement("div");
+        tagRow.className = "fh-row-tags";
+        for (const entry of [...item.npcItems].sort((a, b) => order[a.relationship] - order[b.relationship])) {
+            const link = (0, townsfolk_1.findTownsfolkLink)(links, entry.npc.name);
+            const tag = (0, shared_1.makeTag)(`${glyph[entry.relationship]} ${entry.npc.name}`, tone[entry.relationship], link === null || link === void 0 ? void 0 : link.href);
+            tag.title = `${entry.npc.name} ${entry.relationship} this`;
+            tagRow.append(tag);
+        }
+        townsfolk.body.append(tagRow);
+        body.append(townsfolk.card);
+    }
+    // what it can be traded for
+    if ((_v = item.exchangeCenterInputs) === null || _v === void 0 ? void 0 : _v.length) {
+        const exchange = (0, shared_1.makeCard)("Exchange center", {
+            aside: (0, shared_1.plural)(item.exchangeCenterInputs.length, "trade"),
+        });
+        fillList(exchange.body, item.exchangeCenterInputs, (entry) => {
+            var _a;
+            return (0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_a = itemHref(entry.outputItem.id)) !== null && _a !== void 0 ? _a : "#", entry.outputItem.name, theme_1.TEXT_WHITE), {
+                aside: [
+                    `${entry.inputQuantity} → ${entry.outputQuantity}`,
+                    makeOpenHere(open, { kind: "item", name: entry.outputItem.name }),
+                ],
+                icon: (0, shared_1.toIconUrl)(entry.outputItem.image),
+                sub: [`last seen ${entry.lastSeen}`],
+            });
+        });
+        body.append(exchange.card);
+    }
+});
+// ---------------------------------------------------------------------------
+// Quest
+// ---------------------------------------------------------------------------
+const renderQuest = (body, context, name, open) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    const quest = yield (0, promise_1.orUndefined)(api_1.questDataState.get({ query: name }));
+    if (!quest) {
+        body.append((0, shared_1.makeEmpty)(`buddy.farm has no page for “${name}”.`));
+        return;
+    }
+    const sub = [];
+    if (quest.npc) {
+        sub.push(quest.npc, " · ");
+    }
+    const href = questHref(quest.id);
+    if (href) {
+        sub.push((0, gameLinks_1.makeLink)(href, "open quest ↗", "var(--fh-accent)"));
+    }
+    body.append(makeHeader(quest.image, quest.name, sub));
+    const tags = document.createElement("div");
+    tags.className = "fh-row-tags";
+    tags.style.marginBottom = "8px";
+    const levels = [
+        ["farming", quest.requiredFarmingLevel],
+        ["fishing", quest.requiredFishingLevel],
+        ["crafting", quest.requiredCraftingLevel],
+        ["exploring", quest.requiredExploringLevel],
+        ["cooking", quest.requiredCookingLevel],
+        ["tower", quest.requiredTowerLevel],
+    ];
+    for (const [skill, level] of levels) {
+        if (level > 0) {
+            tags.append((0, shared_1.makeTag)(`${skill} ${level}`, "accent"));
+        }
+    }
+    if (quest.endDate) {
+        tags.append((0, shared_1.makeTag)(`ends ${quest.endDate}`, "warn"));
+    }
+    if (tags.childElementCount > 0) {
+        body.append(tags);
+    }
+    if (quest.cleanDescription) {
+        const description = document.createElement("div");
+        description.className = "fh-empty";
+        description.style.padding = "0 2px 8px";
+        description.textContent = quest.cleanDescription;
+        body.append(description);
+    }
+    const required = (0, shared_1.makeCard)("Requires");
+    let shortfalls = 0;
+    for (const entry of (_a = quest.requiredItems) !== null && _a !== void 0 ? _a : []) {
+        const have = haveOf(context, entry.item.name);
+        if (have < entry.quantity) {
+            shortfalls += 1;
+        }
+        required.body.append((0, shared_1.makeRow)(entry.item.name, {
+            aside: [
+                ...makeCountAside(context, entry.item.name, entry.quantity),
+                makeOpenHere(open, { kind: "item", name: entry.item.name }),
+            ],
+            icon: (0, shared_1.toIconUrl)(entry.item.image),
+            tone: have >= entry.quantity ? "ok" : "warn",
+        }));
+    }
+    if (quest.requiredSilver > 0) {
+        required.body.append((0, shared_1.makeRow)("Silver", { aside: [quest.requiredSilver.toLocaleString()] }));
+    }
+    if (required.body.childElementCount === 0) {
+        required.body.append((0, shared_1.makeEmpty)("Nothing listed."));
+    }
+    const requiredHead = required.card.querySelector(".fh-card-head");
+    if (requiredHead) {
+        const aside = document.createElement("span");
+        aside.className = "fh-card-aside";
+        aside.textContent =
+            shortfalls === 0 ? "you have it all" : `${shortfalls} short`;
+        aside.style.color = shortfalls === 0 ? "var(--fh-ok)" : "var(--fh-warn)";
+        requiredHead.append(aside);
+    }
+    body.append(required.card);
+    const rewards = (0, shared_1.makeCard)("Rewards");
+    for (const entry of (_b = quest.rewardItems) !== null && _b !== void 0 ? _b : []) {
+        rewards.body.append((0, shared_1.makeRow)(entry.item.name, {
+            aside: [
+                `×${entry.quantity.toLocaleString()}`,
+                makeOpenHere(open, { kind: "item", name: entry.item.name }),
+            ],
+            icon: (0, shared_1.toIconUrl)(entry.item.image),
+        }));
+    }
+    if (quest.rewardSilver > 0) {
+        rewards.body.append((0, shared_1.makeRow)("Silver", { aside: [quest.rewardSilver.toLocaleString()] }));
+    }
+    if (quest.rewardGold > 0) {
+        rewards.body.append((0, shared_1.makeRow)("Gold", { aside: [quest.rewardGold.toLocaleString()] }));
+    }
+    if (rewards.body.childElementCount === 0) {
+        rewards.body.append((0, shared_1.makeEmpty)("Nothing listed."));
+    }
+    body.append(rewards.card);
+});
+// ---------------------------------------------------------------------------
+// Townsperson
+// ---------------------------------------------------------------------------
+const renderTownsfolk = (body, context, name, slug, open) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    const [npc, snapshot] = yield Promise.all([
+        (0, promise_1.orUndefined)(api_1.townsfolkDataState.get({ query: slug })),
+        (0, promise_1.orUndefined)(townsfolk_1.townsfolkState.get()),
+    ]);
+    if (!npc) {
+        body.append((0, shared_1.makeEmpty)(`buddy.farm has no page for “${name}”.`));
+        return;
+    }
+    const link = (0, townsfolk_1.findTownsfolkLink)((_a = snapshot === null || snapshot === void 0 ? void 0 : snapshot.links) !== null && _a !== void 0 ? _a : [], npc.name);
+    const sub = [];
+    if (link) {
+        sub.push((0, gameLinks_1.makeLink)(link.href, "open their page ↗", "var(--fh-accent)"));
+    }
+    body.append(makeHeader(npc.image, npc.name, sub));
+    const groups = [
+        { relationship: "loves", title: "Loves" },
+        { relationship: "likes", title: "Likes" },
+        { relationship: "hates", title: "Hates" },
+    ];
+    for (const group of groups) {
+        const entries = npc.npcItems
+            .filter((entry) => entry.relationship === group.relationship)
+            // what you actually have to give, first
+            .sort((a, b) => haveOf(context, b.item.name) - haveOf(context, a.item.name));
+        if (entries.length === 0) {
+            continue;
+        }
+        const inHand = entries.filter((entry) => haveOf(context, entry.item.name) > 0).length;
+        const isHates = group.relationship === "hates";
+        const card = (0, shared_1.makeCard)(group.title, {
+            aside: isHates ? String(entries.length) : `${inHand} in hand`,
+            tone: group.relationship === "loves" ? "ok" : undefined,
+        });
+        fillList(card.body, entries, (entry) => {
+            var _a;
+            const have = haveOf(context, entry.item.name);
+            let tone = "muted";
+            if (isHates) {
+                tone = "err";
+            }
+            else if (have > 0) {
+                tone = "ok";
+            }
+            return (0, shared_1.makeRow)((0, gameLinks_1.makeLink)((_a = itemHref(entry.item.id)) !== null && _a !== void 0 ? _a : "#", entry.item.name, theme_1.TEXT_WHITE), {
+                aside: [
+                    ...makeCountAside(context, entry.item.name),
+                    makeOpenHere(open, { kind: "item", name: entry.item.name }),
+                ],
+                icon: (0, shared_1.toIconUrl)(entry.item.image),
+                tone,
+            });
+        });
+        body.append(card.card);
+    }
+    if ((_b = npc.quests) === null || _b === void 0 ? void 0 : _b.length) {
+        const quests = (0, shared_1.makeCard)("Quests", { aside: String(npc.quests.length) });
+        fillList(quests.body, npc.quests, (quest) => (0, shared_1.makeRow)(quest.name, {
+            aside: [makeOpenHere(open, { kind: "quest", name: quest.name })],
+            icon: (0, shared_1.toIconUrl)(quest.image),
+        }));
+        body.append(quests.card);
+    }
+});
+// ---------------------------------------------------------------------------
+// Location
+// ---------------------------------------------------------------------------
+const renderLocation = (body, context, name, focused) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    const location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name }));
+    if (!((_a = location === null || location === void 0 ? void 0 : location.drops) === null || _a === void 0 ? void 0 : _a.length)) {
+        body.append((0, shared_1.makeEmpty)(`buddy.farm has no drop table for “${name}”.`));
+        return;
+    }
+    const image = ((_b = context.here) === null || _b === void 0 ? void 0 : _b.location.name) === name ? context.here.image : undefined;
+    (0, here_1.renderLocationView)(body, context, { image, location }, focused);
+});
+const renderLookup = (body, context, lookup, focused, open) => __awaiter(void 0, void 0, void 0, function* () {
+    switch (lookup.kind) {
+        case "item": {
+            yield renderItem(body, context, lookup.name, open);
+            break;
+        }
+        case "quest": {
+            yield renderQuest(body, context, lookup.name, open);
+            break;
+        }
+        case "townsfolk": {
+            yield renderTownsfolk(body, context, lookup.name, lookup.slug, open);
+            break;
+        }
+        default: {
+            yield renderLocation(body, context, lookup.name, focused);
+        }
+    }
+});
+exports.renderLookup = renderLookup;
+const lookupTitle = (lookup) => lookup.name;
+exports.lookupTitle = lookupTitle;
+
+
+/***/ }),
+
+/***/ 5164:
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.makeSearchBox = exports.getSearchIndex = exports.slugOf = void 0;
+const searchIndex_1 = __webpack_require__(9986);
+const promise_1 = __webpack_require__(6762);
+const api_1 = __webpack_require__(3413);
+const shared_1 = __webpack_require__(4073);
+var searchIndex_2 = __webpack_require__(9986);
+Object.defineProperty(exports, "slugOf", ({ enumerable: true, get: function () { return searchIndex_2.slugOf; } }));
+// Search over everything buddy.farm indexes -- items, quests, questlines,
+// townsfolk, locations -- from the panel head, with the keyboard. A hit opens
+// as a lookup inside the panel (see lookup.ts): buddy.farm's page, with the
+// game's links and your own numbers on it.
+let index;
+let indexing;
+const getSearchIndex = () => {
+    if (index) {
+        return Promise.resolve(index);
+    }
+    if (!indexing) {
+        indexing = (() => __awaiter(void 0, void 0, void 0, function* () {
+            var _a, _b, _c, _d, _e;
+            const data = yield (0, promise_1.orUndefined)(api_1.pageDataState.get());
+            const entries = [];
+            const buckets = [
+                ...((_a = data === null || data === void 0 ? void 0 : data.items) !== null && _a !== void 0 ? _a : []),
+                ...((_b = data === null || data === void 0 ? void 0 : data.quests) !== null && _b !== void 0 ? _b : []),
+                ...((_c = data === null || data === void 0 ? void 0 : data.questlines) !== null && _c !== void 0 ? _c : []),
+                ...((_d = data === null || data === void 0 ? void 0 : data.townsfolk) !== null && _d !== void 0 ? _d : []),
+                ...((_e = data === null || data === void 0 ? void 0 : data.pages) !== null && _e !== void 0 ? _e : []),
+            ];
+            for (const page of buckets) {
+                const kind = (0, searchIndex_1.kindOfHref)(page.href);
+                // calculators and the like have no in-game counterpart, and a
+                // questline has no page to open here (yet)
+                if (!kind || kind === "questline") {
+                    continue;
+                }
+                entries.push({
+                    href: page.href,
+                    image: page.image,
+                    kind,
+                    name: page.name,
+                    searchText: (page.searchText || page.name).toLowerCase(),
+                });
+            }
+            index = entries;
+            return entries;
+        }))();
+    }
+    return indexing;
+};
+exports.getSearchIndex = getSearchIndex;
+// The input and its results list. `onSelect` gets the chosen entry; the box
+// clears itself afterwards. Arrow keys move, Enter picks, Escape closes.
+const makeSearchBox = (onSelect) => {
+    const wrap = document.createElement("div");
+    wrap.className = "fh-search";
+    const input = document.createElement("input");
+    input.className = "fh-search-input";
+    input.type = "search";
+    input.placeholder = "Search items, quests, places…";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("aria-label", "Search buddy.farm");
+    const hint = document.createElement("kbd");
+    hint.className = "fh-search-kbd";
+    hint.textContent = "Ctrl K";
+    const results = document.createElement("div");
+    results.className = "fh-search-results";
+    results.dataset.on = "false";
+    wrap.append(input, hint, results);
+    let current = [];
+    let cursor = -1;
+    const close = () => {
+        results.dataset.on = "false";
+        results.replaceChildren();
+        current = [];
+        cursor = -1;
+    };
+    const paint = () => {
+        results.replaceChildren();
+        if (current.length === 0) {
+            results.dataset.on = "false";
+            return;
+        }
+        results.dataset.on = "true";
+        for (const [position, entry] of current.entries()) {
+            const row = document.createElement("div");
+            row.className = "fh-search-row";
+            row.dataset.active = String(position === cursor);
+            const icon = (0, shared_1.toIconUrl)(entry.image);
+            if (icon) {
+                const img = document.createElement("img");
+                img.src = icon;
+                img.alt = "";
+                img.loading = "lazy";
+                row.append(img);
+            }
+            const name = document.createElement("span");
+            name.className = "fh-search-name";
+            name.textContent = entry.name;
+            const kind = document.createElement("span");
+            kind.className = "fh-search-kind";
+            kind.textContent = searchIndex_1.KIND_LABEL[entry.kind];
+            row.append(name, kind);
+            // mousedown, not click: the input blurs on click and would close the
+            // list before the click lands
+            row.addEventListener("mousedown", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                pick(entry);
+            });
+            row.dataset.position = String(position);
+            results.append(row);
+        }
+    };
+    // hover moves the cursor; one listener on the list rather than one per row
+    results.addEventListener("mousemove", (event) => {
+        var _a, _b;
+        const row = (_a = event.target) === null || _a === void 0 ? void 0 : _a.closest(".fh-search-row");
+        const position = Number((_b = row === null || row === void 0 ? void 0 : row.dataset.position) !== null && _b !== void 0 ? _b : -1);
+        if (row && position !== cursor) {
+            cursor = position;
+            paint();
+        }
+    });
+    const pick = (entry) => {
+        input.value = "";
+        close();
+        onSelect(entry);
+    };
+    let latest = 0;
+    input.addEventListener("input", () => {
+        latest += 1;
+        const stamp = latest;
+        const query = input.value;
+        if (query.trim().length === 0) {
+            close();
+            return;
+        }
+        (0, exports.getSearchIndex)()
+            .then((entries) => {
+            if (stamp !== latest) {
+                return;
+            }
+            current = (0, searchIndex_1.searchEntries)(entries, query);
+            cursor = current.length > 0 ? 0 : -1;
+            paint();
+        })
+            .catch((error) => {
+            console.error("Search failed", error);
+        });
+    });
+    input.addEventListener("keydown", (event) => {
+        switch (event.key) {
+            case "ArrowDown":
+            case "ArrowUp": {
+                if (current.length === 0) {
+                    return;
+                }
+                event.preventDefault();
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                cursor = (cursor + step + current.length) % current.length;
+                paint();
+                break;
+            }
+            case "Enter": {
+                if (cursor >= 0 && current[cursor]) {
+                    event.preventDefault();
+                    pick(current[cursor]);
+                }
+                break;
+            }
+            case "Escape": {
+                event.stopPropagation();
+                if (input.value) {
+                    input.value = "";
+                    close();
+                }
+                else {
+                    input.blur();
+                }
+                break;
+            }
+            // No default
+        }
+    });
+    input.addEventListener("blur", () => {
+        // let a mousedown on a row land first
+        setTimeout(close, 120);
+    });
+    input.addEventListener("focus", () => {
+        if (input.value.trim().length > 0) {
+            input.dispatchEvent(new Event("input"));
+        }
+    });
+    // the panel closes on outside clicks; typing in here is not outside
+    wrap.addEventListener("click", (event) => {
+        event.stopPropagation();
+    });
+    return {
+        clear: () => {
+            input.value = "";
+            close();
+        },
+        element: wrap,
+        focus: () => {
+            input.focus();
+            input.select();
+        },
+    };
+};
+exports.makeSearchBox = makeSearchBox;
+
+
+/***/ }),
+
+/***/ 9986:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+// The search vocabulary and ranking, with no dependencies, so it can be
+// tested outside the game.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.slugOf = exports.searchEntries = exports.kindOfHref = exports.KIND_LABEL = void 0;
+exports.KIND_LABEL = {
+    item: "item",
+    location: "location",
+    page: "page",
+    quest: "quest",
+    questline: "questline",
+    townsfolk: "townsfolk",
+};
+// what a typed prefix filters to: "q:iron" for quests only
+const KIND_PREFIX = {
+    i: "item",
+    l: "location",
+    q: "quest",
+    t: "townsfolk",
+};
+const MAX_RESULTS = 10;
+const kindOfHref = (href) => {
+    if (href.startsWith("/i/")) {
+        return "item";
+    }
+    if (href.startsWith("/q/")) {
+        return "quest";
+    }
+    if (href.startsWith("/ql/")) {
+        return "questline";
+    }
+    if (href.startsWith("/t/")) {
+        return "townsfolk";
+    }
+    if (href.startsWith("/l/")) {
+        return "location";
+    }
+    return undefined;
+};
+exports.kindOfHref = kindOfHref;
+// Ranked: exact name, then name prefix, then word prefix, then substring.
+// Items before quests at equal rank, since that is what is searched for most.
+const KIND_ORDER = {
+    item: 0,
+    location: 1,
+    townsfolk: 2,
+    quest: 3,
+    questline: 4,
+    page: 5,
+};
+const searchEntries = (entries, rawQuery) => {
+    let query = rawQuery.trim().toLowerCase();
+    let onlyKind;
+    const prefix = /^([a-z]):\s*(.*)$/.exec(query);
+    if (prefix && KIND_PREFIX[prefix[1]]) {
+        onlyKind = KIND_PREFIX[prefix[1]];
+        query = prefix[2];
+    }
+    if (query.length === 0) {
+        return [];
+    }
+    const scored = [];
+    for (const entry of entries) {
+        if (onlyKind && entry.kind !== onlyKind) {
+            continue;
+        }
+        const name = entry.name.toLowerCase();
+        let score;
+        if (name === query) {
+            score = 0;
+        }
+        else if (name.startsWith(query)) {
+            score = 1;
+        }
+        else if (name.includes(` ${query}`)) {
+            score = 2;
+        }
+        else if (name.includes(query)) {
+            score = 3;
+        }
+        else if (entry.searchText.includes(query)) {
+            score = 4;
+        }
+        if (score !== undefined) {
+            // within a tier the shortest name wins -- "Beatrix" over "Beach Ball"
+            // for "bea" -- and the kind only breaks the remaining ties
+            scored.push({
+                entry,
+                score: score * 1000 + name.length * 10 + KIND_ORDER[entry.kind],
+            });
+        }
+    }
+    return scored
+        .sort((a, b) => a.score - b.score)
+        .slice(0, MAX_RESULTS)
+        .map(({ entry }) => entry);
+};
+exports.searchEntries = searchEntries;
+const slugOf = (entry) => { var _a; return (_a = entry.href.split("/").filter(Boolean).pop()) !== null && _a !== void 0 ? _a : ""; };
+exports.slugOf = slugOf;
 
 
 /***/ }),
@@ -4215,6 +5200,11 @@ const injectPanelStyles = () => {
           padding: 6px 12px;
           font-size: 12px;
         }
+        #${shared_1.PANEL_ID} .fh-search-input { padding: 10px 12px; font-size: 14px; }
+        #${shared_1.PANEL_ID} .fh-search-kbd { display: none; }
+        #${shared_1.PANEL_ID} .fh-search-row { padding: 9px 8px; font-size: 13px; }
+        #${shared_1.PANEL_ID} .fh-open-here { padding: 4px 9px; font-size: 14px; }
+        #${shared_1.PANEL_ID} .fh-lookup-back { padding: 8px 8px 8px 2px; }
         /* 0.38 relies on hover to read a dimmed row, and touch has no hover.
            Dimmed still reads as secondary at 0.55 but stays legible. */
         #${shared_1.PANEL_ID} .fh-dim { opacity: 0.55; }
@@ -4466,6 +5456,108 @@ const injectPanelStyles = () => {
       }
       #${shared_1.PANEL_ID} .fh-link { cursor: pointer; text-decoration: underline; color: var(--fh-muted); }
       #${shared_1.PANEL_ID} .fh-link:hover { color: var(--fh-text); }
+      /* ---- search + lookup ------------------------------------------------ */
+      #${shared_1.PANEL_ID} .fh-search {
+        position: relative;
+        margin-bottom: 8px;
+      }
+      #${shared_1.PANEL_ID} .fh-search-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 58px 7px 10px;
+        border-radius: var(--fh-radius-s);
+        border: 1px solid var(--fh-border-2);
+        background: var(--fh-surface);
+        color: var(--fh-text);
+        font: 12.5px var(--fh-font);
+        outline: none;
+        transition: border-color 120ms ease, background 120ms ease;
+      }
+      #${shared_1.PANEL_ID} .fh-search-input::placeholder { color: var(--fh-muted); }
+      #${shared_1.PANEL_ID} .fh-search-input:focus {
+        border-color: color-mix(in srgb, var(--fh-accent) 60%, transparent);
+        background: var(--fh-surface-2);
+      }
+      #${shared_1.PANEL_ID} .fh-search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
+      #${shared_1.PANEL_ID} .fh-search-kbd {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        font: 10px var(--fh-font);
+        color: var(--fh-muted);
+        border: 1px solid var(--fh-border-2);
+        border-radius: 5px;
+        padding: 1px 5px;
+        pointer-events: none;
+      }
+      #${shared_1.PANEL_ID} .fh-search-input:focus ~ .fh-search-kbd { opacity: 0; }
+      #${shared_1.PANEL_ID} .fh-search-results {
+        display: none;
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: calc(100% + 4px);
+        z-index: 2;
+        max-height: 320px;
+        overflow-y: auto;
+        padding: 4px;
+        border-radius: var(--fh-radius-s);
+        border: 1px solid var(--fh-border-2);
+        background: rgba(22, 23, 26, 0.98);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      }
+      #${shared_1.PANEL_ID} .fh-search-results[data-on="true"] { display: block; }
+      #${shared_1.PANEL_ID} .fh-search-row {
+        display: grid;
+        grid-template-columns: 22px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 7px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--fh-text);
+      }
+      #${shared_1.PANEL_ID} .fh-search-row[data-active="true"] { background: var(--fh-surface-2); }
+      #${shared_1.PANEL_ID} .fh-search-row img { width: 20px; height: 20px; border-radius: 4px; }
+      #${shared_1.PANEL_ID} .fh-search-row img:not([src]) { visibility: hidden; }
+      #${shared_1.PANEL_ID} .fh-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #${shared_1.PANEL_ID} .fh-search-kind { font-size: 10px; color: var(--fh-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+      #${shared_1.PANEL_ID} .fh-lookup-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        font-size: 12px;
+      }
+      #${shared_1.PANEL_ID} .fh-lookup-back {
+        cursor: pointer;
+        color: var(--fh-accent);
+        padding: 4px 6px 4px 2px;
+        border-radius: 6px;
+      }
+      #${shared_1.PANEL_ID} .fh-lookup-back:hover { background: var(--fh-surface-2); }
+      #${shared_1.PANEL_ID} .fh-lookup-kind {
+        font-size: 10px;
+        color: var(--fh-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      #${shared_1.PANEL_ID} .fh-open-here {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 0 5px;
+        border-radius: 5px;
+        cursor: pointer;
+        color: var(--fh-muted);
+        opacity: 0.7;
+      }
+      #${shared_1.PANEL_ID} .fh-open-here:hover {
+        color: var(--fh-accent);
+        background: var(--fh-surface-2);
+        opacity: 1;
+      }
       #${shared_1.PANEL_ID} .fh-briefing-body { view-transition-name: fh-briefing-body; }
       ::view-transition-old(fh-briefing-body),
       ::view-transition-new(fh-briefing-body) {
@@ -4518,7 +5610,9 @@ const quests_1 = __webpack_require__(303);
 const settings_1 = __webpack_require__(126);
 const styles_1 = __webpack_require__(6306);
 const inventory_1 = __webpack_require__(4514);
+const lookup_1 = __webpack_require__(2294);
 const gameLinks_1 = __webpack_require__(1616);
+const search_1 = __webpack_require__(5164);
 const mastery_1 = __webpack_require__(283);
 const locationAdvice_1 = __webpack_require__(4764);
 const promise_1 = __webpack_require__(6762);
@@ -5352,6 +6446,11 @@ const renderSets = (body, context, reload) => {
 // at this ended up drawn twice with only one of them responding. Living on the
 // body sidesteps page swaps entirely, and the same trick keeps the cap tracker
 // single.
+const makeLoadingLine = () => {
+    const line = (0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Reading buddy.farm…"]);
+    line.className = "fh-loading";
+    return line;
+};
 const ensurePanel = () => {
     if (document.querySelector(`#${shared_1.BUTTON_ID}`)) {
         return;
@@ -5469,10 +6568,21 @@ const ensurePanel = () => {
     const main = document.createElement("div");
     main.className = "fh-briefing-main";
     main.append(tabs, body);
-    panel.append(head, perkNote, chip, main);
+    // buddy.farm, searched from here and opened in here (see briefing/lookup.ts)
+    const search = (0, search_1.makeSearchBox)((entry) => {
+        const lookup = (0, lookup_1.toLookup)(entry);
+        if (lookup) {
+            openLookup(lookup);
+        }
+    });
+    panel.append(head, search.element, perkNote, chip, main);
     document.body.append(button, panel);
     let active = "now";
     let context;
+    // A lookup replaces the active tab's body until you go back; walking
+    // item → quest → item pushes, and back pops. The tabs stay put underneath,
+    // so leaving is one press whatever depth you reached.
+    const lookups = [];
     let focused = new Set();
     (0, focusScope_1.getFocusedScopes)()
         .then((scopeIds) => {
@@ -5506,6 +6616,7 @@ const ensurePanel = () => {
         persistFocus();
     };
     const draw = () => {
+        var _a, _b, _c, _d;
         body.textContent = "";
         if (!context) {
             return;
@@ -5548,14 +6659,48 @@ const ensurePanel = () => {
         }
         paintAge();
         const counts = getTabCounts(context);
+        const lookup = lookups.at(-1);
         for (const tab of tabs.children) {
             const element = tab;
-            element.dataset.active = String(element.dataset.tab === active);
+            element.dataset.active = String(lookup === undefined && element.dataset.tab === active);
             const count = counts[element.dataset.tab];
             const badge = element.querySelector(".fh-tab-count");
             if (badge) {
                 badge.textContent = count === undefined ? "" : String(count);
             }
+        }
+        if (lookup) {
+            const bar = document.createElement("div");
+            bar.className = "fh-lookup-bar";
+            const back = document.createElement("span");
+            back.className = "fh-lookup-back";
+            back.textContent =
+                lookups.length > 1
+                    ? `‹ ${(_b = (_a = lookups.at(-2)) === null || _a === void 0 ? void 0 : _a.name) !== null && _b !== void 0 ? _b : "back"}`
+                    : `‹ ${(_d = (_c = TABS.find((tab) => tab.id === active)) === null || _c === void 0 ? void 0 : _c.label) !== null && _d !== void 0 ? _d : "back"}`;
+            back.addEventListener("click", (event) => {
+                event.stopPropagation();
+                lookups.pop();
+                draw();
+            });
+            const kind = document.createElement("span");
+            kind.className = "fh-lookup-kind";
+            kind.textContent = lookup.kind;
+            bar.append(back, kind);
+            body.append(bar);
+            const view = document.createElement("div");
+            body.append(view, makeLoadingLine());
+            const snapshot = context;
+            (0, lookup_1.renderLookup)(view, snapshot, lookup, focused, openLookup)
+                .catch((error) => {
+                console.error("Failed to draw the lookup", error);
+                view.append((0, gameLinks_1.makeLinkedLine)(theme_1.TEXT_GRAY, ["Could not load that from buddy.farm."]));
+            })
+                .finally(() => {
+                var _a;
+                (_a = body.querySelector(".fh-loading")) === null || _a === void 0 ? void 0 : _a.remove();
+            });
+            return;
         }
         switch (active) {
             case "now": {
@@ -5626,14 +6771,28 @@ const ensurePanel = () => {
         setBadge(attention.count, attention.parts);
         draw();
     });
+    const openLookup = (lookup) => {
+        const top = lookups.at(-1);
+        if (top && top.kind === lookup.kind && top.name === lookup.name) {
+            return;
+        }
+        lookups.push(lookup);
+        if (panel.dataset.open !== "true") {
+            setOpen(true);
+        }
+        if (context) {
+            draw();
+        }
+    };
     // A tab switch crossfades where the browser can do it (View Transitions;
     // the panel body is the only named element, so nothing else on the page
     // moves) and simply redraws where it can't. Reduced-motion users get the
     // plain redraw via the stylesheet.
     const selectTab = (id) => {
-        if (id === active) {
+        if (id === active && lookups.length === 0) {
             return;
         }
+        lookups.length = 0;
         active = id;
         if (typeof document.startViewTransition === "function") {
             document.startViewTransition(() => {
@@ -5715,6 +6874,19 @@ const ensurePanel = () => {
     document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
             setOpen(false);
+            return;
+        }
+        // Ctrl/⌘-K: the panel, with the search ready to type into, from anywhere
+        // in the game -- the shortcut every launcher uses, and one the game does
+        // not bind
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+            const target = event.target;
+            if ((target === null || target === void 0 ? void 0 : target.closest("#chatarea, textarea")) && !event.metaKey) {
+                return;
+            }
+            event.preventDefault();
+            setOpen(true);
+            search.focus();
         }
     });
     setOpen(false);
@@ -7543,7 +8715,7 @@ exports.customNavigation = {
 
 /***/ }),
 
-/***/ 5164:
+/***/ 2783:
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 
@@ -11501,7 +12673,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.59" !== void 0 ? "1.1.59" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.60" !== void 0 ? "1.1.60" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -11592,7 +12764,7 @@ const confirmation_1 = __webpack_require__(3906);
 const craftPlanner_1 = __webpack_require__(3995);
 const craftworksAdvisor_1 = __webpack_require__(6969);
 const customNavigation_1 = __webpack_require__(2224);
-const dismissableChatBanners_1 = __webpack_require__(5164);
+const dismissableChatBanners_1 = __webpack_require__(2783);
 const exploreFirst_1 = __webpack_require__(6030);
 const farmhandSettings_1 = __webpack_require__(8973);
 const harvestNotifications_1 = __webpack_require__(4894);
@@ -14537,6 +15709,7 @@ var StorageKey;
     StorageKey["STATS"] = "stats";
     StorageKey["USERNAME"] = "username";
     StorageKey["TOWNSFOLK"] = "townsfolk";
+    StorageKey["TOWNSFOLK_DATA"] = "townsfolkData";
     StorageKey["USER_ID"] = "userId";
 })(StorageKey || (exports.StorageKey = StorageKey = {}));
 const QUERYLESS_KEY = "__QUERYLESS__";
