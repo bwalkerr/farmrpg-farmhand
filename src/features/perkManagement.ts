@@ -344,9 +344,10 @@ const resolveDecision = async (): Promise<PerkDecision> => {
 };
 
 // Put the page's set on. Used for BOTH halves of the job: the page-transition
-// reconcile, and the restore after a gated action (a banner harvest in the
-// vault leaves the Town set back on, where the old code left Default equipped
-// in the middle of town). One function, so the two can't drift apart.
+// reconcile, and the restore after a quick action. (Harvest and replant opt
+// OUT of the restore: they leave the farm set on and let the next page
+// transition reconcile, the way the wrap worked from 1.0.40 -- see
+// apis/farm.ts.) One function, so the two can't drift apart.
 //
 // Called with a live session, so it must never enqueue a task of its own.
 const applyDecision = async (perks: PerkSession): Promise<void> => {

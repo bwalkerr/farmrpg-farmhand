@@ -336,32 +336,11 @@ const sendActivate = async (set: PerkSet): Promise<boolean> => {
   return isAcknowledged(reply, `activate ${set.name}`);
 };
 
-export interface ApplyOptions {
-  // how long to wait after the activate is acked before trusting it; the
-  // default is tuned for a sale, a roll that cannot be redone gets longer
-  settleMs?: number;
-  // read the perks page afterwards and check the game agrees the set is on,
-  // re-activating once if it doesn't -- one extra request, only worth paying
-  // when the next thing is irreversible
-  verify?: boolean;
-}
-
-// The game's own account of which set is active, read fresh. The checkmark
-// on the perks page is written by the same activate we sent, so if it isn't
-// there yet the game has not finished with our request, whatever it acked.
-const readActiveSetId = async (): Promise<number | undefined> => {
-  const state = await perksState.get({ ignoreCache: true });
-  return state?.currentPerkSetId;
-};
-
 // Drive the game to `set`. Only callable from inside a task, which is what
 // guarantees nothing else is touching the perks while the slate is empty.
 // Resolves to whether a real switch happened (false = already confirmed on it),
 // so callers can tell a change from a no-op.
-const applySet = async (
-  set: PerkSet,
-  { settleMs = PERK_SETTLE_MS, verify = false }: ApplyOptions = {}
-): Promise<boolean> => {
+const applySet = async (set: PerkSet): Promise<boolean> => {
   // We drove the game here and watched it land, and nothing has cleared the
   // slate since -- so it is genuinely equipped and the whole round trip
   // (reset + activate + settle) can be skipped. This is what makes back-to-back
@@ -381,29 +360,7 @@ const applySet = async (
     if (!wasActivated) {
       wasActivated = await sendActivate(set);
     }
-    await delay(settleMs);
-    if (verify && wasActivated) {
-      // The ack says the request arrived; this says the game acted on it.
-      // A mismatch here is the shape of "the set never turned green before
-      // the harvest": the activate was still being applied when we moved on.
-      let activeId = await readActiveSetId();
-      if (activeId !== set.id) {
-        logPerk(
-          `${set.name} not active yet after ${settleMs}ms (game shows ${
-            activeId ?? "none"
-          }) — re-activating`
-        );
-        wasActivated = await sendActivate(set);
-        await delay(settleMs);
-        activeId = await readActiveSetId();
-        if (activeId !== set.id) {
-          wasActivated = false;
-          logPerk(
-            `${set.name} still not active (game shows ${activeId ?? "none"})`
-          );
-        }
-      }
-    }
+    await delay(PERK_SETTLE_MS);
     if (wasCleared && wasActivated) {
       // eslint-disable-next-line require-atomic-updates
       pendingPerkSet = undefined;
@@ -426,7 +383,7 @@ const applySet = async (
 // The capability handed to a task: the only way to change perks, and it exists
 // only while the task holds the queue.
 export interface PerkSession {
-  readonly apply: (set: PerkSet, options?: ApplyOptions) => Promise<boolean>;
+  readonly apply: (set: PerkSet) => Promise<boolean>;
 }
 
 const session: PerkSession = { apply: applySet };
@@ -530,8 +487,6 @@ export interface GatedActionOptions {
   holdMs?: number;
   // put the page's own set back afterwards (default true)
   restore?: boolean;
-  // longer than the default for a roll that cannot be redone (see ApplyOptions)
-  settleMs?: number;
 }
 
 // Run an action under a specific perk set, with nothing able to switch perks
@@ -542,7 +497,6 @@ export const runGatedAction = ({
   action,
   holdMs = 0,
   restore = true,
-  settleMs,
 }: GatedActionOptions): Promise<void> =>
   runPerkTask(async (perks) => {
     const target = await set();
@@ -551,16 +505,9 @@ export const runGatedAction = ({
       // moment the action started waiting on perks, not just the moment it
       // stopped
       setPerkStatusNote(`${label} → ${target.name}`);
-      const startedAt = Date.now();
-      // a gated action is the one place a switch is VERIFIED against the perks
-      // page: the roll behind it cannot be redone, so one more request to know
-      // the game agrees is cheap
-      const switched = await perks.apply(target, { settleMs, verify: true });
-      const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+      const switched = await perks.apply(target);
       setPerkStatusNote(
-        `${label} → ${target.name}${
-          switched ? ` (switched, ${elapsed}s)` : " (already on)"
-        }`
+        `${label} → ${target.name}${switched ? "" : " (already on)"}`
       );
     } else {
       setPerkStatusNote(`${label}: no set to switch to`);
