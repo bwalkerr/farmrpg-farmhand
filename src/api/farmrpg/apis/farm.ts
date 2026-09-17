@@ -377,10 +377,23 @@ const getFarmingPerks = async (): Promise<PerkSet | undefined> => {
 // It stays snappy where it always was: apply() short-circuits when the set is
 // already confirmed equipped, so harvesting from Home or the farm -- where the
 // reconciler has already put Default on -- costs zero requests.
+// A harvest is one roll that cannot be redone, so its switch waits longer than
+// a sale's before it is trusted, and is checked against the perks page too.
+const ROLL_SETTLE_MS = 2000;
+
+// And the perks stay put for a moment AFTER the game answers. The game acks
+// activateperkset before it has finished equipping, so there is no reason to
+// assume harvestall's reply means the harvest is fully rolled either -- and
+// the restore that follows starts with resetperks. Reed's read of the symptom
+// was exactly this: "the switch back happens too fast".
+const ROLL_HOLD_MS = 1500;
+
 export const harvestAll = (): Promise<void> =>
   runGatedAction({
     label: "harvest",
     set: getFarmingPerks,
+    holdMs: ROLL_HOLD_MS,
+    settleMs: ROLL_SETTLE_MS,
     action: async () => {
       const farmId = await farmIdState.get();
       await getJSON(
@@ -409,7 +422,8 @@ export const replantAll = async (fromFarmPage: boolean): Promise<void> => {
   await runGatedAction({
     label: "replant",
     set: getFarmingPerks,
-    holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : 0,
+    holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : ROLL_HOLD_MS,
+    settleMs: ROLL_SETTLE_MS,
     action: async () => {
       if (fromFarmPage) {
         document.querySelector<HTMLAnchorElement>(".plantallbtn")?.click();
