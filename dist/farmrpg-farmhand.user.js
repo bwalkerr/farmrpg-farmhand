@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.70
+// @version 1.1.71
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1021,7 +1021,19 @@ const getFarmingPerks = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!settings[settings_1.SettingId.PERK_MANAGER]) {
         return undefined;
     }
-    return ((_a = (yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.FARMING))) !== null && _a !== void 0 ? _a : (yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT)));
+    const findSet = (options) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        return (_a = (yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.FARMING, options))) !== null && _a !== void 0 ? _a : (yield (0, perks_1.getActivityPerksSet)(perks_1.PerkActivity.DEFAULT, options));
+    });
+    // The sets come from a day-old read of the perks page, or from a read that
+    // failed and left the list empty. Neither is a reason to harvest under
+    // whatever happens to be on: read the page again before concluding there is
+    // no farm set.
+    const set = (_a = (yield findSet())) !== null && _a !== void 0 ? _a : (yield findSet({ ignoreCache: true }));
+    if (!set) {
+        (0, diagnostics_1.logDiagnostic)("harvest: no set named Farming or Default — harvesting with the perks as they are");
+    }
+    return set;
 });
 // Harvesting and replanting are GATED ACTIONS: the yield depends on the perks
 // equipped at the moment the request lands, so the switch and the request run
@@ -1041,13 +1053,17 @@ const getFarmingPerks = () => __awaiter(void 0, void 0, void 0, function* () {
 // call: go back to leaving it. The cost is Default staying on in town until
 // you navigate, which the reconciler fixes on the next page transition.
 //
-// It stays snappy where it always was: apply() short-circuits when the set is
-// already confirmed equipped, so harvesting from Home or the farm -- where the
-// reconciler has already put Default on -- costs zero requests.
+// The switch is FORCED: reset + activate + settle every time, even when the
+// farm set is already confirmed on. A confirmation is only what we last saw
+// the game do, and every "harvested with no perks" report so far has been a
+// case of trusting state that had quietly gone stale. A whole field's yield
+// rides on this one request; ~1.3 s and a visible amber → green on the pill
+// before it goes out is the right price, and it is once per crop cycle.
 const harvestAll = () => (0, perks_1.runGatedAction)({
     label: "harvest",
     set: getFarmingPerks,
     restore: false,
+    force: true,
     action: () => __awaiter(void 0, void 0, void 0, function* () {
         const farmId = yield exports.farmIdState.get();
         yield (0, requests_2.getJSON)(page_1.Page.WORKER, new URLSearchParams({
@@ -1073,6 +1089,7 @@ const replantAll = (fromFarmPage) => __awaiter(void 0, void 0, void 0, function*
         label: "replant",
         set: getFarmingPerks,
         restore: false,
+        force: true,
         holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : 0,
         action: () => __awaiter(void 0, void 0, void 0, function* () {
             var _a;
@@ -2111,6 +2128,15 @@ const setConfirmedEquipped = (set) => {
     confirmedEquippedSet = set;
     notifyPerkStatus();
 };
+// A perk change that did not come from this module (the game's own buttons,
+// see the worker interceptors below): whatever we had confirmed is no longer
+// known to be on.
+const noteOutsideChange = (what) => {
+    if (confirmedEquippedSet) {
+        logPerk(`perks changed outside Farmhand (${what}) — nothing confirmed`);
+    }
+    setConfirmedEquipped(undefined);
+};
 exports.perksState = new state_1.CachedState(state_1.StorageKey.PERKS_SETS, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_2.getHTML)(page_1.Page.PERKS);
     return processPerks(response);
@@ -2142,14 +2168,34 @@ exports.perksState = new state_1.CachedState(state_1.StorageKey.PERKS_SETS, () =
                 yield state.set(next);
             }),
         },
+        // The game's own perk buttons send these same two requests, and a set
+        // activated by hand from a RETAINED perks page (back navigation: no
+        // fetch, so the visit interceptor above never fires) used to leave our
+        // confirmation standing for a set that was no longer on. Every later
+        // switch to that set then took the fast path over the wrong perks. A
+        // reset or an activate we did not send ourselves drops the confirmation.
+        {
+            match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.RESET_PERKS })],
+            callback: () => {
+                if (!pendingPerkSet) {
+                    noteOutsideChange("reset");
+                }
+                return Promise.resolve();
+            },
+        },
         {
             match: [
                 page_1.Page.WORKER,
                 new URLSearchParams({ go: page_1.WorkerGo.ACTIVATE_PERK_SET }),
             ],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
+                var _a, _b;
                 const [_, query] = (0, requests_2.parseUrl)(response.url);
-                yield state.set(Object.assign(Object.assign({}, previous), { currentPerkSetId: Number(query.get("id")) }));
+                const id = Number(query.get("id"));
+                if ((pendingPerkSet === null || pendingPerkSet === void 0 ? void 0 : pendingPerkSet.id) !== id) {
+                    noteOutsideChange((_b = (_a = previous === null || previous === void 0 ? void 0 : previous.perkSets.find((set) => set.id === id)) === null || _a === void 0 ? void 0 : _a.name) !== null && _b !== void 0 ? _b : `set ${id}`);
+                }
+                yield state.set(Object.assign(Object.assign({}, previous), { currentPerkSetId: id }));
             }),
         },
     ],
@@ -2268,39 +2314,68 @@ const sendActivate = (set) => __awaiter(void 0, void 0, void 0, function* () {
     }));
     return isAcknowledged(reply, `activate ${set.name}`);
 });
+// The set's id is read off the perks page once a day; a set deleted and
+// re-made in between keeps its name and changes its id, and the game does not
+// say "success" to an id it no longer has. Re-read the page and look the
+// name up again before giving up on the switch.
+const refreshSet = (set) => __awaiter(void 0, void 0, void 0, function* () {
+    const state = yield exports.perksState.get({ ignoreCache: true });
+    const fresh = state === null || state === void 0 ? void 0 : state.perkSets.find(({ name }) => name === set.name);
+    if (fresh && fresh.id !== set.id) {
+        logPerk(`${set.name} is now set ${fresh.id} (was ${set.id})`);
+    }
+    return fresh;
+});
 // Drive the game to `set`. Only callable from inside a task, which is what
 // guarantees nothing else is touching the perks while the slate is empty.
 // Resolves to whether a real switch happened (false = already confirmed on it),
 // so callers can tell a change from a no-op.
-const applySet = (set) => __awaiter(void 0, void 0, void 0, function* () {
+//
+// Throws if the game never acknowledged the activate. By then the slate has
+// already been cleared, so the perks are EMPTY -- and a caller that went on to
+// act anyway (a harvest) would roll with nothing equipped, one crop a plot.
+// Failing the action keeps the crops in the ground for a harvest that works;
+// the reconciler, which has no action behind it, just reports the failure.
+const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], void 0, function* (set, { force = false } = {}) {
+    var _a;
     // We drove the game here and watched it land, and nothing has cleared the
     // slate since -- so it is genuinely equipped and the whole round trip
     // (reset + activate + settle) can be skipped. This is what makes back-to-back
     // quick-sells instant after the first one.
-    if ((confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id) {
+    if (!force && (confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id) {
         return false;
     }
     pendingPerkSet = set;
     notifyPerkStatus();
     try {
         const wasCleared = yield clearPerks();
-        // Retried once if the game doesn't say "success", because at this point the
+        // Retried if the game doesn't say "success", because at this point the
         // slate is already EMPTY: an activate that goes missing here is not a switch
         // that didn't happen, it is every perk turned off until something switches
         // again. That is the state a harvest comes back from with one crop a plot.
+        // The retry goes to the set's CURRENT id, in case the one we have is stale.
         let wasActivated = yield sendActivate(set);
         if (!wasActivated) {
-            wasActivated = yield sendActivate(set);
+            const fresh = (_a = (yield refreshSet(set))) !== null && _a !== void 0 ? _a : set;
+            wasActivated = yield sendActivate(fresh);
+            if (wasActivated) {
+                set = fresh;
+            }
+        }
+        if (!wasActivated) {
+            throw new Error(`the game did not activate the ${set.name} set — perks are currently empty`);
         }
         yield delay(PERK_SETTLE_MS);
-        if (wasCleared && wasActivated) {
+        if (wasCleared) {
             // eslint-disable-next-line require-atomic-updates
             pendingPerkSet = undefined;
             setConfirmedEquipped(set);
         }
         else {
-            // Left in the dark. Don't claim it: the next switch to this set pays the
-            // round trip again rather than trusting perks we never saw confirmed.
+            // The activate landed but the reset before it was not acknowledged, so
+            // the set may sit on top of leftovers. Don't claim it: the next switch to
+            // this set pays the round trip again rather than trusting perks we never
+            // saw confirmed.
             logPerk(`${set.name} may not be fully equipped — will re-apply`);
         }
         return true;
@@ -2383,15 +2458,18 @@ const onPerkRestore = (restore) => {
 exports.onPerkRestore = onPerkRestore;
 // Run an action under a specific perk set, with nothing able to switch perks
 // from under it. This is the ONLY way to perform a perk-sensitive action.
-const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, }) => (0, exports.runPerkTask)((perks) => __awaiter(void 0, void 0, void 0, function* () {
+const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, force = false, }) => (0, exports.runPerkTask)((perks) => __awaiter(void 0, void 0, void 0, function* () {
     const target = yield set();
     if (target) {
         // said before the switch as well as after, so the log timestamps the
         // moment the action started waiting on perks, not just the moment it
         // stopped
         (0, exports.setPerkStatusNote)(`${label} → ${target.name}`);
-        const switched = yield perks.apply(target);
-        (0, exports.setPerkStatusNote)(`${label} → ${target.name}${switched ? "" : " (already on)"}`);
+        const startedAt = Date.now();
+        const switched = yield perks.apply(target, { force });
+        (0, exports.setPerkStatusNote)(`${label} → ${target.name}${switched
+            ? ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
+            : " (already on)"}`);
     }
     else {
         (0, exports.setPerkStatusNote)(`${label}: no set to switch to`);
@@ -7052,7 +7130,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.70" !== void 0 ? "1.1.70" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.71" !== void 0 ? "1.1.71" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13311,7 +13389,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.70" !== void 0 ? "1.1.70" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.71" !== void 0 ? "1.1.71" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -15864,6 +15942,10 @@ const renderNotifications = (force = false) => {
                     else {
                         console.error(`Handler not found: ${action.handler}`);
                     }
+                    // A failed action leaves the banner in place (the render below
+                    // sees nothing to change), so give it its label back rather than
+                    // a "Loading..." that never ends.
+                    actionElement.textContent = action.text;
                     renderNotifications();
                 }));
             }
