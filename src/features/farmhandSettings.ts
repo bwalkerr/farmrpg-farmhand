@@ -1,6 +1,5 @@
 import { FARMHAND_PREFIX, FARMHAND_SUFFIX } from "~/api/farmrpg/apis/notes";
-import { Feature, FeatureSetting } from "../utils/feature";
-import { getCurrentPage, getHashPage, Page } from "~/utils/page";
+import { Feature, FeatureSetting, SettingValues } from "../utils/feature";
 import {
   getData,
   getSettings,
@@ -205,51 +204,55 @@ export const farmhandSettings: Feature = {
     `
     );
   },
-  onPageLoad: (settingValues, page) => {
-    // make sure we are on the settings page -- by what the page says it is OR
-    // by the route, the way the banners and the perk code already match:
-    // `data-page` alone has been wrong often enough elsewhere in this fork,
-    // and when it is wrong here the Farmhand section never appears at all.
-    if (
-      page !== Page.SETTINGS_OPTIONS &&
-      getHashPage() !== Page.SETTINGS_OPTIONS
-    ) {
-      return;
+  onPageLoad: (settingValues) => {
+    // Render into whichever page element holds the options form, without
+    // asking which page is "current". onPageLoad fires when the page node is
+    // ADDED, and on a phone Framework7 animates the transition, so at that
+    // moment the page you came from is still the one on centre: getPage()
+    // named it, the check here bailed, and no later dispatch came -- the
+    // Farmhand section never appeared on mobile at all. A desktop skips the
+    // animation, which is why it always worked there. The form is in the new
+    // page's markup from the moment it is inserted, so it can be found
+    // directly. Idempotent per page element, so the repeat dispatches and a
+    // retained page revisited by back navigation cost nothing.
+    for (const currentPage of document.querySelectorAll<HTMLElement>(
+      ".view-main .page"
+    )) {
+      const settingsList = currentPage.querySelector(
+        "#settingsform_options ul"
+      );
+      if (settingsList) {
+        renderFarmhandSettings(currentPage, settingsList, settingValues);
+      }
     }
+  },
+};
 
-    // make sure page content has loaded
-    const currentPage = getCurrentPage();
-    if (!currentPage) {
-      return;
-    }
+const renderFarmhandSettings = (
+  currentPage: HTMLElement,
+  settingsList: Element,
+  settingValues: SettingValues
+): void => {
+  // add section
+  let farmhandSettingsLi =
+    settingsList.querySelector<HTMLLIElement>(".fh-settings-title");
+  if (farmhandSettingsLi) {
+    // already rendered
+    return;
+  }
+  farmhandSettingsLi = document.createElement("li");
+  farmhandSettingsLi.classList.add("list-group-title");
+  farmhandSettingsLi.classList.add("item-divider");
+  farmhandSettingsLi.classList.add("fh-settings-title");
+  farmhandSettingsLi.textContent = "Farmhand Settings";
+  settingsList.append(farmhandSettingsLi);
 
-    // insert at end of first card
-    const settingsList = currentPage.querySelector("#settingsform_options ul");
-    if (!settingsList) {
-      console.error("Settings list not found");
-      return;
-    }
-
-    // add section
-    let farmhandSettingsLi =
-      settingsList.querySelector<HTMLLIElement>(".fh-settings-title");
-    if (farmhandSettingsLi) {
-      // already rendered
-      return;
-    }
-    farmhandSettingsLi = document.createElement("li");
-    farmhandSettingsLi.classList.add("list-group-title");
-    farmhandSettingsLi.classList.add("item-divider");
-    farmhandSettingsLi.classList.add("fh-settings-title");
-    farmhandSettingsLi.textContent = "Farmhand Settings";
-    settingsList.append(farmhandSettingsLi);
-
-    // add settings
-    for (const setting of getSettings()) {
-      setting.value = settingValues[setting.id];
-      const hasButton = setting.buttonText && setting.buttonAction;
-      const settingLi = document.createElement("li");
-      settingLi.innerHTML = `
+  // add settings
+  for (const setting of getSettings()) {
+    setting.value = settingValues[setting.id];
+    const hasButton = setting.buttonText && setting.buttonAction;
+    const settingLi = document.createElement("li");
+    settingLi.innerHTML = `
         <div
           class="item-content"
           style="
@@ -291,32 +294,31 @@ export const farmhandSettings: Feature = {
           )}
       </div>
       `;
-      settingLi
-        .querySelector(".fh-action")
-        ?.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setting.buttonAction?.(settingValues, settingLi);
-        });
-      settingsList.append(settingLi);
-    }
+    settingLi
+      .querySelector(".fh-action")
+      ?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setting.buttonAction?.(settingValues, settingLi);
+      });
+    settingsList.append(settingLi);
+  }
 
-    // hook into save button
-    const saveButton = currentPage.querySelector("#settings_options");
-    if (!saveButton) {
-      console.error("Save button not found");
-      return;
-    }
+  // hook into save button
+  const saveButton = currentPage.querySelector("#settings_options");
+  if (!saveButton) {
+    console.error("Save button not found");
+    return;
+  }
 
-    saveButton.addEventListener("click", async () => {
-      saveButton.textContent = "Saving...";
-      await Promise.all(
-        Object.values(getSettings()).map((setting) => {
-          setting.value = getValue(setting, currentPage);
-          return setSetting(setting);
-        })
-      );
-      setTimeout(() => window.location.reload(), 1000);
-    });
-  },
+  saveButton.addEventListener("click", async () => {
+    saveButton.textContent = "Saving...";
+    await Promise.all(
+      Object.values(getSettings()).map((setting) => {
+        setting.value = getValue(setting, currentPage);
+        return setSetting(setting);
+      })
+    );
+    setTimeout(() => window.location.reload(), 1000);
+  });
 };
