@@ -1,6 +1,7 @@
 import { Feature } from "./feature";
 import { getCurrentPage, getHashPage } from "~/utils/page";
 import { isObject } from "./object";
+import { logDiagnostic, logFailure } from "./diagnostics";
 
 const KEY_NOTIFICATIONS = "notifications";
 
@@ -124,6 +125,25 @@ const toSignature = (notification: Notification<any>): string =>
     ...(notification.actions?.map((action) => action.text) ?? []),
   ].join("|");
 
+// A banner action that fails used to fail silently: the "Loading..." label
+// stayed, or the banner simply came back, with nothing on a phone to say
+// which. Timed and logged, so the panel's log shows what the tap did.
+const runHandler = async (
+  notification: Notification<any>,
+  name: Handler,
+  handler: NotificationHandler
+): Promise<void> => {
+  const startedAt = Date.now();
+  try {
+    await handler(notification);
+    logDiagnostic(
+      `banner ${notification.id}: ${name} done (${Date.now() - startedAt}ms)`
+    );
+  } catch (error) {
+    logFailure(`banner ${notification.id}: ${name} failed`, error);
+  }
+};
+
 const renderNotifications = (force: boolean = false): void => {
   const pageContent = getCurrentPage()?.querySelector(".page-content");
   if (!pageContent) {
@@ -241,9 +261,10 @@ const renderNotifications = (force: boolean = false): void => {
       notificationElement.addEventListener("click", async (event) => {
         event.preventDefault();
         event.stopPropagation();
+        logDiagnostic(`banner ${notification.id}: tapped`);
         const handler = notificationHandlers.get(notification.handler);
         if (handler) {
-          await handler(notification);
+          await runHandler(notification, notification.handler, handler);
         } else {
           console.error(`Handler not found: ${notification.handler}`);
         }
@@ -270,9 +291,10 @@ const renderNotifications = (force: boolean = false): void => {
           actionElement.textContent = "Loading...";
           event.preventDefault();
           event.stopPropagation();
+          logDiagnostic(`banner ${notification.id}: ${action.text} tapped`);
           const handler = notificationHandlers.get(action.handler);
           if (handler) {
-            await handler(notification);
+            await runHandler(notification, action.handler, handler);
           } else {
             console.error(`Handler not found: ${action.handler}`);
           }

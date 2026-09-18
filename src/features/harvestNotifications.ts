@@ -13,6 +13,7 @@ import {
   removeNotification,
   sendNotification,
 } from "~/utils/notifications";
+import { logDiagnostic } from "~/utils/diagnostics";
 import { Page } from "~/utils/page";
 import { SettingId } from "~/utils/settings";
 import { toUrl } from "~/api/farmrpg/utils/requests";
@@ -58,10 +59,13 @@ const renderFields = async (
   if (!state) {
     return;
   }
+  // The status is logged where it is set (apis/farm.ts); this is what the
+  // banner made of it, so the two lines together say why it is or isn't there.
   if (
     state.status === CropStatus.EMPTY &&
     settings[SettingId.FIELD_EMPTY_NOTIFICATIONS]
   ) {
+    logDiagnostic("field banner: fields are empty");
     sendNotification({
       class: "btnorange",
       id: NotificationId.FIELD,
@@ -77,6 +81,7 @@ const renderFields = async (
       Page.FARM,
       new URLSearchParams({ id: String(farmId) })
     );
+    logDiagnostic(`field banner: crops are ready (farm ${farmId})`);
     sendNotification({
       class: "btngreen",
       id: NotificationId.FIELD,
@@ -92,6 +97,11 @@ const renderFields = async (
       excludePages: [Page.FARM],
     });
   } else {
+    logDiagnostic(
+      state.status === CropStatus.GROWING
+        ? "field banner: none, crops growing"
+        : `field banner: none, ${state.status} but its notification is off`
+    );
     removeNotification(NotificationId.FIELD);
   }
 };

@@ -10,6 +10,7 @@ import { getHTML, getJSON } from "../utils/requests";
 import { getPage, Page, WorkerGo } from "~/utils/page";
 import { getSettingValues, SettingId } from "~/utils/settings";
 import { Item } from "../../buddyfarm/types";
+import { logDiagnostic } from "~/utils/diagnostics";
 import { showPopup } from "~/utils/popup";
 
 export interface FarmState {
@@ -120,13 +121,47 @@ const processFarmPage = (root: HTMLElement): FarmStatus | undefined => {
   return { status, count, readyAt };
 };
 
+// Every crop-status update goes through here so the panel's log says which
+// feed set it and to what. The harvest banner is nothing but this status; when
+// it fails to show on a phone, this is the line that says whether the status
+// ever reached READY, and from where.
+const describeStatus = (status: FarmStatus): string => {
+  const due =
+    status.readyAt === Number.POSITIVE_INFINITY
+      ? ""
+      : `, ready in ${Math.max(
+          0,
+          Math.round((status.readyAt - Date.now()) / 60_000)
+        )}m`;
+  return `${status.status} x${status.count}${due}`;
+};
+
+const setFarmStatus = async (
+  state: CachedState<FarmStatus>,
+  status: FarmStatus | undefined,
+  source: string
+): Promise<void> => {
+  if (!status) {
+    logDiagnostic(`field: ${source} unreadable, keeping status`);
+    return;
+  }
+  logDiagnostic(`field: ${source} -> ${describeStatus(status)}`);
+  await state.set(status);
+};
+
 const scheduledUpdates: Record<number, NodeJS.Timeout> = {};
 
 export const farmStatusState = new CachedState<FarmStatus>(
   StorageKey.FARM_STATUS,
   async () => {
     const response = await getHTML(Page.FARM, new URLSearchParams());
-    return processFarmPage(response.body);
+    const status = processFarmPage(response.body);
+    logDiagnostic(
+      status
+        ? `field: farm page read -> ${describeStatus(status)}`
+        : "field: farm page read unreadable, keeping status"
+    );
+    return status;
   },
   {
     timeout: 5,
@@ -146,22 +181,20 @@ export const farmStatusState = new CachedState<FarmStatus>(
         match: [Page.WORKER, new URLSearchParams({ go: WorkerGo.READY_COUNT })],
         callback: async (state, previous, response) => {
           const root = await getDocument(response);
-          const status = processFarmStatus(root.body);
           // undefined means we couldn't read it — say nothing rather than
           // overwriting a good status with a guess
-          if (status) {
-            await state.set(status);
-          }
+          await setFarmStatus(
+            state,
+            processFarmStatus(root.body),
+            "readycount"
+          );
         },
       },
       {
         match: [Page.FARM, new URLSearchParams()],
         callback: async (state, previous, response) => {
           const root = await getDocument(response);
-          const status = processFarmPage(root.body);
-          if (status) {
-            await state.set(status);
-          }
+          await setFarmStatus(state, processFarmPage(root.body), "farm page");
         },
       },
       {
@@ -172,12 +205,14 @@ export const farmStatusState = new CachedState<FarmStatus>(
             "a[href^='xfarm.php'] .item-after"
           );
           if (!linkStatus) {
+            logDiagnostic("field: home page has no xfarm row");
             return;
           }
-          const status = processFarmStatus(linkStatus);
-          if (status) {
-            await state.set(status);
-          }
+          await setFarmStatus(
+            state,
+            processFarmStatus(linkStatus),
+            "home page"
+          );
         },
       },
       {
@@ -186,7 +221,7 @@ export const farmStatusState = new CachedState<FarmStatus>(
           const raw = await response.text();
           const rawPlots = raw.split(";").filter((plot) => plot.trim());
           if (rawPlots.length === 0) {
-            console.debug("[FARM] Empty farmstatus response, keeping status");
+            logDiagnostic("field: farmstatus feed empty, keeping status");
             return;
           }
           // A plot counts as planted if it has progress OR time left to run.
@@ -218,7 +253,11 @@ export const farmStatusState = new CachedState<FarmStatus>(
               );
             }
           }
-          await state.set({ ...previous, status, readyAt });
+          await setFarmStatus(
+            state,
+            { ...previous, count: previous?.count ?? 0, status, readyAt },
+            "farmstatus feed"
+          );
         },
       },
       {
@@ -285,6 +324,7 @@ const updateStatus = async (): Promise<void> => {
   }
   if (state.status !== CropStatus.READY && state.readyAt < Date.now()) {
     // time's up — verify against the real farm page instead of assuming ready
+    logDiagnostic("field: timer up, re-reading the farm page");
     await farmStatusState.get({ ignoreCache: true });
   }
 };
