@@ -21,6 +21,8 @@ export interface KitchenStatus {
   status: OvenStatus;
   // oven count; only the kitchen page can provide it
   count?: number;
+  // numbers of the ovens with a finished meal; only the kitchen page knows
+  readyOvens?: number[];
   allReady: boolean;
   checkAt: number;
 }
@@ -57,6 +59,7 @@ const processKitchenStatus = (root: HTMLElement | undefined): KitchenStatus => {
 const processKitchenPage = (root: HTMLElement): KitchenStatus | undefined => {
   const ovens = root.querySelectorAll<HTMLAnchorElement>("a[href^='oven.php']");
   const count = ovens.length;
+  const readyOvens: number[] = [];
   let status = OvenStatus.EMPTY;
   let checkAt = Number.POSITIVE_INFINITY;
   let allReady = true;
@@ -69,8 +72,16 @@ const processKitchenPage = (root: HTMLElement): KitchenStatus | undefined => {
     const now = new Date();
     if (doneDate < now) {
       status = OvenStatus.READY;
-      checkAt = Math.min(checkAt, Number.POSITIVE_INFINITY);
-      break;
+      // oven.php?num=N
+      const number = Number(
+        new URLSearchParams(oven.getAttribute("href")?.split("?")[1] ?? "").get(
+          "num"
+        )
+      );
+      if (number) {
+        readyOvens.push(number);
+      }
+      continue;
     }
     const tasks = oven.querySelectorAll<HTMLImageElement>("img:not(.itemimg)");
     if (
@@ -90,6 +101,7 @@ const processKitchenPage = (root: HTMLElement): KitchenStatus | undefined => {
     allReady,
     checkAt,
     count,
+    readyOvens,
     status,
   };
 };
@@ -309,9 +321,46 @@ kitchenStatusState.onUpdate((state) => {
   );
 });
 
+// Collects every finished meal, one oven at a time. This sent `cookreadyall`,
+// the kitchen's Collect All -- a button the game only draws for accounts that
+// own the Farm Supply perk for it, and an action the server quietly ignores
+// for everyone else: the request came back in 50 ms, the kitchen re-read
+// still showed the meal, and the banner it had just cleared came straight
+// back. The per-oven `cookready&oven=N` is what the oven page's own Collect
+// Meal button sends, for every account.
+//
+// Which ovens are ready is only on the kitchen page, so read it first (fresh:
+// the cached status may have come from the home page, which knows no oven
+// numbers). Each reply is watched by mealActionInterceptor, which re-reads
+// the kitchen once the burst is over and so clears the banner.
 export const collectAll = async (): Promise<void> => {
-  await getHTML(
-    Page.WORKER,
-    new URLSearchParams({ go: WorkerGo.COLLECT_ALL_MEALS })
-  );
+  const status = await kitchenStatusState.get({ ignoreCache: true });
+  const readyOvens = status?.readyOvens ?? [];
+  if (readyOvens.length === 0) {
+    logDiagnostic("ovens: nothing to collect");
+    return;
+  }
+  let collected = 0;
+  for (const oven of readyOvens) {
+    const reply = await getHTML(
+      Page.WORKER,
+      new URLSearchParams({ go: WorkerGo.COLLECT_MEAL, oven: String(oven) })
+    );
+    if (reply.body.textContent?.includes("success")) {
+      collected += 1;
+    } else {
+      logDiagnostic(
+        `ovens: collect oven ${oven} replied "${reply.body.textContent
+          ?.trim()
+          .slice(0, 40)}"`
+      );
+    }
+  }
+  logDiagnostic(`ovens: collected ${collected} of ${readyOvens.length}`);
+  if (collected > 0) {
+    showPopup({
+      title: "Success!",
+      contentHTML: `${collected} meal${collected === 1 ? "" : "s"} collected`,
+    });
+  }
 };

@@ -41,6 +41,9 @@ export enum WorkerGo {
   COLLECT_ALL_PET_ITEMS = "collectallpetitems",
   COLLECT_ALL_MAIL_ITEMS = "collectallmailitems",
   COLLECT_ALL_MEALS = "cookreadyall",
+  // one oven's finished meal (`oven=N`); the "all" form above is only served
+  // to accounts that own the Farm Supply perk for it
+  COLLECT_MEAL = "cookready",
   COOK_ALL = "cookitemall",
   DEPOSIT_SILVER = "depositsilver",
   FARM_STATUS = "farmstatus",
