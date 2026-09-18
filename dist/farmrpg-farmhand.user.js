@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.71
+// @version 1.1.72
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -5648,12 +5648,27 @@ const injectPanelStyles = () => {
       /* The log under the note: one line per perk decision, newest last, so an
          ordering problem (a reconcile landing between a harvest's switch and
          the harvest) is visible as two entries a second apart. */
+      /* Each log is a box of its own that scrolls, not a column that runs
+         off the bottom of the panel: 40 diagnostic lines is taller than a
+         phone. Newest is last, so the paint scrolls it to the end. */
       #${shared_1.PANEL_ID} .fh-perk-log {
         display: grid;
         grid-template-columns: auto 1fr;
         column-gap: 6px;
+        align-content: start;
         margin-top: 4px;
-        opacity: 0.85;
+        max-height: 150px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding: 4px 6px;
+        border-radius: var(--fh-radius-s);
+        background: rgba(0, 0, 0, 0.18);
+        opacity: 0.9;
+      }
+      #${shared_1.PANEL_ID} .fh-perk-log > span {
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       #${shared_1.PANEL_ID} .fh-perk-log-time {
         font-variant-numeric: tabular-nums;
@@ -7130,7 +7145,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.71" !== void 0 ? "1.1.71" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.72" !== void 0 ? "1.1.72" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -7148,6 +7163,8 @@ const ensurePanel = () => {
             text.textContent = entry.text;
             element.append(time, text);
         }
+        // newest entry last, so that is where the eye should land
+        element.scrollTop = element.scrollHeight;
     };
     const paintPerkLog = () => {
         paintLog(perkLogElement, (0, perks_1.getPerkLog)());
@@ -13389,7 +13406,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.71" !== void 0 ? "1.1.71" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.72" !== void 0 ? "1.1.72" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
