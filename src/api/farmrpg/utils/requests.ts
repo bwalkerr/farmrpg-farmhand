@@ -1,5 +1,6 @@
 import { CachedState, QueryInterceptor } from "../../../utils/state";
 import { getDocument, Responselike } from "../../../utils/requests";
+import { logDiagnostic } from "../../../utils/diagnostics";
 import { Page } from "../../../utils/page";
 
 // The game is served from several hosts — farmrpg.com, www.farmrpg.com and
@@ -238,6 +239,15 @@ export const watchQueries = (): void => {
     return response;
   };
 
+  // The game's own request helper is a global of the PAGE's world. A
+  // userscript manager that runs this script in an isolated world cannot see
+  // it, and reading an undeclared name throws -- which, uncontained, ended
+  // start-up here. `typeof` on an undeclared name is the one read that does
+  // not throw.
+  if (typeof fetchWorker !== "function") {
+    logDiagnostic("request watchers: fetchWorker not visible, not wrapped");
+    return;
+  }
   const originalFetchWorker = fetchWorker;
   fetchWorker = async (action, parameters) => {
     const response = await originalFetchWorker(action, parameters);

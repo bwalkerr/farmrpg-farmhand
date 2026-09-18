@@ -277,6 +277,13 @@ export const injectPanelStyles = (): void => {
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
       }
+      #${PANEL_ID} .fh-perk-log-heading {
+        color: ${TEXT_GRAY};
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        margin-top: 8px;
+        text-transform: uppercase;
+      }
       #${PANEL_ID} .fh-briefing-tabs {
         display: flex;
         gap: 2px;

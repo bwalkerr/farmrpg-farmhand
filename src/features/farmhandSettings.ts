@@ -7,6 +7,8 @@ import {
   setSetting,
   SettingId,
 } from "~/utils/settings";
+import { getHashPage, Page } from "~/utils/page";
+import { logDiagnostic } from "~/utils/diagnostics";
 import { showPopup } from "~/utils/popup";
 
 const getWrapper = (
@@ -215,6 +217,7 @@ export const farmhandSettings: Feature = {
     // page's markup from the moment it is inserted, so it can be found
     // directly. Idempotent per page element, so the repeat dispatches and a
     // retained page revisited by back navigation cost nothing.
+    let drawn = 0;
     for (const currentPage of document.querySelectorAll<HTMLElement>(
       ".view-main .page"
     )) {
@@ -223,7 +226,13 @@ export const farmhandSettings: Feature = {
       );
       if (settingsList) {
         renderFarmhandSettings(currentPage, settingsList, settingValues);
+        drawn += 1;
       }
+    }
+    // Only worth a line on the options page itself: it tells apart "the
+    // dispatch never ran" from "it ran and the form was not where expected".
+    if (drawn === 0 && getHashPage() === Page.SETTINGS_OPTIONS) {
+      logDiagnostic("settings: options page open but no form found");
     }
   },
 };

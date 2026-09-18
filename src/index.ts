@@ -21,7 +21,7 @@ import { farmhandSettings } from "./features/farmhandSettings";
 import { fieldNotifications } from "./features/harvestNotifications";
 import { fishinInBarrel } from "./features/fishInBarrel";
 import { fleaMarket } from "./features/fleaMarket";
-import { getCurrentPage, getPage } from "~/utils/page";
+import { getCurrentPage, getHashPage, getPage } from "~/utils/page";
 import { getSettingValues, registerSettings } from "./utils/settings";
 import { highlightSelfInChat } from "./features/highlightSelfInChat";
 import { improvedInputs } from "./features/improvedInputs";
@@ -29,6 +29,7 @@ import { inventoryCapWarnings } from "./features/inventoryCapWarnings";
 import { itemNeeds } from "./features/itemNeeds";
 import { kitchenNotifications } from "./features/kitchenNotifications";
 import { linkifyQuickCraft } from "./features/linkifyQuickCraft";
+import { logDiagnostic, logFailure } from "~/utils/diagnostics";
 import { mailboxNotifications } from "./features/mailboxNotifications";
 import { maxContainers } from "./features/maxContainers";
 import { maxCows } from "./features/maxCows";
@@ -148,6 +149,11 @@ for (const feature of FEATURES) {
   registerSettings(...(feature.settings ?? []));
 }
 
+// Features have no name of their own; the first setting they register is the
+// nearest thing, and the ones without settings are the internal utilities.
+const describeFeature = (feature: (typeof FEATURES)[number]): string =>
+  feature.settings?.[0]?.id ?? `feature #${FEATURES.indexOf(feature)}`;
+
 const watchSubtree = (
   selector: string,
   handler:
@@ -161,12 +167,24 @@ const watchSubtree = (
   const target = document.querySelector(selector);
   if (!target) {
     console.error(`${selector} not found`);
+    logDiagnostic(`watch: ${selector} not found (${handler} never fires)`);
     return;
   }
   const handle = async (): Promise<void> => {
-    const settings = await getSettingValues();
+    let settings;
+    try {
+      settings = await getSettingValues();
+    } catch (error) {
+      logFailure(`${handler}: reading settings failed`, error);
+      return;
+    }
     const [page, parameters] = getPage();
     // console.debug(`${selector} Load`, page, parameters);
+    if (handler === "onPageLoad") {
+      logDiagnostic(
+        `onPageLoad: ${page ?? "?"} (route ${getHashPage() ?? "none"})`
+      );
+    }
     for (const feature of FEATURES) {
       // Each feature on its own: a hook that throws is logged and the loop
       // moves on. Uncontained, one bad hook silently skipped every feature
@@ -176,7 +194,7 @@ const watchSubtree = (
       try {
         feature[handler]?.(settings, page, parameters);
       } catch (error) {
-        console.error(`[Farmhand] ${handler} failed`, feature, error);
+        logFailure(`${handler} failed in ${describeFeature(feature)}`, error);
       }
     }
   };
@@ -262,54 +280,78 @@ const watchSubtree = (
     try {
       feature.onInitialize?.(settings);
     } catch (error) {
-      console.error("[Farmhand] onInitialize failed", feature, error);
+      logFailure(`onInitialize failed in ${describeFeature(feature)}`, error);
     }
   }
+  logDiagnostic(`init: ${FEATURES.length} features initialized`);
+
+  // Each remaining phase on its own. They were one straight line, so a throw
+  // in any of them -- the request watchers not finding the game's fetchWorker
+  // in this script's world, say -- meant the DOM watchers after it were never
+  // registered and no page hook ever ran, with the panel (mounted above)
+  // sitting there looking fine.
 
   // run any interceptors for the first page
-  const currentPage = getCurrentPage();
-  if (currentPage) {
-    console.info(`Running interceptors for ${currentPage.dataset.page}...`);
-    for (const [state, interceptor] of queryInterceptors) {
-      const url = window.location.href.replace("/index.php#!", "");
-      if (urlMatches(url, ...interceptor.match)) {
-        const previous = await state.get({ doNotFetch: true });
-        interceptor.callback(state, previous, {
-          headers: new Headers(),
-          ok: true,
-          redirected: false,
-          status: 200,
-          statusText: "OK",
-          type: "default",
-          url,
-          text: () => Promise.resolve(currentPage.innerHTML),
-          json: () => Promise.resolve({}),
-          formData: () => Promise.resolve(new FormData()),
-          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-          blob: () => Promise.resolve(new Blob([])),
-        });
+  try {
+    const currentPage = getCurrentPage();
+    if (currentPage) {
+      console.info(`Running interceptors for ${currentPage.dataset.page}...`);
+      for (const [state, interceptor] of queryInterceptors) {
+        const url = window.location.href.replace("/index.php#!", "");
+        if (urlMatches(url, ...interceptor.match)) {
+          const previous = await state.get({ doNotFetch: true });
+          interceptor.callback(state, previous, {
+            headers: new Headers(),
+            ok: true,
+            redirected: false,
+            status: 200,
+            statusText: "OK",
+            type: "default",
+            url,
+            text: () => Promise.resolve(currentPage.innerHTML),
+            json: () => Promise.resolve({}),
+            formData: () => Promise.resolve(new FormData()),
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+            blob: () => Promise.resolve(new Blob([])),
+          });
+        }
       }
+    } else {
+      console.warn("Failed to find first page");
+      logDiagnostic("init: no first page found");
     }
-  } else {
-    console.warn("Failed to find first page");
+  } catch (error) {
+    logFailure("init: first-page interceptors failed", error);
   }
 
   console.info("Registering query interceptors...");
-  await watchQueries();
+  try {
+    watchQueries();
+    logDiagnostic("init: request watchers on");
+  } catch (error) {
+    logFailure("init: request watchers failed", error);
+  }
 
   console.info("Registering DOM watchers...");
-  // double watches because the page and nav load at different times but
-  // separating the handlers makes everything harder
-  watchSubtree(".view-main .pages", "onPageLoad", ".page");
-  watchSubtree(".view-main .navbar", "onPageLoad", ".navbar-inner");
-  watchSubtree(".view-main .pages", "onNotificationLoad", ".page > .button");
-  // watch quest popup
-  watchSubtree(".view-main .toolbar", "onQuestLoad");
-  // watch menu
-  watchSubtree(".view-left", "onMenuLoad");
-  // watch desktop and mobile versions of chat
-  watchSubtree("#mobilechatpanel", "onChatLoad");
-  watchSubtree("#desktopchatpanel", "onChatLoad");
+  try {
+    // double watches because the page and nav load at different times but
+    // separating the handlers makes everything harder
+    watchSubtree(".view-main .pages", "onPageLoad", ".page");
+    watchSubtree(".view-main .navbar", "onPageLoad", ".navbar-inner");
+    watchSubtree(".view-main .pages", "onNotificationLoad", ".page > .button");
+    // watch quest popup
+    watchSubtree(".view-main .toolbar", "onQuestLoad");
+    // watch menu
+    watchSubtree(".view-left", "onMenuLoad");
+    // watch desktop and mobile versions of chat
+    watchSubtree("#mobilechatpanel", "onChatLoad");
+    watchSubtree("#desktopchatpanel", "onChatLoad");
+    logDiagnostic("init: DOM watchers on");
+  } catch (error) {
+    logFailure("init: DOM watchers failed", error);
+  }
 
   console.info("Farmhand running!");
-})();
+})().catch((error) => {
+  logFailure("init: start-up failed", error);
+});

@@ -30,6 +30,7 @@ import {
   refreshCapTrackerNow,
 } from "./inventoryCapWarnings";
 import { getCurrentPage, Page } from "~/utils/page";
+import { getDiagnostics, onDiagnostic } from "~/utils/diagnostics";
 import { getFocusedScopes, setFocusedScopes } from "~/utils/focusScope";
 import {
   getFrozenMastery,
@@ -67,6 +68,8 @@ import {
   parseStamina,
 } from "~/utils/locationAdvice";
 import { onPageTransition } from "~/utils/pageTransitions";
+
+declare const __VERSION__: string | undefined;
 import { orUndefined } from "~/utils/promise";
 import { parseUnlimitedItems } from "~/utils/unlimited";
 import { renderCapTab } from "./briefing/cap";
@@ -1189,10 +1192,21 @@ const ensurePanel = (): void => {
   perkNote.append(perkNoteText);
   const perkLogElement = document.createElement("div");
   perkLogElement.className = "fh-perk-log";
-  perkNote.append(perkLogElement);
-  const paintPerkLog = (): void => {
-    perkLogElement.replaceChildren();
-    for (const entry of getPerkLog()) {
+  // The script's own start-up and dispatch log, below the perk log, with the
+  // running version on top. Together they are the only account a phone can
+  // give of what the script did (see utils/diagnostics.ts).
+  const diagnosticsHeading = document.createElement("div");
+  diagnosticsHeading.className = "fh-perk-log-heading";
+  diagnosticsHeading.textContent = `Farmhand ${__VERSION__ ?? "?"} log`;
+  const diagnosticsElement = document.createElement("div");
+  diagnosticsElement.className = "fh-perk-log";
+  perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
+  const paintLog = (
+    element: HTMLElement,
+    entries: readonly { at: number; text: string }[]
+  ): void => {
+    element.replaceChildren();
+    for (const entry of entries) {
       const time = document.createElement("span");
       time.className = "fh-perk-log-time";
       time.textContent = new Date(entry.at).toLocaleTimeString(undefined, {
@@ -1202,8 +1216,12 @@ const ensurePanel = (): void => {
       });
       const text = document.createElement("span");
       text.textContent = entry.text;
-      perkLogElement.append(time, text);
+      element.append(time, text);
     }
+  };
+  const paintPerkLog = (): void => {
+    paintLog(perkLogElement, getPerkLog());
+    paintLog(diagnosticsElement, getDiagnostics());
   };
   const paintPerk = (): void => {
     const status = getPerkStatus();
@@ -1227,6 +1245,7 @@ const ensurePanel = (): void => {
   };
   paintPerk();
   onPerkStatusChange(paintPerk);
+  onDiagnostic(paintPerkLog);
   perkChip.addEventListener("click", (event) => {
     event.stopPropagation();
     const next = perkNote.dataset.on !== "true";
