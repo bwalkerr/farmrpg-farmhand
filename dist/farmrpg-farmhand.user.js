@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.67
+// @version 1.1.68
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1278,6 +1278,7 @@ exports.collectAll = exports.kitchenStatusState = exports.OvenStatus = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
+const diagnostics_1 = __webpack_require__(3747);
 const page_1 = __webpack_require__(7952);
 const popup_1 = __webpack_require__(469);
 const time_1 = __webpack_require__(4435);
@@ -1356,6 +1357,26 @@ const processKitchenPage = (root) => {
         status,
     };
 };
+// Every oven-status update goes through here so the panel's log says which
+// feed set it and to what -- the same shape as setFarmStatus in farm.ts, for
+// the same reason: the oven banners are nothing but this status, and "the
+// banner stayed after I took the meal" is only diagnosable if the log shows
+// what was seen (or not seen) after the take.
+const describeStatus = (status) => {
+    const count = status.count === undefined ? "" : ` x${status.count}`;
+    const due = status.checkAt === Number.POSITIVE_INFINITY
+        ? ""
+        : `, check in ${Math.max(0, Math.round((status.checkAt - Date.now()) / 60000))}m`;
+    return `${status.status}${count}${due}`;
+};
+const setKitchenStatus = (state, status, source) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!status) {
+        (0, diagnostics_1.logDiagnostic)(`ovens: ${source} unreadable, keeping status`);
+        return;
+    }
+    (0, diagnostics_1.logDiagnostic)(`ovens: ${source} -> ${describeStatus(status)}`);
+    yield state.set(status);
+});
 const scheduledUpdates = {};
 // Stirring, tasting and seasoning are what clear "Ovens need attention", and
 // nothing was watching for them: only `seasonmealsall` had an interceptor at all
@@ -1397,6 +1418,7 @@ const mealActionInterceptor = {
         // kitchen page read; wait for the burst to finish and read once.
         clearTimeout(scheduledMealRefresh);
         scheduledMealRefresh = setTimeout(() => {
+            (0, diagnostics_1.logDiagnostic)(`ovens: saw ${go}, re-reading the kitchen page`);
             state.get({ ignoreCache: true });
         }, 600);
         return Promise.resolve();
@@ -1404,7 +1426,11 @@ const mealActionInterceptor = {
 };
 exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_STATUS, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_2.getHTML)(page_1.Page.KITCHEN, new URLSearchParams());
-    return processKitchenPage(response.body);
+    const status = processKitchenPage(response.body);
+    (0, diagnostics_1.logDiagnostic)(status
+        ? `ovens: kitchen page read -> ${describeStatus(status)}`
+        : "ovens: kitchen page read unreadable, keeping status");
+    return status;
 }), {
     timeout: 5,
     // live status — see the note on farmStatusState
@@ -1421,14 +1447,14 @@ exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
                 const root = yield (0, requests_1.getDocument)(response);
                 const kitchenStatus = root === null || root === void 0 ? void 0 : root.querySelector("a[href='kitchen.php'] .item-after span");
-                yield state.set(processKitchenStatus(kitchenStatus || undefined));
+                yield setKitchenStatus(state, processKitchenStatus(kitchenStatus || undefined), "home page");
             }),
         },
         {
             match: [page_1.Page.KITCHEN, new URLSearchParams()],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
                 const root = yield (0, requests_1.getDocument)(response);
-                yield state.set(processKitchenPage(root.body));
+                yield setKitchenStatus(state, processKitchenPage(root.body), "kitchen page");
             }),
         },
         {
@@ -1446,7 +1472,7 @@ exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_
                         contentHTML: `${successCount} meal${successCount === 1 ? "" : "s"} collected`,
                     });
                 }
-                yield state.set(Object.assign(Object.assign({}, previous), { status: OvenStatus.EMPTY, checkAt: Number.POSITIVE_INFINITY }));
+                yield setKitchenStatus(state, Object.assign(Object.assign({}, previous), { allReady: false, status: OvenStatus.EMPTY, checkAt: Number.POSITIVE_INFINITY }), "collect all");
                 // Clearing the banner immediately is right, but EMPTY is only a guess:
                 // collect takes the ready meals and leaves anything still cooking, so
                 // confirm against the kitchen page. `ignoreCache` because the `set()`
@@ -1458,7 +1484,7 @@ exports.kitchenStatusState = new state_1.CachedState(state_1.StorageKey.KITHCEN_
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COOK_ALL })],
             callback: (state, previous) => __awaiter(void 0, void 0, void 0, function* () {
-                yield state.set(Object.assign(Object.assign({}, previous), { status: OvenStatus.COOKING, checkAt: Date.now() + 60 * 1000 }));
+                yield setKitchenStatus(state, Object.assign(Object.assign({}, previous), { allReady: false, status: OvenStatus.COOKING, checkAt: Date.now() + 60 * 1000 }), "cook all");
             }),
         },
     ],
@@ -6955,7 +6981,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.67" !== void 0 ? "1.1.67" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.68" !== void 0 ? "1.1.68" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -10804,6 +10830,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.kitchenNotifications = void 0;
 const kitchen_1 = __webpack_require__(202);
 const notifications_1 = __webpack_require__(6783);
+const diagnostics_1 = __webpack_require__(3747);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const requests_1 = __webpack_require__(3300);
@@ -10863,9 +10890,11 @@ const renderOvens = (settings, state) => __awaiter(void 0, void 0, void 0, funct
             hasOvens = Boolean(kitchenState && ((_b = kitchenState.count) !== null && _b !== void 0 ? _b : 0) > 0);
         }
         if (!hasOvens) {
+            (0, diagnostics_1.logDiagnostic)("oven banner: none, no ovens");
             (0, notifications_1.removeNotification)(notifications_1.NotificationId.OVEN);
             return;
         }
+        (0, diagnostics_1.logDiagnostic)("oven banner: ovens are empty");
         (0, notifications_1.sendNotification)({
             class: "btnorange",
             id: notifications_1.NotificationId.OVEN,
@@ -10882,6 +10911,7 @@ const renderOvens = (settings, state) => __awaiter(void 0, void 0, void 0, funct
         // inside a branch that requires ATTENTION_NOTIFICATIONS, so it was always
         // true. (It reads as an attempt to honour the "all actions" setting, which
         // is a separate matter — see SETTING_ATTENTION_VERBOSE, still unused.)
+        (0, diagnostics_1.logDiagnostic)("oven banner: ovens need attention");
         (0, notifications_1.sendNotification)({
             class: "btnorange",
             id: notifications_1.NotificationId.OVEN,
@@ -10892,6 +10922,7 @@ const renderOvens = (settings, state) => __awaiter(void 0, void 0, void 0, funct
     }
     else if (state.status === kitchen_1.OvenStatus.READY &&
         settings[settings_1.SettingId.KITCHEN_COMPLETE_NOTIFICATIONS]) {
+        (0, diagnostics_1.logDiagnostic)("oven banner: meals are ready");
         (0, notifications_1.sendNotification)({
             class: "btngreen",
             id: notifications_1.NotificationId.OVEN,
@@ -10908,6 +10939,7 @@ const renderOvens = (settings, state) => __awaiter(void 0, void 0, void 0, funct
         });
     }
     else {
+        (0, diagnostics_1.logDiagnostic)(`oven banner: none (${state.status})`);
         (0, notifications_1.removeNotification)(notifications_1.NotificationId.OVEN);
     }
 });
@@ -13208,7 +13240,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.67" !== void 0 ? "1.1.67" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.68" !== void 0 ? "1.1.68" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
