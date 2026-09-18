@@ -12,6 +12,7 @@ import {
   removeNotification,
   sendNotification,
 } from "~/utils/notifications";
+import { logDiagnostic } from "~/utils/diagnostics";
 import { Page } from "~/utils/page";
 import { SettingId } from "~/utils/settings";
 import { toUrl } from "~/api/farmrpg/utils/requests";
@@ -82,9 +83,11 @@ const renderOvens = async (
       hasOvens = Boolean(kitchenState && (kitchenState.count ?? 0) > 0);
     }
     if (!hasOvens) {
+      logDiagnostic("oven banner: none, no ovens");
       removeNotification(NotificationId.OVEN);
       return;
     }
+    logDiagnostic("oven banner: ovens are empty");
     sendNotification({
       class: "btnorange",
       id: NotificationId.OVEN,
@@ -102,6 +105,7 @@ const renderOvens = async (
     // inside a branch that requires ATTENTION_NOTIFICATIONS, so it was always
     // true. (It reads as an attempt to honour the "all actions" setting, which
     // is a separate matter — see SETTING_ATTENTION_VERBOSE, still unused.)
+    logDiagnostic("oven banner: ovens need attention");
     sendNotification({
       class: "btnorange",
       id: NotificationId.OVEN,
@@ -113,6 +117,7 @@ const renderOvens = async (
     state.status === OvenStatus.READY &&
     settings[SettingId.KITCHEN_COMPLETE_NOTIFICATIONS]
   ) {
+    logDiagnostic("oven banner: meals are ready");
     sendNotification({
       class: "btngreen",
       id: NotificationId.OVEN,
@@ -128,6 +133,7 @@ const renderOvens = async (
       excludePages: [Page.KITCHEN],
     });
   } else {
+    logDiagnostic(`oven banner: none (${state.status})`);
     removeNotification(NotificationId.OVEN);
   }
 };

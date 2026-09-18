@@ -5,6 +5,7 @@ import {
 } from "../../../utils/state";
 import { getDocument } from "../../../utils/requests";
 import { getHTML, parseUrl } from "../utils/requests";
+import { logDiagnostic } from "~/utils/diagnostics";
 import { Page, WorkerGo } from "~/utils/page";
 import { showPopup } from "~/utils/popup";
 import { timestampToDate } from "../utils/time";
@@ -93,6 +94,36 @@ const processKitchenPage = (root: HTMLElement): KitchenStatus | undefined => {
   };
 };
 
+// Every oven-status update goes through here so the panel's log says which
+// feed set it and to what -- the same shape as setFarmStatus in farm.ts, for
+// the same reason: the oven banners are nothing but this status, and "the
+// banner stayed after I took the meal" is only diagnosable if the log shows
+// what was seen (or not seen) after the take.
+const describeStatus = (status: KitchenStatus): string => {
+  const count = status.count === undefined ? "" : ` x${status.count}`;
+  const due =
+    status.checkAt === Number.POSITIVE_INFINITY
+      ? ""
+      : `, check in ${Math.max(
+          0,
+          Math.round((status.checkAt - Date.now()) / 60_000)
+        )}m`;
+  return `${status.status}${count}${due}`;
+};
+
+const setKitchenStatus = async (
+  state: CachedState<KitchenStatus>,
+  status: KitchenStatus | undefined,
+  source: string
+): Promise<void> => {
+  if (!status) {
+    logDiagnostic(`ovens: ${source} unreadable, keeping status`);
+    return;
+  }
+  logDiagnostic(`ovens: ${source} -> ${describeStatus(status)}`);
+  await state.set(status);
+};
+
 const scheduledUpdates: Record<number, NodeJS.Timeout> = {};
 
 // Stirring, tasting and seasoning are what clear "Ovens need attention", and
@@ -137,6 +168,7 @@ const mealActionInterceptor: QueryInterceptor<KitchenStatus, void> = {
     // kitchen page read; wait for the burst to finish and read once.
     clearTimeout(scheduledMealRefresh);
     scheduledMealRefresh = setTimeout(() => {
+      logDiagnostic(`ovens: saw ${go}, re-reading the kitchen page`);
       state.get({ ignoreCache: true });
     }, 600);
     return Promise.resolve();
@@ -147,7 +179,13 @@ export const kitchenStatusState = new CachedState<KitchenStatus>(
   StorageKey.KITHCEN_STATUS,
   async () => {
     const response = await getHTML(Page.KITCHEN, new URLSearchParams());
-    return processKitchenPage(response.body);
+    const status = processKitchenPage(response.body);
+    logDiagnostic(
+      status
+        ? `ovens: kitchen page read -> ${describeStatus(status)}`
+        : "ovens: kitchen page read unreadable, keeping status"
+    );
+    return status;
   },
   {
     timeout: 5,
@@ -167,14 +205,22 @@ export const kitchenStatusState = new CachedState<KitchenStatus>(
           const kitchenStatus = root?.querySelector<HTMLSpanElement>(
             "a[href='kitchen.php'] .item-after span"
           );
-          await state.set(processKitchenStatus(kitchenStatus || undefined));
+          await setKitchenStatus(
+            state,
+            processKitchenStatus(kitchenStatus || undefined),
+            "home page"
+          );
         },
       },
       {
         match: [Page.KITCHEN, new URLSearchParams()],
         callback: async (state, previous, response) => {
           const root = await getDocument(response);
-          await state.set(processKitchenPage(root.body));
+          await setKitchenStatus(
+            state,
+            processKitchenPage(root.body),
+            "kitchen page"
+          );
         },
       },
       {
@@ -194,11 +240,16 @@ export const kitchenStatusState = new CachedState<KitchenStatus>(
               } collected`,
             });
           }
-          await state.set({
-            ...previous,
-            status: OvenStatus.EMPTY,
-            checkAt: Number.POSITIVE_INFINITY,
-          });
+          await setKitchenStatus(
+            state,
+            {
+              ...previous,
+              allReady: false,
+              status: OvenStatus.EMPTY,
+              checkAt: Number.POSITIVE_INFINITY,
+            },
+            "collect all"
+          );
           // Clearing the banner immediately is right, but EMPTY is only a guess:
           // collect takes the ready meals and leaves anything still cooking, so
           // confirm against the kitchen page. `ignoreCache` because the `set()`
@@ -210,11 +261,16 @@ export const kitchenStatusState = new CachedState<KitchenStatus>(
       {
         match: [Page.WORKER, new URLSearchParams({ go: WorkerGo.COOK_ALL })],
         callback: async (state, previous) => {
-          await state.set({
-            ...previous,
-            status: OvenStatus.COOKING,
-            checkAt: Date.now() + 60 * 1000,
-          });
+          await setKitchenStatus(
+            state,
+            {
+              ...previous,
+              allReady: false,
+              status: OvenStatus.COOKING,
+              checkAt: Date.now() + 60 * 1000,
+            },
+            "cook all"
+          );
         },
       },
     ],
