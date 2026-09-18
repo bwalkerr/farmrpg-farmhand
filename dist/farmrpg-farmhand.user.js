@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.64
+// @version 1.1.65
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -9312,7 +9312,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.farmhandSettings = void 0;
 const notes_1 = __webpack_require__(4735);
-const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const popup_1 = __webpack_require__(469);
 const getWrapper = ({ id, type, value }, children) => {
@@ -9492,45 +9491,45 @@ exports.farmhandSettings = {
       <style>
     `);
     },
-    onPageLoad: (settingValues, page) => {
-        var _a;
-        // make sure we are on the settings page -- by what the page says it is OR
-        // by the route, the way the banners and the perk code already match:
-        // `data-page` alone has been wrong often enough elsewhere in this fork,
-        // and when it is wrong here the Farmhand section never appears at all.
-        if (page !== page_1.Page.SETTINGS_OPTIONS &&
-            (0, page_1.getHashPage)() !== page_1.Page.SETTINGS_OPTIONS) {
-            return;
+    onPageLoad: (settingValues) => {
+        // Render into whichever page element holds the options form, without
+        // asking which page is "current". onPageLoad fires when the page node is
+        // ADDED, and on a phone Framework7 animates the transition, so at that
+        // moment the page you came from is still the one on centre: getPage()
+        // named it, the check here bailed, and no later dispatch came -- the
+        // Farmhand section never appeared on mobile at all. A desktop skips the
+        // animation, which is why it always worked there. The form is in the new
+        // page's markup from the moment it is inserted, so it can be found
+        // directly. Idempotent per page element, so the repeat dispatches and a
+        // retained page revisited by back navigation cost nothing.
+        for (const currentPage of document.querySelectorAll(".view-main .page")) {
+            const settingsList = currentPage.querySelector("#settingsform_options ul");
+            if (settingsList) {
+                renderFarmhandSettings(currentPage, settingsList, settingValues);
+            }
         }
-        // make sure page content has loaded
-        const currentPage = (0, page_1.getCurrentPage)();
-        if (!currentPage) {
-            return;
-        }
-        // insert at end of first card
-        const settingsList = currentPage.querySelector("#settingsform_options ul");
-        if (!settingsList) {
-            console.error("Settings list not found");
-            return;
-        }
-        // add section
-        let farmhandSettingsLi = settingsList.querySelector(".fh-settings-title");
-        if (farmhandSettingsLi) {
-            // already rendered
-            return;
-        }
-        farmhandSettingsLi = document.createElement("li");
-        farmhandSettingsLi.classList.add("list-group-title");
-        farmhandSettingsLi.classList.add("item-divider");
-        farmhandSettingsLi.classList.add("fh-settings-title");
-        farmhandSettingsLi.textContent = "Farmhand Settings";
-        settingsList.append(farmhandSettingsLi);
-        // add settings
-        for (const setting of (0, settings_1.getSettings)()) {
-            setting.value = settingValues[setting.id];
-            const hasButton = setting.buttonText && setting.buttonAction;
-            const settingLi = document.createElement("li");
-            settingLi.innerHTML = `
+    },
+};
+const renderFarmhandSettings = (currentPage, settingsList, settingValues) => {
+    var _a;
+    // add section
+    let farmhandSettingsLi = settingsList.querySelector(".fh-settings-title");
+    if (farmhandSettingsLi) {
+        // already rendered
+        return;
+    }
+    farmhandSettingsLi = document.createElement("li");
+    farmhandSettingsLi.classList.add("list-group-title");
+    farmhandSettingsLi.classList.add("item-divider");
+    farmhandSettingsLi.classList.add("fh-settings-title");
+    farmhandSettingsLi.textContent = "Farmhand Settings";
+    settingsList.append(farmhandSettingsLi);
+    // add settings
+    for (const setting of (0, settings_1.getSettings)()) {
+        setting.value = settingValues[setting.id];
+        const hasButton = setting.buttonText && setting.buttonAction;
+        const settingLi = document.createElement("li");
+        settingLi.innerHTML = `
         <div
           class="item-content"
           style="
@@ -9556,40 +9555,39 @@ exports.farmhandSettings = {
               <div style="font-size: 11px">${setting.description}</div>
             </div>
             ${getField(setting, hasButton
-                ? `
+            ? `
                   <button
                     class="button btngreen fh-action"
                     style="margin-left: 8px"
                   >${setting.buttonText}</button>
                 `
-                : "")}
+            : "")}
             `)}
       </div>
       `;
-            (_a = settingLi
-                .querySelector(".fh-action")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", (event) => {
-                var _a;
-                event.preventDefault();
-                event.stopPropagation();
-                (_a = setting.buttonAction) === null || _a === void 0 ? void 0 : _a.call(setting, settingValues, settingLi);
-            });
-            settingsList.append(settingLi);
-        }
-        // hook into save button
-        const saveButton = currentPage.querySelector("#settings_options");
-        if (!saveButton) {
-            console.error("Save button not found");
-            return;
-        }
-        saveButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
-            saveButton.textContent = "Saving...";
-            yield Promise.all(Object.values((0, settings_1.getSettings)()).map((setting) => {
-                setting.value = getValue(setting, currentPage);
-                return (0, settings_1.setSetting)(setting);
-            }));
-            setTimeout(() => window.location.reload(), 1000);
+        (_a = settingLi
+            .querySelector(".fh-action")) === null || _a === void 0 ? void 0 : _a.addEventListener("click", (event) => {
+            var _a;
+            event.preventDefault();
+            event.stopPropagation();
+            (_a = setting.buttonAction) === null || _a === void 0 ? void 0 : _a.call(setting, settingValues, settingLi);
+        });
+        settingsList.append(settingLi);
+    }
+    // hook into save button
+    const saveButton = currentPage.querySelector("#settings_options");
+    if (!saveButton) {
+        console.error("Save button not found");
+        return;
+    }
+    saveButton.addEventListener("click", () => __awaiter(void 0, void 0, void 0, function* () {
+        saveButton.textContent = "Saving...";
+        yield Promise.all(Object.values((0, settings_1.getSettings)()).map((setting) => {
+            setting.value = getValue(setting, currentPage);
+            return (0, settings_1.setSetting)(setting);
         }));
-    },
+        setTimeout(() => window.location.reload(), 1000);
+    }));
 };
 
 
@@ -13111,7 +13109,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.64" !== void 0 ? "1.1.64" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.65" !== void 0 ? "1.1.65" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
