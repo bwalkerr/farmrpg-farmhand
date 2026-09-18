@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.65
+// @version 1.1.66
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2839,6 +2839,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.watchQueries = exports.onFetchResponse = exports.registerQueryInterceptor = exports.queryInterceptors = exports.toUrl = exports.urlMatches = exports.parseUrl = exports.getJSON = exports.postData = exports.getHTML = void 0;
 const requests_1 = __webpack_require__(3813);
+const diagnostics_1 = __webpack_require__(3747);
 // The game is served from several hosts — farmrpg.com, www.farmrpg.com and
 // alpha.farmrpg.com all serve it in full, and none of them redirects to another.
 // So requests must stay on whichever host the page was actually loaded from.
@@ -3016,6 +3017,15 @@ const watchQueries = () => {
         }
         return response;
     });
+    // The game's own request helper is a global of the PAGE's world. A
+    // userscript manager that runs this script in an isolated world cannot see
+    // it, and reading an undeclared name throws -- which, uncontained, ended
+    // start-up here. `typeof` on an undeclared name is the one read that does
+    // not throw.
+    if (typeof fetchWorker !== "function") {
+        (0, diagnostics_1.logDiagnostic)("request watchers: fetchWorker not visible, not wrapped");
+        return;
+    }
     const originalFetchWorker = fetchWorker;
     fetchWorker = (action, parameters) => __awaiter(void 0, void 0, void 0, function* () {
         const response = yield originalFetchWorker(action, parameters);
@@ -3453,7 +3463,28 @@ const renderCapTab = (body, onRefresh) => {
         return;
     }
     if (view.updatedAt === 0) {
-        body.append((0, shared_1.makeEmpty)(view.isFetching ? "Reading your inventory…" : "Inventory not read yet."));
+        if (view.error && !view.isFetching) {
+            // A failed read, said so, with the retry in hand rather than another
+            // automatic attempt (which would loop on a persistent failure).
+            const empty = (0, shared_1.makeEmpty)(`Could not read your inventory (${view.error}). `);
+            const retry = document.createElement("span");
+            retry.className = "fh-link";
+            retry.textContent = "retry";
+            retry.addEventListener("click", (event) => {
+                event.stopPropagation();
+                onRefresh();
+            });
+            empty.append(retry);
+            body.append(empty);
+            return;
+        }
+        // The first read used to come only from onPageLoad. Opening the tab is as
+        // clear a request for it as there is, so ask for it here too; the tab
+        // redraws on the tracker's change notice when it lands.
+        if (!view.isFetching) {
+            onRefresh();
+        }
+        body.append((0, shared_1.makeEmpty)("Reading your inventory…"));
         return;
     }
     // Read once for the tab: the daily friend for the card, the links for the
@@ -5436,6 +5467,13 @@ const injectPanelStyles = () => {
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
       }
+      #${shared_1.PANEL_ID} .fh-perk-log-heading {
+        color: ${theme_1.TEXT_GRAY};
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        margin-top: 8px;
+        text-transform: uppercase;
+      }
       #${shared_1.PANEL_ID} .fh-briefing-tabs {
         display: flex;
         gap: 2px;
@@ -6012,6 +6050,7 @@ const recipes_1 = __webpack_require__(498);
 const api_1 = __webpack_require__(3413);
 const inventoryCapWarnings_1 = __webpack_require__(6660);
 const page_1 = __webpack_require__(7952);
+const diagnostics_1 = __webpack_require__(3747);
 const focusScope_1 = __webpack_require__(1307);
 const suggestions_1 = __webpack_require__(9262);
 const focus_1 = __webpack_require__(7167);
@@ -6894,10 +6933,18 @@ const ensurePanel = () => {
     perkNote.append(perkNoteText);
     const perkLogElement = document.createElement("div");
     perkLogElement.className = "fh-perk-log";
-    perkNote.append(perkLogElement);
-    const paintPerkLog = () => {
-        perkLogElement.replaceChildren();
-        for (const entry of (0, perks_1.getPerkLog)()) {
+    // The script's own start-up and dispatch log, below the perk log, with the
+    // running version on top. Together they are the only account a phone can
+    // give of what the script did (see utils/diagnostics.ts).
+    const diagnosticsHeading = document.createElement("div");
+    diagnosticsHeading.className = "fh-perk-log-heading";
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.66" !== void 0 ? "1.1.66" : "?"} log`;
+    const diagnosticsElement = document.createElement("div");
+    diagnosticsElement.className = "fh-perk-log";
+    perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
+    const paintLog = (element, entries) => {
+        element.replaceChildren();
+        for (const entry of entries) {
             const time = document.createElement("span");
             time.className = "fh-perk-log-time";
             time.textContent = new Date(entry.at).toLocaleTimeString(undefined, {
@@ -6907,8 +6954,12 @@ const ensurePanel = () => {
             });
             const text = document.createElement("span");
             text.textContent = entry.text;
-            perkLogElement.append(time, text);
+            element.append(time, text);
         }
+    };
+    const paintPerkLog = () => {
+        paintLog(perkLogElement, (0, perks_1.getPerkLog)());
+        paintLog(diagnosticsElement, (0, diagnostics_1.getDiagnostics)());
     };
     const paintPerk = () => {
         var _a, _b, _c, _d;
@@ -6934,6 +6985,7 @@ const ensurePanel = () => {
     };
     paintPerk();
     (0, perks_1.onPerkStatusChange)(paintPerk);
+    (0, diagnostics_1.onDiagnostic)(paintPerkLog);
     perkChip.addEventListener("click", (event) => {
         event.stopPropagation();
         const next = perkNote.dataset.on !== "true";
@@ -9313,6 +9365,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.farmhandSettings = void 0;
 const notes_1 = __webpack_require__(4735);
 const settings_1 = __webpack_require__(126);
+const page_1 = __webpack_require__(7952);
+const diagnostics_1 = __webpack_require__(3747);
 const popup_1 = __webpack_require__(469);
 const getWrapper = ({ id, type, value }, children) => {
     switch (type) {
@@ -9502,11 +9556,18 @@ exports.farmhandSettings = {
         // page's markup from the moment it is inserted, so it can be found
         // directly. Idempotent per page element, so the repeat dispatches and a
         // retained page revisited by back navigation cost nothing.
+        let drawn = 0;
         for (const currentPage of document.querySelectorAll(".view-main .page")) {
             const settingsList = currentPage.querySelector("#settingsform_options ul");
             if (settingsList) {
                 renderFarmhandSettings(currentPage, settingsList, settingValues);
+                drawn += 1;
             }
+        }
+        // Only worth a line on the options page itself: it tells apart "the
+        // dispatch never ran" from "it ran and the form was not where expected".
+        if (drawn === 0 && (0, page_1.getHashPage)() === page_1.Page.SETTINGS_OPTIONS) {
+            (0, diagnostics_1.logDiagnostic)("settings: options page open but no form found");
         }
     },
 };
@@ -10028,6 +10089,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.inventoryCapWarnings = exports.refreshCapTrackerNow = exports.onCapTrackerChange = exports.getCapTrackerView = void 0;
+const diagnostics_1 = __webpack_require__(3747);
 const page_1 = __webpack_require__(7952);
 const requests_1 = __webpack_require__(3300);
 const inventory_1 = __webpack_require__(4514);
@@ -10208,6 +10270,7 @@ const getCapTrackerView = () => {
         : undefined;
     return {
         cap: capTrackerState.cap,
+        error: capTrackerState.error,
         here,
         isEnabled: isTrackerEnabled,
         isFetching: capTrackerState.isFetching,
@@ -10259,26 +10322,37 @@ const fetchCapTrackerNow = () => __awaiter(void 0, void 0, void 0, function* () 
         return;
     }
     capTrackerState.isFetching = true;
+    scheduleRender();
     try {
         const response = yield (0, requests_1.getHTML)(page_1.Page.INVENTORY, new URLSearchParams());
         // mark updated even if parsing fails so we don't hammer the server
         // eslint-disable-next-line require-atomic-updates
         capTrackerState.updatedAt = Date.now();
+        // eslint-disable-next-line require-atomic-updates
+        capTrackerState.error = undefined;
         const result = collectCapItems(response.body);
         if (result) {
             // eslint-disable-next-line require-atomic-updates
             capTrackerState.cap = result.cap;
             // eslint-disable-next-line require-atomic-updates
             capTrackerState.items = result.items;
-            scheduleRender();
+        }
+        else {
+            // eslint-disable-next-line require-atomic-updates
+            capTrackerState.error = "inventory page not recognised";
         }
     }
-    catch (_a) {
-        // ignore fetch failures; the next refresh will retry
+    catch (error) {
+        // Kept, not swallowed: an "Inventory not read yet" that never changes
+        // was this failing quietly. The next refresh still retries.
+        // eslint-disable-next-line require-atomic-updates
+        capTrackerState.error = (0, diagnostics_1.describeError)(error);
+        (0, diagnostics_1.logFailure)("cap tracker: inventory read failed", error);
     }
     finally {
         // eslint-disable-next-line require-atomic-updates
         capTrackerState.isFetching = false;
+        scheduleRender();
     }
 });
 // passive background refresh, at most every 10 minutes
@@ -13109,7 +13183,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.65" !== void 0 ? "1.1.65" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.66" !== void 0 ? "1.1.66" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -13214,6 +13288,7 @@ const inventoryCapWarnings_1 = __webpack_require__(6660);
 const itemNeeds_1 = __webpack_require__(8525);
 const kitchenNotifications_1 = __webpack_require__(9737);
 const linkifyQuickCraft_1 = __webpack_require__(7092);
+const diagnostics_1 = __webpack_require__(3747);
 const mailboxNotifications_1 = __webpack_require__(6297);
 const maxContainers_1 = __webpack_require__(9735);
 const maxCows_1 = __webpack_require__(1103);
@@ -13306,17 +13381,31 @@ const FEATURES = [
 for (const feature of FEATURES) {
     (0, settings_1.registerSettings)(...((_a = feature.settings) !== null && _a !== void 0 ? _a : []));
 }
+// Features have no name of their own; the first setting they register is the
+// nearest thing, and the ones without settings are the internal utilities.
+const describeFeature = (feature) => { var _a, _b, _c; return (_c = (_b = (_a = feature.settings) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.id) !== null && _c !== void 0 ? _c : `feature #${FEATURES.indexOf(feature)}`; };
 const watchSubtree = (selector, handler, filter) => {
     const target = document.querySelector(selector);
     if (!target) {
         console.error(`${selector} not found`);
+        (0, diagnostics_1.logDiagnostic)(`watch: ${selector} not found (${handler} never fires)`);
         return;
     }
     const handle = () => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
-        const settings = yield (0, settings_1.getSettingValues)();
+        var _a, _b;
+        let settings;
+        try {
+            settings = yield (0, settings_1.getSettingValues)();
+        }
+        catch (error) {
+            (0, diagnostics_1.logFailure)(`${handler}: reading settings failed`, error);
+            return;
+        }
         const [page, parameters] = (0, page_1.getPage)();
         // console.debug(`${selector} Load`, page, parameters);
+        if (handler === "onPageLoad") {
+            (0, diagnostics_1.logDiagnostic)(`onPageLoad: ${page !== null && page !== void 0 ? page : "?"} (route ${(_a = (0, page_1.getHashPage)()) !== null && _a !== void 0 ? _a : "none"})`);
+        }
         for (const feature of FEATURES) {
             // Each feature on its own: a hook that throws is logged and the loop
             // moves on. Uncontained, one bad hook silently skipped every feature
@@ -13324,10 +13413,10 @@ const watchSubtree = (selector, handler, filter) => {
             // perk reconcile -- for that dispatch, with nothing on the page to say
             // so. On a phone there is no console to say so either.
             try {
-                (_a = feature[handler]) === null || _a === void 0 ? void 0 : _a.call(feature, settings, page, parameters);
+                (_b = feature[handler]) === null || _b === void 0 ? void 0 : _b.call(feature, settings, page, parameters);
             }
             catch (error) {
-                console.error(`[Farmhand] ${handler} failed`, feature, error);
+                (0, diagnostics_1.logFailure)(`${handler} failed in ${describeFeature(feature)}`, error);
             }
         }
     });
@@ -13410,55 +13499,81 @@ const watchSubtree = (selector, handler, filter) => {
                 (_a = feature.onInitialize) === null || _a === void 0 ? void 0 : _a.call(feature, settings);
             }
             catch (error) {
-                console.error("[Farmhand] onInitialize failed", feature, error);
+                (0, diagnostics_1.logFailure)(`onInitialize failed in ${describeFeature(feature)}`, error);
             }
         }
+        (0, diagnostics_1.logDiagnostic)(`init: ${FEATURES.length} features initialized`);
+        // Each remaining phase on its own. They were one straight line, so a throw
+        // in any of them -- the request watchers not finding the game's fetchWorker
+        // in this script's world, say -- meant the DOM watchers after it were never
+        // registered and no page hook ever ran, with the panel (mounted above)
+        // sitting there looking fine.
         // run any interceptors for the first page
-        const currentPage = (0, page_1.getCurrentPage)();
-        if (currentPage) {
-            console.info(`Running interceptors for ${currentPage.dataset.page}...`);
-            for (const [state, interceptor] of requests_1.queryInterceptors) {
-                const url = window.location.href.replace("/index.php#!", "");
-                if ((0, requests_1.urlMatches)(url, ...interceptor.match)) {
-                    const previous = yield state.get({ doNotFetch: true });
-                    interceptor.callback(state, previous, {
-                        headers: new Headers(),
-                        ok: true,
-                        redirected: false,
-                        status: 200,
-                        statusText: "OK",
-                        type: "default",
-                        url,
-                        text: () => Promise.resolve(currentPage.innerHTML),
-                        json: () => Promise.resolve({}),
-                        formData: () => Promise.resolve(new FormData()),
-                        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-                        blob: () => Promise.resolve(new Blob([])),
-                    });
+        try {
+            const currentPage = (0, page_1.getCurrentPage)();
+            if (currentPage) {
+                console.info(`Running interceptors for ${currentPage.dataset.page}...`);
+                for (const [state, interceptor] of requests_1.queryInterceptors) {
+                    const url = window.location.href.replace("/index.php#!", "");
+                    if ((0, requests_1.urlMatches)(url, ...interceptor.match)) {
+                        const previous = yield state.get({ doNotFetch: true });
+                        interceptor.callback(state, previous, {
+                            headers: new Headers(),
+                            ok: true,
+                            redirected: false,
+                            status: 200,
+                            statusText: "OK",
+                            type: "default",
+                            url,
+                            text: () => Promise.resolve(currentPage.innerHTML),
+                            json: () => Promise.resolve({}),
+                            formData: () => Promise.resolve(new FormData()),
+                            arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+                            blob: () => Promise.resolve(new Blob([])),
+                        });
+                    }
                 }
             }
+            else {
+                console.warn("Failed to find first page");
+                (0, diagnostics_1.logDiagnostic)("init: no first page found");
+            }
         }
-        else {
-            console.warn("Failed to find first page");
+        catch (error) {
+            (0, diagnostics_1.logFailure)("init: first-page interceptors failed", error);
         }
         console.info("Registering query interceptors...");
-        yield (0, requests_1.watchQueries)();
+        try {
+            (0, requests_1.watchQueries)();
+            (0, diagnostics_1.logDiagnostic)("init: request watchers on");
+        }
+        catch (error) {
+            (0, diagnostics_1.logFailure)("init: request watchers failed", error);
+        }
         console.info("Registering DOM watchers...");
-        // double watches because the page and nav load at different times but
-        // separating the handlers makes everything harder
-        watchSubtree(".view-main .pages", "onPageLoad", ".page");
-        watchSubtree(".view-main .navbar", "onPageLoad", ".navbar-inner");
-        watchSubtree(".view-main .pages", "onNotificationLoad", ".page > .button");
-        // watch quest popup
-        watchSubtree(".view-main .toolbar", "onQuestLoad");
-        // watch menu
-        watchSubtree(".view-left", "onMenuLoad");
-        // watch desktop and mobile versions of chat
-        watchSubtree("#mobilechatpanel", "onChatLoad");
-        watchSubtree("#desktopchatpanel", "onChatLoad");
+        try {
+            // double watches because the page and nav load at different times but
+            // separating the handlers makes everything harder
+            watchSubtree(".view-main .pages", "onPageLoad", ".page");
+            watchSubtree(".view-main .navbar", "onPageLoad", ".navbar-inner");
+            watchSubtree(".view-main .pages", "onNotificationLoad", ".page > .button");
+            // watch quest popup
+            watchSubtree(".view-main .toolbar", "onQuestLoad");
+            // watch menu
+            watchSubtree(".view-left", "onMenuLoad");
+            // watch desktop and mobile versions of chat
+            watchSubtree("#mobilechatpanel", "onChatLoad");
+            watchSubtree("#desktopchatpanel", "onChatLoad");
+            (0, diagnostics_1.logDiagnostic)("init: DOM watchers on");
+        }
+        catch (error) {
+            (0, diagnostics_1.logFailure)("init: DOM watchers failed", error);
+        }
         console.info("Farmhand running!");
     });
-})();
+})().catch((error) => {
+    (0, diagnostics_1.logFailure)("init: start-up failed", error);
+});
 
 
 /***/ }),
@@ -14209,6 +14324,52 @@ const debounce = (callback, timeout = 300) => {
     };
 };
 exports.debounce = debounce;
+
+
+/***/ }),
+
+/***/ 3747:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+// A short in-page log of what the script itself did: which start-up phases
+// completed, which dispatches ran, which hooks failed. The panel shows it
+// under the perk note.
+//
+// It exists because a phone has no console. Every mobile-only report so far
+// ("works on the web, not on the phone") has come down to guessing which of
+// the start-up steps or page dispatches never happened there, with nothing on
+// screen to say. This is the something.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.logFailure = exports.describeError = exports.logDiagnostic = exports.onDiagnostic = exports.getDiagnostics = void 0;
+const LIMIT = 40;
+const entries = [];
+const listeners = [];
+const getDiagnostics = () => entries;
+exports.getDiagnostics = getDiagnostics;
+const onDiagnostic = (listener) => {
+    listeners.push(listener);
+};
+exports.onDiagnostic = onDiagnostic;
+const logDiagnostic = (text) => {
+    entries.push({ at: Date.now(), text });
+    if (entries.length > LIMIT) {
+        entries.shift();
+    }
+    console.debug(`[Farmhand] ${text}`);
+    for (const listener of listeners) {
+        listener();
+    }
+};
+exports.logDiagnostic = logDiagnostic;
+const describeError = (error) => error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+exports.describeError = describeError;
+// Same as logDiagnostic, and to the console as an error.
+const logFailure = (text, error) => {
+    console.error(`[Farmhand] ${text}`, error);
+    (0, exports.logDiagnostic)(`${text}: ${(0, exports.describeError)(error)}`);
+};
+exports.logFailure = logFailure;
 
 
 /***/ }),
