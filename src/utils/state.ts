@@ -85,7 +85,13 @@ setInterval(async () => {
   while (lazyQueue.length > 0) {
     const task = lazyQueue.shift();
     if (task) {
-      await task();
+      // A rejected task used to leave isProcessingQueue stuck at true, so one
+      // failed lazy fetch stopped every later one from ever being run.
+      try {
+        await task();
+      } catch (error) {
+        console.error("[STATE] Lazy fetch failed", error);
+      }
     }
   }
   // eslint-disable-next-line require-atomic-updates
@@ -153,6 +159,17 @@ export class CachedState<T, Q extends Query = void> {
       console.debug(`[STATE] Waiting for ${this.key} fetch`, existingPromise);
       return await existingPromise;
     }
+    // A fetch that fails resolves to whatever was cached (or nothing) and is
+    // logged, rather than leaving this promise pending forever. It used to do
+    // the latter: a rejected fetch never resolved, so it stayed registered in
+    // gettingByQuery and every later get() for the same key -- including the
+    // doNotFetch reads the request interceptors do before they run -- waited
+    // on it for the rest of the session. One "Load failed" on the crop-status
+    // refetch (which fires at readyAt, exactly when a phone is likely asleep)
+    // was enough to stop the farm state, its interceptors and so the harvest
+    // banner from ever updating again until a reload. A desktop reloads the
+    // game often enough to hide that; a home-screen web app keeps one session
+    // for days.
     const newPromise = new Promise<T | undefined>((resolve) => {
       const queryKey = toQueryKey(query);
       const previous = this.read(query);
@@ -171,9 +188,16 @@ export class CachedState<T, Q extends Query = void> {
           timeout: this.timeout,
           previous,
         });
-        this.fetch(this, query).then((result) =>
-          resolve(this.set(result, query))
-        );
+        this.fetch(this, query)
+          .then((result) => this.set(result, query))
+          .catch((error) => {
+            console.error(
+              `[STATE] Fetching ${this.key} (query: ${queryKey}) failed`,
+              error
+            );
+            return this.read(query);
+          })
+          .then(resolve);
       } else {
         console.debug(
           `[STATE] Returning cached ${this.key} (query: ${queryKey})`,
@@ -188,9 +212,11 @@ export class CachedState<T, Q extends Query = void> {
       }
     });
     this.gettingByQuery[queryKey] = newPromise;
-    const result = await newPromise;
-    delete this.gettingByQuery[queryKey];
-    return result;
+    try {
+      return await newPromise;
+    } finally {
+      delete this.gettingByQuery[queryKey];
+    }
   }
 
   async set(

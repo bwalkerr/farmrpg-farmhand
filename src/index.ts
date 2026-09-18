@@ -168,7 +168,16 @@ const watchSubtree = (
     const [page, parameters] = getPage();
     // console.debug(`${selector} Load`, page, parameters);
     for (const feature of FEATURES) {
-      feature[handler]?.(settings, page, parameters);
+      // Each feature on its own: a hook that throws is logged and the loop
+      // moves on. Uncontained, one bad hook silently skipped every feature
+      // registered after it -- the cap tracker, the settings section, the
+      // perk reconcile -- for that dispatch, with nothing on the page to say
+      // so. On a phone there is no console to say so either.
+      try {
+        feature[handler]?.(settings, page, parameters);
+      } catch (error) {
+        console.error(`[Farmhand] ${handler} failed`, feature, error);
+      }
     }
   };
 
@@ -249,9 +258,11 @@ const watchSubtree = (
   // initialize
   console.info("Running initializers...");
   const settings = await getSettingValues();
-  for (const { onInitialize } of FEATURES) {
-    if (onInitialize) {
-      onInitialize(settings);
+  for (const feature of FEATURES) {
+    try {
+      feature.onInitialize?.(settings);
+    } catch (error) {
+      console.error("[Farmhand] onInitialize failed", feature, error);
     }
   }
 

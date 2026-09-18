@@ -1,5 +1,5 @@
 import { CachedState, QueryInterceptor } from "../../../utils/state";
-import { getDocument } from "../../../utils/requests";
+import { getDocument, Responselike } from "../../../utils/requests";
 import { Page } from "../../../utils/page";
 
 // The game is served from several hosts — farmrpg.com, www.farmrpg.com and
@@ -146,8 +146,36 @@ export const onFetchResponse = async (response: Response): Promise<void> => {
 
   for (const [state, interceptor, body] of matches) {
     console.debug(`[STATE] fetch intercepted ${response.url}`, interceptor);
+    await runInterceptor(state, interceptor, body);
+  }
+};
+
+// One interceptor, contained: a callback that throws (or rejects) is logged
+// and the next one still runs. Without this a single bad parse took every
+// interceptor queued after it for that response with it -- and in the XHR
+// path below, which walks the whole registry in one loop, it took every
+// interceptor registered after it, for every later response. The callback is
+// started, not awaited, as it always was: some of them fetch, and the ones
+// behind must not wait on that.
+const runInterceptor = async (
+  state: CachedState<any, any>,
+  interceptor: QueryInterceptor<any, any>,
+  response: Responselike
+): Promise<void> => {
+  const report = (error: unknown): void => {
+    console.error(
+      `[STATE] Interceptor for ${response.url} failed`,
+      interceptor,
+      error
+    );
+  };
+  try {
     const previous = await state.get({ doNotFetch: true });
-    interceptor.callback(state, previous, body);
+    Promise.resolve(interceptor.callback(state, previous, response)).catch(
+      report
+    );
+  } catch (error) {
+    report(error);
   }
 };
 
@@ -170,8 +198,7 @@ export const watchQueries = (): void => {
                 `[STATE] XMLHttpRequest intercepted ${this.responseURL}`,
                 interceptor
               );
-              const previous = await state.get({ doNotFetch: true });
-              interceptor.callback(state, previous, {
+              await runInterceptor(state, interceptor, {
                 headers: new Headers(),
                 ok: this.status >= 200 && this.status < 300,
                 redirected: false,
