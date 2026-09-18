@@ -1218,6 +1218,8 @@ const ensurePanel = (): void => {
       text.textContent = entry.text;
       element.append(time, text);
     }
+    // newest entry last, so that is where the eye should land
+    element.scrollTop = element.scrollHeight;
   };
   const paintPerkLog = (): void => {
     paintLog(perkLogElement, getPerkLog());

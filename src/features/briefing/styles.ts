@@ -266,12 +266,27 @@ export const injectPanelStyles = (): void => {
       /* The log under the note: one line per perk decision, newest last, so an
          ordering problem (a reconcile landing between a harvest's switch and
          the harvest) is visible as two entries a second apart. */
+      /* Each log is a box of its own that scrolls, not a column that runs
+         off the bottom of the panel: 40 diagnostic lines is taller than a
+         phone. Newest is last, so the paint scrolls it to the end. */
       #${PANEL_ID} .fh-perk-log {
         display: grid;
         grid-template-columns: auto 1fr;
         column-gap: 6px;
+        align-content: start;
         margin-top: 4px;
-        opacity: 0.85;
+        max-height: 150px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding: 4px 6px;
+        border-radius: var(--fh-radius-s);
+        background: rgba(0, 0, 0, 0.18);
+        opacity: 0.9;
+      }
+      #${PANEL_ID} .fh-perk-log > span {
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       #${PANEL_ID} .fh-perk-log-time {
         font-variant-numeric: tabular-nums;
