@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.63
+// @version 1.1.64
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1793,10 +1793,17 @@ const eraseData = (notes) => {
     return notes.slice(0, start) + notes.slice(end + exports.FARMHAND_SUFFIX.length);
 };
 exports.eraseData = eraseData;
+// Every setting with its STORED value. The registered setting objects only
+// carry a `value` once the settings page has drawn them, so exporting them
+// as they are wrote a `value`-less list to the notes whenever anything else
+// saved data (collapsing a quest, reading an update, starring a request) --
+// and the importer below read a missing value as the default. Any device that
+// then loaded the home page had every non-default setting put back to its
+// default, with the "Settings Synced" reload to go with it.
 const encodeData = () => __awaiter(void 0, void 0, void 0, function* () {
-    const exportedSettings = Object.values((0, settings_1.getSettings)());
-    for (const setting of exportedSettings) {
-        setting.data = yield (0, settings_1.getData)(setting, "");
+    const exportedSettings = [];
+    for (const setting of (0, settings_1.getSettings)()) {
+        exportedSettings.push(Object.assign(Object.assign({}, (yield (0, settings_1.getSetting)(setting))), { data: yield (0, settings_1.getData)(setting, "") }));
     }
     return `${exports.FARMHAND_PREFIX}${JSON.stringify(exportedSettings)}${exports.FARMHAND_SUFFIX}`;
 });
@@ -1818,7 +1825,10 @@ const processHome = (root) => {
     (() => __awaiter(void 0, void 0, void 0, function* () {
         let hasChanged = false;
         for (const setting of settings) {
-            const settingChanged = yield (0, settings_1.setSetting)(setting);
+            // An entry with no value says nothing about that setting (a note
+            // written by an older build): leave the stored value alone rather
+            // than reading it as "back to the default".
+            const settingChanged = setting.value === undefined ? false : yield (0, settings_1.setSetting)(setting);
             const dataChanged = yield (0, settings_1.setData)(setting, setting.data);
             if (!hasChanged && (settingChanged || dataChanged)) {
                 hasChanged = true;
@@ -2937,11 +2947,29 @@ const onFetchResponse = (response) => __awaiter(void 0, void 0, void 0, function
     }
     for (const [state, interceptor, body] of matches) {
         console.debug(`[STATE] fetch intercepted ${response.url}`, interceptor);
-        const previous = yield state.get({ doNotFetch: true });
-        interceptor.callback(state, previous, body);
+        yield runInterceptor(state, interceptor, body);
     }
 });
 exports.onFetchResponse = onFetchResponse;
+// One interceptor, contained: a callback that throws (or rejects) is logged
+// and the next one still runs. Without this a single bad parse took every
+// interceptor queued after it for that response with it -- and in the XHR
+// path below, which walks the whole registry in one loop, it took every
+// interceptor registered after it, for every later response. The callback is
+// started, not awaited, as it always was: some of them fetch, and the ones
+// behind must not wait on that.
+const runInterceptor = (state, interceptor, response) => __awaiter(void 0, void 0, void 0, function* () {
+    const report = (error) => {
+        console.error(`[STATE] Interceptor for ${response.url} failed`, interceptor, error);
+    };
+    try {
+        const previous = yield state.get({ doNotFetch: true });
+        Promise.resolve(interceptor.callback(state, previous, response)).catch(report);
+    }
+    catch (error) {
+        report(error);
+    }
+});
 const watchQueries = () => {
     (function (open) {
         XMLHttpRequest.prototype.open = function () {
@@ -2957,8 +2985,7 @@ const watchQueries = () => {
                     for (const [state, interceptor] of exports.queryInterceptors) {
                         if ((0, exports.urlMatches)(this.responseURL, ...interceptor.match)) {
                             console.debug(`[STATE] XMLHttpRequest intercepted ${this.responseURL}`, interceptor);
-                            const previous = yield state.get({ doNotFetch: true });
-                            interceptor.callback(state, previous, {
+                            yield runInterceptor(state, interceptor, {
                                 headers: new Headers(),
                                 ok: this.status >= 200 && this.status < 300,
                                 redirected: false,
@@ -3340,6 +3367,7 @@ const inventoryCapWarnings_1 = __webpack_require__(6660);
 const townsfolk_1 = __webpack_require__(2161);
 const shared_1 = __webpack_require__(4073);
 const api_1 = __webpack_require__(3413);
+const gameLinks_1 = __webpack_require__(1616);
 const promise_1 = __webpack_require__(6762);
 const theme_1 = __webpack_require__(1178);
 // The Cap tab: what is at or near the inventory cap, and what to DO about it.
@@ -3417,7 +3445,11 @@ const makeCapRow = (item, cap) => (0, shared_1.makeRow)(item.name, {
 const renderCapTab = (body, onRefresh) => {
     const view = (0, inventoryCapWarnings_1.getCapTrackerView)();
     if (!view.isEnabled) {
-        body.append((0, shared_1.makeEmpty)("The cap tracker is off — turn on “Inventory: Cap tracker” in settings."));
+        // The settings page is a link, not a direction: on a phone the menu route
+        // to it is the very thing that has been hard to find.
+        const empty = (0, shared_1.makeEmpty)("The cap tracker is off — turn on “Inventory: Cap tracker” in ");
+        empty.append((0, gameLinks_1.makeLink)(gameLinks_1.SETTINGS_HREF, "Farmhand settings", "var(--fh-accent)"), ".");
+        body.append(empty);
         return;
     }
     if (view.updatedAt === 0) {
@@ -5345,6 +5377,16 @@ const injectPanelStyles = () => {
         font-size: 11px;
       }
       #${shared_1.PANEL_ID} .fh-briefing-refresh:hover { color: ${theme_1.TEXT_WHITE}; }
+      /* The way to the Farmhand settings from anywhere. On a desktop the
+         menu gets you there; on a phone it is the one route that keeps
+         going missing, and the panel is always on screen. */
+      #${shared_1.PANEL_ID} .fh-briefing-settings {
+        color: ${theme_1.TEXT_GRAY};
+        font-size: 13px;
+        line-height: 1;
+        text-decoration: none;
+      }
+      #${shared_1.PANEL_ID} .fh-briefing-settings:hover { color: ${theme_1.TEXT_WHITE}; }
       /* How old the numbers are. The panel outlives navigation, so without
          this there is no telling whether it is showing this minute or whatever
          was true when it was opened. Muted: it is a caveat, not a reading. */
@@ -5545,6 +5587,10 @@ const injectPanelStyles = () => {
         #${shared_1.PANEL_ID} .fh-briefing-refresh {
           font-size: 12px;
           padding: 6px 2px 6px 10px;
+        }
+        #${shared_1.PANEL_ID} .fh-briefing-settings {
+          font-size: 16px;
+          padding: 6px 4px;
         }
         /* The perk chip is the note's only way open on a phone, which is the
            one place the note matters, so it gets a thumb-sized box. */
@@ -5980,6 +6026,7 @@ const gameLinks_1 = __webpack_require__(1616);
 const search_1 = __webpack_require__(5164);
 const mastery_1 = __webpack_require__(283);
 const locationAdvice_1 = __webpack_require__(4764);
+const pageTransitions_1 = __webpack_require__(7694);
 const promise_1 = __webpack_require__(6762);
 const unlimited_1 = __webpack_require__(4808);
 const cap_1 = __webpack_require__(2206);
@@ -6906,9 +6953,16 @@ const ensurePanel = () => {
     const refresh = document.createElement("span");
     refresh.className = "fh-briefing-refresh";
     refresh.textContent = "refresh";
+    const settingsLink = document.createElement("a");
+    settingsLink.className = "fh-briefing-settings";
+    settingsLink.href = gameLinks_1.SETTINGS_HREF;
+    settingsLink.dataset.view = ".view-main";
+    settingsLink.textContent = "⚙";
+    settingsLink.title = "Farmhand settings";
+    settingsLink.setAttribute("aria-label", "Farmhand settings");
     const controls = document.createElement("div");
     controls.className = "fh-briefing-controls";
-    controls.append(age, refresh);
+    controls.append(age, refresh, settingsLink);
     head.append(heading, controls);
     const chip = document.createElement("div");
     chip.className = "fh-focus-chip";
@@ -7192,6 +7246,7 @@ const ensurePanel = () => {
         refreshHere();
     };
     const refreshHere = () => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b;
         const previous = context;
         if (!previous) {
             return;
@@ -7199,9 +7254,29 @@ const ensurePanel = () => {
         const here = yield getHere();
         // a full reload may have replaced the context while this was in flight;
         // its `here` is already current, so leave it alone
-        if (context === previous) {
-            context = Object.assign(Object.assign({}, previous), { here });
-            draw();
+        if (context !== previous) {
+            return;
+        }
+        // Nothing moved, nothing to redraw: this also runs on every page
+        // transition now, most of which are between pages that are not
+        // locations, and a redraw would throw away a lookup you were reading.
+        if ((here === null || here === void 0 ? void 0 : here.location.name) === ((_a = previous.here) === null || _a === void 0 ? void 0 : _a.location.name) &&
+            (here === null || here === void 0 ? void 0 : here.stamina) === ((_b = previous.here) === null || _b === void 0 ? void 0 : _b.stamina)) {
+            return;
+        }
+        context = Object.assign(Object.assign({}, previous), { here });
+        draw();
+    });
+    // On a desktop the panel sits open beside the game, so walking from town to
+    // the Misty Forest never re-opened it and "here" stayed wherever it was
+    // first read. A phone closes and re-opens the panel around every move, which
+    // is why the Now tab followed you there and not on a PC. Only while open and
+    // loaded: nothing is fetched for a closed panel, as before.
+    (0, pageTransitions_1.onPageTransition)(() => {
+        if (panel.dataset.open === "true" && hasLoaded) {
+            refreshHere().catch((error) => {
+                console.error("Failed to refresh the panel's location", error);
+            });
         }
     });
     button.addEventListener("click", (event) => {
@@ -9419,8 +9494,12 @@ exports.farmhandSettings = {
     },
     onPageLoad: (settingValues, page) => {
         var _a;
-        // make sure we are on the settings page
-        if (page !== page_1.Page.SETTINGS_OPTIONS) {
+        // make sure we are on the settings page -- by what the page says it is OR
+        // by the route, the way the banners and the perk code already match:
+        // `data-page` alone has been wrong often enough elsewhere in this fork,
+        // and when it is wrong here the Farmhand section never appears at all.
+        if (page !== page_1.Page.SETTINGS_OPTIONS &&
+            (0, page_1.getHashPage)() !== page_1.Page.SETTINGS_OPTIONS) {
             return;
         }
         // make sure page content has loaded
@@ -10374,6 +10453,12 @@ const renderInventoryCapWarnings = () => {
 };
 exports.inventoryCapWarnings = {
     settings: [SETTING_INVENTORY_CAP_WARNINGS, SETTING_INVENTORY_CAP_TRACKER],
+    // The flag the Cap tab reads was set only by onPageLoad, so until the first
+    // page dispatch had run -- or if it never ran -- the tab reported the
+    // tracker as "off" over a setting that was on. Read the setting up front.
+    onInitialize: (settings) => {
+        isTrackerEnabled = Boolean(settings[settings_1.SettingId.INVENTORY_CAP_TRACKER]);
+    },
     onPageLoad: (settings) => {
         const isInventory = isInventoryPage();
         if (settings[settings_1.SettingId.INVENTORY_CAP_WARNINGS] && isInventory) {
@@ -13026,7 +13111,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.63" !== void 0 ? "1.1.63" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.64" !== void 0 ? "1.1.64" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -13235,7 +13320,17 @@ const watchSubtree = (selector, handler, filter) => {
         const [page, parameters] = (0, page_1.getPage)();
         // console.debug(`${selector} Load`, page, parameters);
         for (const feature of FEATURES) {
-            (_a = feature[handler]) === null || _a === void 0 ? void 0 : _a.call(feature, settings, page, parameters);
+            // Each feature on its own: a hook that throws is logged and the loop
+            // moves on. Uncontained, one bad hook silently skipped every feature
+            // registered after it -- the cap tracker, the settings section, the
+            // perk reconcile -- for that dispatch, with nothing on the page to say
+            // so. On a phone there is no console to say so either.
+            try {
+                (_a = feature[handler]) === null || _a === void 0 ? void 0 : _a.call(feature, settings, page, parameters);
+            }
+            catch (error) {
+                console.error(`[Farmhand] ${handler} failed`, feature, error);
+            }
         }
     });
     const observer = new MutationObserver((mutations) => {
@@ -13272,6 +13367,7 @@ const watchSubtree = (selector, handler, filter) => {
     return __awaiter(this, void 0, void 0, function* () {
         // eslint-disable-next-line unicorn/prefer-module
         "use strict";
+        var _a;
         console.info("STARTING Farmhand by Ansel Santosa");
         console.info("Running migrations...");
         const keys = yield GM.listValues();
@@ -13311,9 +13407,12 @@ const watchSubtree = (selector, handler, filter) => {
         // initialize
         console.info("Running initializers...");
         const settings = yield (0, settings_1.getSettingValues)();
-        for (const { onInitialize } of FEATURES) {
-            if (onInitialize) {
-                onInitialize(settings);
+        for (const feature of FEATURES) {
+            try {
+                (_a = feature.onInitialize) === null || _a === void 0 ? void 0 : _a.call(feature, settings);
+            }
+            catch (error) {
+                console.error("[Farmhand] onInitialize failed", feature, error);
             }
         }
         // run any interceptors for the first page
@@ -14381,13 +14480,15 @@ exports.setFocusedScopes = setFocusedScopes;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.makeHeading = exports.makeMutedText = exports.makeLinkedLine = exports.makeQuestLink = exports.makeLocationLink = exports.toLocationHref = exports.makeItemLink = exports.makeLink = exports.applyLinkStyle = void 0;
+exports.makeHeading = exports.makeMutedText = exports.makeLinkedLine = exports.makeQuestLink = exports.makeLocationLink = exports.toLocationHref = exports.makeItemLink = exports.makeLink = exports.applyLinkStyle = exports.SETTINGS_HREF = void 0;
 const theme_1 = __webpack_require__(1178);
 // Framework7 only routes a click through its own navigation when the anchor
 // declares which view to load into. Without this the link does a full page
 // load, which drops the SPA state and takes seconds — the same attribute the
 // quick-craft linkifier sets.
 const VIEW = ".view-main";
+// The game's options page, where the Farmhand section lives.
+exports.SETTINGS_HREF = "settings_options.php";
 const applyLinkStyle = (link, color) => {
     link.dataset.view = VIEW;
     link.style.color = color;
@@ -15676,6 +15777,62 @@ exports.getListByTitle = getListByTitle;
 
 /***/ }),
 
+/***/ 7694:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.onPageTransition = void 0;
+// Fires after the game slides a different page into view -- forward OR back.
+//
+// The childList dispatch in index.ts only sees a page element being ADDED,
+// and going back adds nothing: Framework7 keeps the page you came from in the
+// DOM and re-shows it by changing its class. Watching the class catches every
+// transition. Same observer shape as utils/notifications.ts and the perk
+// reconciler, kept as one helper here for anything else that needs to notice
+// you moved.
+//
+// Debounced, because a transition changes the class several times (leaving,
+// entering, settled) and mid-transition the hash has already moved while the
+// page swap has not landed. The last change is the settled one, so a listener
+// that reads the page always gets the final state.
+const onPageTransition = (listener, debounceMs = 100, attempt = 0) => {
+    const pages = document.querySelector(".view-main .pages");
+    if (!pages) {
+        // Registered from an initializer, this can run before the shell is in the
+        // DOM. Try again for a while rather than silently never watching.
+        if (attempt < 40) {
+            setTimeout(() => (0, exports.onPageTransition)(listener, debounceMs, attempt + 1), 500);
+        }
+        else {
+            console.error("Pages not found");
+        }
+        return;
+    }
+    let timeout;
+    const observer = new MutationObserver((mutations) => {
+        var _a, _b;
+        for (const mutation of mutations) {
+            // Only a page's own class, never a descendant's: with subtree watching,
+            // classes set on anything inside the page would otherwise fire this too.
+            if ((_b = (_a = mutation.target).matches) === null || _b === void 0 ? void 0 : _b.call(_a, ".page")) {
+                clearTimeout(timeout);
+                timeout = setTimeout(listener, debounceMs);
+                return;
+            }
+        }
+    });
+    observer.observe(pages, {
+        attributeFilter: ["class"],
+        attributes: true,
+        subtree: true,
+    });
+};
+exports.onPageTransition = onPageTransition;
+
+
+/***/ }),
+
 /***/ 469:
 /***/ (function(__unused_webpack_module, exports) {
 
@@ -16077,7 +16234,14 @@ setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
     while (lazyQueue.length > 0) {
         const task = lazyQueue.shift();
         if (task) {
-            yield task();
+            // A rejected task used to leave isProcessingQueue stuck at true, so one
+            // failed lazy fetch stopped every later one from ever being run.
+            try {
+                yield task();
+            }
+            catch (error) {
+                console.error("[STATE] Lazy fetch failed", error);
+            }
         }
     }
     // eslint-disable-next-line require-atomic-updates
@@ -16114,6 +16278,17 @@ class CachedState {
                 console.debug(`[STATE] Waiting for ${this.key} fetch`, existingPromise);
                 return yield existingPromise;
             }
+            // A fetch that fails resolves to whatever was cached (or nothing) and is
+            // logged, rather than leaving this promise pending forever. It used to do
+            // the latter: a rejected fetch never resolved, so it stayed registered in
+            // gettingByQuery and every later get() for the same key -- including the
+            // doNotFetch reads the request interceptors do before they run -- waited
+            // on it for the rest of the session. One "Load failed" on the crop-status
+            // refetch (which fires at readyAt, exactly when a phone is likely asleep)
+            // was enough to stop the farm state, its interceptors and so the harvest
+            // banner from ever updating again until a reload. A desktop reloads the
+            // game often enough to hide that; a home-screen web app keeps one session
+            // for days.
             const newPromise = new Promise((resolve) => {
                 const queryKey = toQueryKey(query);
                 const previous = this.read(query);
@@ -16130,7 +16305,13 @@ class CachedState {
                         timeout: this.timeout,
                         previous,
                     });
-                    this.fetch(this, query).then((result) => resolve(this.set(result, query)));
+                    this.fetch(this, query)
+                        .then((result) => this.set(result, query))
+                        .catch((error) => {
+                        console.error(`[STATE] Fetching ${this.key} (query: ${queryKey}) failed`, error);
+                        return this.read(query);
+                    })
+                        .then(resolve);
                 }
                 else {
                     console.debug(`[STATE] Returning cached ${this.key} (query: ${queryKey})`, {
@@ -16143,9 +16324,12 @@ class CachedState {
                 }
             });
             this.gettingByQuery[queryKey] = newPromise;
-            const result = yield newPromise;
-            delete this.gettingByQuery[queryKey];
-            return result;
+            try {
+                return yield newPromise;
+            }
+            finally {
+                delete this.gettingByQuery[queryKey];
+            }
         });
     }
     set(input, query) {
