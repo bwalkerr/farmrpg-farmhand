@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.66
+// @version 1.1.67
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -697,6 +697,7 @@ const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
+const diagnostics_1 = __webpack_require__(3747);
 const popup_1 = __webpack_require__(469);
 var CropStatus;
 (function (CropStatus) {
@@ -782,10 +783,32 @@ const processFarmPage = (root) => {
     }
     return { status, count, readyAt };
 };
+// Every crop-status update goes through here so the panel's log says which
+// feed set it and to what. The harvest banner is nothing but this status; when
+// it fails to show on a phone, this is the line that says whether the status
+// ever reached READY, and from where.
+const describeStatus = (status) => {
+    const due = status.readyAt === Number.POSITIVE_INFINITY
+        ? ""
+        : `, ready in ${Math.max(0, Math.round((status.readyAt - Date.now()) / 60000))}m`;
+    return `${status.status} x${status.count}${due}`;
+};
+const setFarmStatus = (state, status, source) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!status) {
+        (0, diagnostics_1.logDiagnostic)(`field: ${source} unreadable, keeping status`);
+        return;
+    }
+    (0, diagnostics_1.logDiagnostic)(`field: ${source} -> ${describeStatus(status)}`);
+    yield state.set(status);
+});
 const scheduledUpdates = {};
 exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_2.getHTML)(page_1.Page.FARM, new URLSearchParams());
-    return processFarmPage(response.body);
+    const status = processFarmPage(response.body);
+    (0, diagnostics_1.logDiagnostic)(status
+        ? `field: farm page read -> ${describeStatus(status)}`
+        : "field: farm page read unreadable, keeping status");
+    return status;
 }), {
     timeout: 5,
     // Live status, so don't keep it between sessions. A five-second value
@@ -804,22 +827,16 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.READY_COUNT })],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
                 const root = yield (0, requests_1.getDocument)(response);
-                const status = processFarmStatus(root.body);
                 // undefined means we couldn't read it — say nothing rather than
                 // overwriting a good status with a guess
-                if (status) {
-                    yield state.set(status);
-                }
+                yield setFarmStatus(state, processFarmStatus(root.body), "readycount");
             }),
         },
         {
             match: [page_1.Page.FARM, new URLSearchParams()],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
                 const root = yield (0, requests_1.getDocument)(response);
-                const status = processFarmPage(root.body);
-                if (status) {
-                    yield state.set(status);
-                }
+                yield setFarmStatus(state, processFarmPage(root.body), "farm page");
             }),
         },
         {
@@ -828,21 +845,20 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
                 const root = yield (0, requests_1.getDocument)(response);
                 const linkStatus = root.body.querySelector("a[href^='xfarm.php'] .item-after");
                 if (!linkStatus) {
+                    (0, diagnostics_1.logDiagnostic)("field: home page has no xfarm row");
                     return;
                 }
-                const status = processFarmStatus(linkStatus);
-                if (status) {
-                    yield state.set(status);
-                }
+                yield setFarmStatus(state, processFarmStatus(linkStatus), "home page");
             }),
         },
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.FARM_STATUS })],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
+                var _a;
                 const raw = yield response.text();
                 const rawPlots = raw.split(";").filter((plot) => plot.trim());
                 if (rawPlots.length === 0) {
-                    console.debug("[FARM] Empty farmstatus response, keeping status");
+                    (0, diagnostics_1.logDiagnostic)("field: farmstatus feed empty, keeping status");
                     return;
                 }
                 // A plot counts as planted if it has progress OR time left to run.
@@ -871,7 +887,7 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
                         readyAt = Math.min(readyAt, Date.now() + (remaining > 0 ? remaining : 60) * 1000);
                     }
                 }
-                yield state.set(Object.assign(Object.assign({}, previous), { status, readyAt }));
+                yield setFarmStatus(state, Object.assign(Object.assign({}, previous), { count: (_a = previous === null || previous === void 0 ? void 0 : previous.count) !== null && _a !== void 0 ? _a : 0, status, readyAt }), "farmstatus feed");
             }),
         },
         {
@@ -924,6 +940,7 @@ const updateStatus = () => __awaiter(void 0, void 0, void 0, function* () {
     }
     if (state.status !== CropStatus.READY && state.readyAt < Date.now()) {
         // time's up — verify against the real farm page instead of assuming ready
+        (0, diagnostics_1.logDiagnostic)("field: timer up, re-reading the farm page");
         yield exports.farmStatusState.get({ ignoreCache: true });
     }
 });
@@ -6938,7 +6955,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.66" !== void 0 ? "1.1.66" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.67" !== void 0 ? "1.1.67" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -9753,6 +9770,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fieldNotifications = void 0;
 const farm_1 = __webpack_require__(6228);
 const notifications_1 = __webpack_require__(6783);
+const diagnostics_1 = __webpack_require__(3747);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
 const requests_1 = __webpack_require__(3300);
@@ -9790,8 +9808,11 @@ const renderFields = (settings, state) => __awaiter(void 0, void 0, void 0, func
     if (!state) {
         return;
     }
+    // The status is logged where it is set (apis/farm.ts); this is what the
+    // banner made of it, so the two lines together say why it is or isn't there.
     if (state.status === farm_1.CropStatus.EMPTY &&
         settings[settings_1.SettingId.FIELD_EMPTY_NOTIFICATIONS]) {
+        (0, diagnostics_1.logDiagnostic)("field banner: fields are empty");
         (0, notifications_1.sendNotification)({
             class: "btnorange",
             id: notifications_1.NotificationId.FIELD,
@@ -9803,6 +9824,7 @@ const renderFields = (settings, state) => __awaiter(void 0, void 0, void 0, func
     else if (state.status === farm_1.CropStatus.READY &&
         settings[settings_1.SettingId.HARVEST_NOTIFICATIONS]) {
         const farmUrl = (0, requests_1.toUrl)(page_1.Page.FARM, new URLSearchParams({ id: String(farmId) }));
+        (0, diagnostics_1.logDiagnostic)(`field banner: crops are ready (farm ${farmId})`);
         (0, notifications_1.sendNotification)({
             class: "btngreen",
             id: notifications_1.NotificationId.FIELD,
@@ -9819,6 +9841,9 @@ const renderFields = (settings, state) => __awaiter(void 0, void 0, void 0, func
         });
     }
     else {
+        (0, diagnostics_1.logDiagnostic)(state.status === farm_1.CropStatus.GROWING
+            ? "field banner: none, crops growing"
+            : `field banner: none, ${state.status} but its notification is off`);
         (0, notifications_1.removeNotification)(notifications_1.NotificationId.FIELD);
     }
 });
@@ -13183,7 +13208,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.66" !== void 0 ? "1.1.66" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.67" !== void 0 ? "1.1.67" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -15524,6 +15549,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.notifications = exports.removeNotification = exports.sendNotification = exports.registerNotificationHandler = exports.Handler = exports.NotificationId = void 0;
 const page_1 = __webpack_require__(7952);
 const object_1 = __webpack_require__(7968);
+const diagnostics_1 = __webpack_require__(3747);
 const KEY_NOTIFICATIONS = "notifications";
 var NotificationId;
 (function (NotificationId) {
@@ -15585,6 +15611,19 @@ const toSignature = (notification) => {
         ...((_c = (_b = notification.actions) === null || _b === void 0 ? void 0 : _b.map((action) => action.text)) !== null && _c !== void 0 ? _c : []),
     ].join("|");
 };
+// A banner action that fails used to fail silently: the "Loading..." label
+// stayed, or the banner simply came back, with nothing on a phone to say
+// which. Timed and logged, so the panel's log shows what the tap did.
+const runHandler = (notification, name, handler) => __awaiter(void 0, void 0, void 0, function* () {
+    const startedAt = Date.now();
+    try {
+        yield handler(notification);
+        (0, diagnostics_1.logDiagnostic)(`banner ${notification.id}: ${name} done (${Date.now() - startedAt}ms)`);
+    }
+    catch (error) {
+        (0, diagnostics_1.logFailure)(`banner ${notification.id}: ${name} failed`, error);
+    }
+});
 const renderNotifications = (force = false) => {
     var _a, _b, _c, _d, _e, _f, _g;
     const pageContent = (_a = (0, page_1.getCurrentPage)()) === null || _a === void 0 ? void 0 : _a.querySelector(".page-content");
@@ -15688,9 +15727,10 @@ const renderNotifications = (force = false) => {
             notificationElement.addEventListener("click", (event) => __awaiter(void 0, void 0, void 0, function* () {
                 event.preventDefault();
                 event.stopPropagation();
+                (0, diagnostics_1.logDiagnostic)(`banner ${notification.id}: tapped`);
                 const handler = notificationHandlers.get(notification.handler);
                 if (handler) {
-                    yield handler(notification);
+                    yield runHandler(notification, notification.handler, handler);
                 }
                 else {
                     console.error(`Handler not found: ${notification.handler}`);
@@ -15713,9 +15753,10 @@ const renderNotifications = (force = false) => {
                     actionElement.textContent = "Loading...";
                     event.preventDefault();
                     event.stopPropagation();
+                    (0, diagnostics_1.logDiagnostic)(`banner ${notification.id}: ${action.text} tapped`);
                     const handler = notificationHandlers.get(action.handler);
                     if (handler) {
-                        yield handler(notification);
+                        yield runHandler(notification, action.handler, handler);
                     }
                     else {
                         console.error(`Handler not found: ${action.handler}`);
