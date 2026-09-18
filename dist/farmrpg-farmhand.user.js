@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.68
+// @version 1.1.69
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -753,7 +753,7 @@ const processFarmStatus = (root) => {
             ? { status: CropStatus.READY, count, readyAt: Date.now() }
             : undefined;
     }
-    console.debug("[FARM] Unreadable field summary, keeping status", statusText);
+    (0, diagnostics_1.logDiagnostic)(`field: summary text not understood: "${statusText.slice(0, 40)}"`);
     return undefined;
 };
 const processFarmPage = (root) => {
@@ -801,7 +801,6 @@ const setFarmStatus = (state, status, source) => __awaiter(void 0, void 0, void 
     (0, diagnostics_1.logDiagnostic)(`field: ${source} -> ${describeStatus(status)}`);
     yield state.set(status);
 });
-const scheduledUpdates = {};
 exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS, () => __awaiter(void 0, void 0, void 0, function* () {
     const response = yield (0, requests_2.getHTML)(page_1.Page.FARM, new URLSearchParams());
     const status = processFarmPage(response.body);
@@ -842,10 +841,17 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
         {
             match: [page_1.Page.HOME_PATH, new URLSearchParams()],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
+                var _a;
                 const root = yield (0, requests_1.getDocument)(response);
                 const linkStatus = root.body.querySelector("a[href^='xfarm.php'] .item-after");
                 if (!linkStatus) {
                     (0, diagnostics_1.logDiagnostic)("field: home page has no xfarm row");
+                    return;
+                }
+                if (!((_a = linkStatus.textContent) === null || _a === void 0 ? void 0 : _a.trim())) {
+                    // the row is filled in by the game's readycount poll later; the
+                    // poll's reply has its own interceptor above
+                    (0, diagnostics_1.logDiagnostic)("field: home page row is blank");
                     return;
                 }
                 yield setFarmStatus(state, processFarmStatus(linkStatus), "home page");
@@ -893,7 +899,8 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.HARVEST_ALL })],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
-                yield state.set(Object.assign(Object.assign({}, previous), { status: CropStatus.EMPTY }));
+                var _a;
+                yield setFarmStatus(state, Object.assign(Object.assign({}, previous), { count: (_a = previous === null || previous === void 0 ? void 0 : previous.count) !== null && _a !== void 0 ? _a : 0, status: CropStatus.EMPTY, readyAt: Number.POSITIVE_INFINITY }), "harvest all");
                 const { drops } = (yield response.json());
                 const [page] = (0, page_1.getPage)();
                 const settings = yield (0, settings_1.getSettingValues)();
@@ -928,7 +935,10 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.PLANT_ALL })],
             callback: (state, previous) => __awaiter(void 0, void 0, void 0, function* () {
-                yield state.set(Object.assign(Object.assign({}, previous), { status: CropStatus.GROWING }));
+                var _a;
+                // How long the new crop takes is not in this reply; read the farm
+                // page for it in a minute rather than keeping the old readyAt.
+                yield setFarmStatus(state, Object.assign(Object.assign({}, previous), { count: (_a = previous === null || previous === void 0 ? void 0 : previous.count) !== null && _a !== void 0 ? _a : 0, status: CropStatus.GROWING, readyAt: Date.now() + 60 * 1000 }), "plant all");
             }),
         },
     ],
@@ -938,21 +948,32 @@ const updateStatus = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!state) {
         return;
     }
-    if (state.status !== CropStatus.READY && state.readyAt < Date.now()) {
+    if (state.status !== CropStatus.READY && state.readyAt <= Date.now()) {
         // time's up — verify against the real farm page instead of assuming ready
         (0, diagnostics_1.logDiagnostic)("field: timer up, re-reading the farm page");
         yield exports.farmStatusState.get({ ignoreCache: true });
     }
 });
-// automatically update crops when finished
+// One pending re-check, moved to wherever the latest status says it belongs.
+// This was a map keyed by readyAt, meant to stop the same moment being
+// scheduled twice -- but nothing ever removed a key once its timer had fired,
+// so a later status that carried the same readyAt scheduled NOTHING. That is
+// every harvest and plant: both spread `...previous`, so the GROWING set after
+// a replant kept the harvest's readyAt (already in the past, already in the
+// map) and the farm page was never re-read. On the web the game's own
+// readycount poll papered over it, since Reed sits on the home page where
+// that poll runs; a phone that has navigated away from home never gets one,
+// and the crop status stuck at "growing" for the session -- no harvest banner.
+let pendingUpdate;
 exports.farmStatusState.onUpdate((state) => {
-    if (!state) {
+    clearTimeout(pendingUpdate);
+    pendingUpdate = undefined;
+    if (!state ||
+        state.status === CropStatus.READY ||
+        state.readyAt === Number.POSITIVE_INFINITY) {
         return;
     }
-    if (scheduledUpdates[state.readyAt]) {
-        return;
-    }
-    scheduledUpdates[state.readyAt] = setTimeout(updateStatus, state.readyAt - Date.now());
+    pendingUpdate = setTimeout(updateStatus, Math.max(0, state.readyAt - Date.now()));
 });
 const processFarmId = (root) => {
     var _a;
@@ -1278,8 +1299,8 @@ exports.collectAll = exports.kitchenStatusState = exports.OvenStatus = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
 const requests_2 = __webpack_require__(3300);
-const diagnostics_1 = __webpack_require__(3747);
 const page_1 = __webpack_require__(7952);
+const diagnostics_1 = __webpack_require__(3747);
 const popup_1 = __webpack_require__(469);
 const time_1 = __webpack_require__(4435);
 var OvenStatus;
@@ -1377,7 +1398,6 @@ const setKitchenStatus = (state, status, source) => __awaiter(void 0, void 0, vo
     (0, diagnostics_1.logDiagnostic)(`ovens: ${source} -> ${describeStatus(status)}`);
     yield state.set(status);
 });
-const scheduledUpdates = {};
 // Stirring, tasting and seasoning are what clear "Ovens need attention", and
 // nothing was watching for them: only `seasonmealsall` had an interceptor at all
 // (and the wrong one — a copy of the collect handler, which declared the ovens
@@ -1411,6 +1431,13 @@ const mealActionInterceptor = {
         var _a;
         const [, query] = (0, requests_2.parseUrl)(response.url);
         const go = (_a = query.get("go")) !== null && _a !== void 0 ? _a : "";
+        // Name every worker action fired from the kitchen or an oven, matched or
+        // not: the game's own buttons there are the ones this pattern has to
+        // know, and the log is where a renamed one shows up.
+        const [page] = (0, page_1.getPage)();
+        if (page === page_1.Page.KITCHEN || page === page_1.Page.OVEN) {
+            (0, diagnostics_1.logDiagnostic)(`ovens: worker ${go} on ${page}`);
+        }
         if (!MEAL_ACTION_PATTERN.test(go) || OWN_INTERCEPTORS.has(go)) {
             return Promise.resolve();
         }
@@ -1494,19 +1521,21 @@ const updateStatus = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!state) {
         return;
     }
-    if (state.checkAt < Date.now()) {
+    if (state.checkAt <= Date.now()) {
         yield exports.kitchenStatusState.get();
     }
 });
-// automatically update crops when finished
+// One pending re-check, moved with every update -- see the note on the same
+// timer in farm.ts: keyed by checkAt, a moment that had already been scheduled
+// once was never scheduled again.
+let pendingUpdate;
 exports.kitchenStatusState.onUpdate((state) => {
-    if (!state) {
+    clearTimeout(pendingUpdate);
+    pendingUpdate = undefined;
+    if (!state || state.checkAt === Number.POSITIVE_INFINITY) {
         return;
     }
-    if (scheduledUpdates[state.checkAt]) {
-        return;
-    }
-    scheduledUpdates[state.checkAt] = setTimeout(updateStatus, state.checkAt - Date.now());
+    pendingUpdate = setTimeout(updateStatus, Math.max(0, state.checkAt - Date.now()));
 });
 const collectAll = () => __awaiter(void 0, void 0, void 0, function* () {
     yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COLLECT_ALL_MEALS }));
@@ -6981,7 +7010,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.68" !== void 0 ? "1.1.68" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.69" !== void 0 ? "1.1.69" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13240,7 +13269,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.68" !== void 0 ? "1.1.68" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.69" !== void 0 ? "1.1.69" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
