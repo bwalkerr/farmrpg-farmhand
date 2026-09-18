@@ -1,4 +1,8 @@
-import { CachedState, StorageKey } from "../../../utils/state";
+import {
+  CachedState,
+  StateQueryOptions,
+  StorageKey,
+} from "../../../utils/state";
 import {
   getActivityPerksSet,
   PerkActivity,
@@ -435,10 +439,22 @@ const getFarmingPerks = async (): Promise<PerkSet | undefined> => {
   if (!settings[SettingId.PERK_MANAGER]) {
     return undefined;
   }
-  return (
-    (await getActivityPerksSet(PerkActivity.FARMING)) ??
-    (await getActivityPerksSet(PerkActivity.DEFAULT))
-  );
+  const findSet = async (
+    options?: StateQueryOptions
+  ): Promise<PerkSet | undefined> =>
+    (await getActivityPerksSet(PerkActivity.FARMING, options)) ??
+    (await getActivityPerksSet(PerkActivity.DEFAULT, options));
+  // The sets come from a day-old read of the perks page, or from a read that
+  // failed and left the list empty. Neither is a reason to harvest under
+  // whatever happens to be on: read the page again before concluding there is
+  // no farm set.
+  const set = (await findSet()) ?? (await findSet({ ignoreCache: true }));
+  if (!set) {
+    logDiagnostic(
+      "harvest: no set named Farming or Default — harvesting with the perks as they are"
+    );
+  }
+  return set;
 };
 
 // Harvesting and replanting are GATED ACTIONS: the yield depends on the perks
@@ -459,14 +475,18 @@ const getFarmingPerks = async (): Promise<PerkSet | undefined> => {
 // call: go back to leaving it. The cost is Default staying on in town until
 // you navigate, which the reconciler fixes on the next page transition.
 //
-// It stays snappy where it always was: apply() short-circuits when the set is
-// already confirmed equipped, so harvesting from Home or the farm -- where the
-// reconciler has already put Default on -- costs zero requests.
+// The switch is FORCED: reset + activate + settle every time, even when the
+// farm set is already confirmed on. A confirmation is only what we last saw
+// the game do, and every "harvested with no perks" report so far has been a
+// case of trusting state that had quietly gone stale. A whole field's yield
+// rides on this one request; ~1.3 s and a visible amber → green on the pill
+// before it goes out is the right price, and it is once per crop cycle.
 export const harvestAll = (): Promise<void> =>
   runGatedAction({
     label: "harvest",
     set: getFarmingPerks,
     restore: false,
+    force: true,
     action: async () => {
       const farmId = await farmIdState.get();
       await getJSON(
@@ -496,6 +516,7 @@ export const replantAll = async (fromFarmPage: boolean): Promise<void> => {
     label: "replant",
     set: getFarmingPerks,
     restore: false,
+    force: true,
     holdMs: fromFarmPage ? PLANT_CLICK_HOLD_MS : 0,
     action: async () => {
       if (fromFarmPage) {

@@ -298,6 +298,10 @@ const renderNotifications = (force: boolean = false): void => {
           } else {
             console.error(`Handler not found: ${action.handler}`);
           }
+          // A failed action leaves the banner in place (the render below
+          // sees nothing to change), so give it its label back rather than
+          // a "Loading..." that never ends.
+          actionElement.textContent = action.text;
           renderNotifications();
         });
       } else {

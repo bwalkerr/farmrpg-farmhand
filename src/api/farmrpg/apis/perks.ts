@@ -148,6 +148,16 @@ const setConfirmedEquipped = (set: PerkSet | undefined): void => {
   notifyPerkStatus();
 };
 
+// A perk change that did not come from this module (the game's own buttons,
+// see the worker interceptors below): whatever we had confirmed is no longer
+// known to be on.
+const noteOutsideChange = (what: string): void => {
+  if (confirmedEquippedSet) {
+    logPerk(`perks changed outside Farmhand (${what}) — nothing confirmed`);
+  }
+  setConfirmedEquipped(undefined);
+};
+
 export const perksState = new CachedState<PerksState>(
   StorageKey.PERKS_SETS,
   async () => {
@@ -183,6 +193,21 @@ export const perksState = new CachedState<PerksState>(
           await state.set(next);
         },
       },
+      // The game's own perk buttons send these same two requests, and a set
+      // activated by hand from a RETAINED perks page (back navigation: no
+      // fetch, so the visit interceptor above never fires) used to leave our
+      // confirmation standing for a set that was no longer on. Every later
+      // switch to that set then took the fast path over the wrong perks. A
+      // reset or an activate we did not send ourselves drops the confirmation.
+      {
+        match: [Page.WORKER, new URLSearchParams({ go: WorkerGo.RESET_PERKS })],
+        callback: () => {
+          if (!pendingPerkSet) {
+            noteOutsideChange("reset");
+          }
+          return Promise.resolve();
+        },
+      },
       {
         match: [
           Page.WORKER,
@@ -190,9 +215,16 @@ export const perksState = new CachedState<PerksState>(
         ],
         callback: async (state, previous, response) => {
           const [_, query] = parseUrl(response.url);
+          const id = Number(query.get("id"));
+          if (pendingPerkSet?.id !== id) {
+            noteOutsideChange(
+              previous?.perkSets.find((set) => set.id === id)?.name ??
+                `set ${id}`
+            );
+          }
           await state.set({
             ...previous,
-            currentPerkSetId: Number(query.get("id")),
+            currentPerkSetId: id,
           });
         },
       },
@@ -336,38 +368,80 @@ const sendActivate = async (set: PerkSet): Promise<boolean> => {
   return isAcknowledged(reply, `activate ${set.name}`);
 };
 
+export interface ApplyOptions {
+  // Do the full round trip even if the set is already confirmed on. For an
+  // action whose whole yield rides on the perks -- a harvest -- the ~1.3 s is
+  // worth more than trusting a confirmation, which is only ever what WE last
+  // saw, never what the game has now.
+  force?: boolean;
+}
+
+// The set's id is read off the perks page once a day; a set deleted and
+// re-made in between keeps its name and changes its id, and the game does not
+// say "success" to an id it no longer has. Re-read the page and look the
+// name up again before giving up on the switch.
+const refreshSet = async (set: PerkSet): Promise<PerkSet | undefined> => {
+  const state = await perksState.get({ ignoreCache: true });
+  const fresh = state?.perkSets.find(({ name }) => name === set.name);
+  if (fresh && fresh.id !== set.id) {
+    logPerk(`${set.name} is now set ${fresh.id} (was ${set.id})`);
+  }
+  return fresh;
+};
+
 // Drive the game to `set`. Only callable from inside a task, which is what
 // guarantees nothing else is touching the perks while the slate is empty.
 // Resolves to whether a real switch happened (false = already confirmed on it),
 // so callers can tell a change from a no-op.
-const applySet = async (set: PerkSet): Promise<boolean> => {
+//
+// Throws if the game never acknowledged the activate. By then the slate has
+// already been cleared, so the perks are EMPTY -- and a caller that went on to
+// act anyway (a harvest) would roll with nothing equipped, one crop a plot.
+// Failing the action keeps the crops in the ground for a harvest that works;
+// the reconciler, which has no action behind it, just reports the failure.
+const applySet = async (
+  set: PerkSet,
+  { force = false }: ApplyOptions = {}
+): Promise<boolean> => {
   // We drove the game here and watched it land, and nothing has cleared the
   // slate since -- so it is genuinely equipped and the whole round trip
   // (reset + activate + settle) can be skipped. This is what makes back-to-back
   // quick-sells instant after the first one.
-  if (confirmedEquippedSet?.id === set.id) {
+  if (!force && confirmedEquippedSet?.id === set.id) {
     return false;
   }
   pendingPerkSet = set;
   notifyPerkStatus();
   try {
     const wasCleared = await clearPerks();
-    // Retried once if the game doesn't say "success", because at this point the
+    // Retried if the game doesn't say "success", because at this point the
     // slate is already EMPTY: an activate that goes missing here is not a switch
     // that didn't happen, it is every perk turned off until something switches
     // again. That is the state a harvest comes back from with one crop a plot.
+    // The retry goes to the set's CURRENT id, in case the one we have is stale.
     let wasActivated = await sendActivate(set);
     if (!wasActivated) {
-      wasActivated = await sendActivate(set);
+      const fresh = (await refreshSet(set)) ?? set;
+      wasActivated = await sendActivate(fresh);
+      if (wasActivated) {
+        set = fresh;
+      }
+    }
+    if (!wasActivated) {
+      throw new Error(
+        `the game did not activate the ${set.name} set — perks are currently empty`
+      );
     }
     await delay(PERK_SETTLE_MS);
-    if (wasCleared && wasActivated) {
+    if (wasCleared) {
       // eslint-disable-next-line require-atomic-updates
       pendingPerkSet = undefined;
       setConfirmedEquipped(set);
     } else {
-      // Left in the dark. Don't claim it: the next switch to this set pays the
-      // round trip again rather than trusting perks we never saw confirmed.
+      // The activate landed but the reset before it was not acknowledged, so
+      // the set may sit on top of leftovers. Don't claim it: the next switch to
+      // this set pays the round trip again rather than trusting perks we never
+      // saw confirmed.
       logPerk(`${set.name} may not be fully equipped — will re-apply`);
     }
     return true;
@@ -383,7 +457,7 @@ const applySet = async (set: PerkSet): Promise<boolean> => {
 // The capability handed to a task: the only way to change perks, and it exists
 // only while the task holds the queue.
 export interface PerkSession {
-  readonly apply: (set: PerkSet) => Promise<boolean>;
+  readonly apply: (set: PerkSet, options?: ApplyOptions) => Promise<boolean>;
 }
 
 const session: PerkSession = { apply: applySet };
@@ -487,6 +561,8 @@ export interface GatedActionOptions {
   holdMs?: number;
   // put the page's own set back afterwards (default true)
   restore?: boolean;
+  // switch for real even if the set is already confirmed on (see ApplyOptions)
+  force?: boolean;
 }
 
 // Run an action under a specific perk set, with nothing able to switch perks
@@ -497,6 +573,7 @@ export const runGatedAction = ({
   action,
   holdMs = 0,
   restore = true,
+  force = false,
 }: GatedActionOptions): Promise<void> =>
   runPerkTask(async (perks) => {
     const target = await set();
@@ -505,9 +582,14 @@ export const runGatedAction = ({
       // moment the action started waiting on perks, not just the moment it
       // stopped
       setPerkStatusNote(`${label} → ${target.name}`);
-      const switched = await perks.apply(target);
+      const startedAt = Date.now();
+      const switched = await perks.apply(target, { force });
       setPerkStatusNote(
-        `${label} → ${target.name}${switched ? "" : " (already on)"}`
+        `${label} → ${target.name}${
+          switched
+            ? ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
+            : " (already on)"
+        }`
       );
     } else {
       setPerkStatusNote(`${label}: no set to switch to`);
