@@ -1,4 +1,5 @@
 import { CachedState } from "~/utils/state";
+import { describeError, logFailure } from "~/utils/diagnostics";
 import { Feature, FeatureSetting } from "../utils/feature";
 import { getCurrentPage, Page } from "~/utils/page";
 import {
@@ -50,6 +51,8 @@ export interface CapItem {
 
 interface CapTrackerState {
   cap: number;
+  // why the last read failed, until one succeeds
+  error?: string;
   isFetching: boolean;
   items: CapItem[];
   updatedAt: number;
@@ -234,6 +237,7 @@ export interface CapTrackerView {
   here?: readonly CapItem[];
   isFetching: boolean;
   updatedAt: number;
+  error?: string;
 }
 
 export const getCapTrackerView = (): CapTrackerView => {
@@ -247,6 +251,7 @@ export const getCapTrackerView = (): CapTrackerView => {
       : undefined;
   return {
     cap: capTrackerState.cap,
+    error: capTrackerState.error,
     here,
     isEnabled: isTrackerEnabled,
     isFetching: capTrackerState.isFetching,
@@ -302,24 +307,34 @@ const fetchCapTrackerNow = async (): Promise<void> => {
     return;
   }
   capTrackerState.isFetching = true;
+  scheduleRender();
   try {
     const response = await getHTML(Page.INVENTORY, new URLSearchParams());
     // mark updated even if parsing fails so we don't hammer the server
     // eslint-disable-next-line require-atomic-updates
     capTrackerState.updatedAt = Date.now();
+    // eslint-disable-next-line require-atomic-updates
+    capTrackerState.error = undefined;
     const result = collectCapItems(response.body);
     if (result) {
       // eslint-disable-next-line require-atomic-updates
       capTrackerState.cap = result.cap;
       // eslint-disable-next-line require-atomic-updates
       capTrackerState.items = result.items;
-      scheduleRender();
+    } else {
+      // eslint-disable-next-line require-atomic-updates
+      capTrackerState.error = "inventory page not recognised";
     }
-  } catch {
-    // ignore fetch failures; the next refresh will retry
+  } catch (error) {
+    // Kept, not swallowed: an "Inventory not read yet" that never changes
+    // was this failing quietly. The next refresh still retries.
+    // eslint-disable-next-line require-atomic-updates
+    capTrackerState.error = describeError(error);
+    logFailure("cap tracker: inventory read failed", error);
   } finally {
     // eslint-disable-next-line require-atomic-updates
     capTrackerState.isFetching = false;
+    scheduleRender();
   }
 };
 

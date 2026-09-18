@@ -140,11 +140,30 @@ export const renderCapTab = (
     return;
   }
   if (view.updatedAt === 0) {
-    body.append(
-      makeEmpty(
-        view.isFetching ? "Reading your inventory…" : "Inventory not read yet."
-      )
-    );
+    if (view.error && !view.isFetching) {
+      // A failed read, said so, with the retry in hand rather than another
+      // automatic attempt (which would loop on a persistent failure).
+      const empty = makeEmpty(
+        `Could not read your inventory (${view.error}). `
+      );
+      const retry = document.createElement("span");
+      retry.className = "fh-link";
+      retry.textContent = "retry";
+      retry.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onRefresh();
+      });
+      empty.append(retry);
+      body.append(empty);
+      return;
+    }
+    // The first read used to come only from onPageLoad. Opening the tab is as
+    // clear a request for it as there is, so ask for it here too; the tab
+    // redraws on the tracker's change notice when it lands.
+    if (!view.isFetching) {
+      onRefresh();
+    }
+    body.append(makeEmpty("Reading your inventory…"));
     return;
   }
 
