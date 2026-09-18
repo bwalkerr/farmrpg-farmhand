@@ -1,6 +1,8 @@
 import { CachedState, StorageKey } from "../../../utils/state";
+import { FeatureSetting } from "~/utils/feature";
 import {
   getData,
+  getSetting,
   getSettings,
   registerExportToNotes,
   setData,
@@ -23,10 +25,20 @@ export const eraseData = (notes: string): string => {
   return notes.slice(0, start) + notes.slice(end + FARMHAND_SUFFIX.length);
 };
 
+// Every setting with its STORED value. The registered setting objects only
+// carry a `value` once the settings page has drawn them, so exporting them
+// as they are wrote a `value`-less list to the notes whenever anything else
+// saved data (collapsing a quest, reading an update, starring a request) --
+// and the importer below read a missing value as the default. Any device that
+// then loaded the home page had every non-default setting put back to its
+// default, with the "Settings Synced" reload to go with it.
 export const encodeData = async (): Promise<string> => {
-  const exportedSettings = Object.values(getSettings());
-  for (const setting of exportedSettings) {
-    setting.data = await getData(setting, "");
+  const exportedSettings: FeatureSetting[] = [];
+  for (const setting of getSettings()) {
+    exportedSettings.push({
+      ...(await getSetting(setting)),
+      data: await getData(setting, ""),
+    });
   }
   return `${FARMHAND_PREFIX}${JSON.stringify(
     exportedSettings
@@ -51,11 +63,15 @@ const processHome = (root: Document): NotesState => {
     return { notes: rawNotes, hasNotes: false };
   }
   const settingsString = rawNotes.slice(start + FARMHAND_PREFIX.length, end);
-  const settings = JSON.parse(settingsString);
+  const settings = JSON.parse(settingsString) as FeatureSetting[];
   (async () => {
     let hasChanged = false;
     for (const setting of settings) {
-      const settingChanged = await setSetting(setting);
+      // An entry with no value says nothing about that setting (a note
+      // written by an older build): leave the stored value alone rather
+      // than reading it as "back to the default".
+      const settingChanged =
+        setting.value === undefined ? false : await setSetting(setting);
       const dataChanged = await setData(setting, setting.data);
       if (!hasChanged && (settingChanged || dataChanged)) {
         hasChanged = true;
