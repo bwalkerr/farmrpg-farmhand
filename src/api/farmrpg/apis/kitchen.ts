@@ -5,8 +5,8 @@ import {
 } from "../../../utils/state";
 import { getDocument } from "../../../utils/requests";
 import { getHTML, parseUrl } from "../utils/requests";
+import { getPage, Page, WorkerGo } from "~/utils/page";
 import { logDiagnostic } from "~/utils/diagnostics";
-import { Page, WorkerGo } from "~/utils/page";
 import { showPopup } from "~/utils/popup";
 import { timestampToDate } from "../utils/time";
 
@@ -124,8 +124,6 @@ const setKitchenStatus = async (
   await state.set(status);
 };
 
-const scheduledUpdates: Record<number, NodeJS.Timeout> = {};
-
 // Stirring, tasting and seasoning are what clear "Ovens need attention", and
 // nothing was watching for them: only `seasonmealsall` had an interceptor at all
 // (and the wrong one — a copy of the collect handler, which declared the ovens
@@ -161,6 +159,13 @@ const mealActionInterceptor: QueryInterceptor<KitchenStatus, void> = {
   callback: (state, previous, response) => {
     const [, query] = parseUrl(response.url);
     const go = query.get("go") ?? "";
+    // Name every worker action fired from the kitchen or an oven, matched or
+    // not: the game's own buttons there are the ones this pattern has to
+    // know, and the log is where a renamed one shows up.
+    const [page] = getPage();
+    if (page === Page.KITCHEN || page === Page.OVEN) {
+      logDiagnostic(`ovens: worker ${go} on ${page}`);
+    }
     if (!MEAL_ACTION_PATTERN.test(go) || OWN_INTERCEPTORS.has(go)) {
       return Promise.resolve();
     }
@@ -282,22 +287,25 @@ const updateStatus = async (): Promise<void> => {
   if (!state) {
     return;
   }
-  if (state.checkAt < Date.now()) {
+  if (state.checkAt <= Date.now()) {
     await kitchenStatusState.get();
   }
 };
 
-// automatically update crops when finished
+// One pending re-check, moved with every update -- see the note on the same
+// timer in farm.ts: keyed by checkAt, a moment that had already been scheduled
+// once was never scheduled again.
+let pendingUpdate: NodeJS.Timeout | undefined;
+
 kitchenStatusState.onUpdate((state) => {
-  if (!state) {
+  clearTimeout(pendingUpdate);
+  pendingUpdate = undefined;
+  if (!state || state.checkAt === Number.POSITIVE_INFINITY) {
     return;
   }
-  if (scheduledUpdates[state.checkAt]) {
-    return;
-  }
-  scheduledUpdates[state.checkAt] = setTimeout(
+  pendingUpdate = setTimeout(
     updateStatus,
-    state.checkAt - Date.now()
+    Math.max(0, state.checkAt - Date.now())
   );
 });
 

@@ -86,7 +86,9 @@ const processFarmStatus = (root: HTMLElement): FarmStatus | undefined => {
       ? { status: CropStatus.READY, count, readyAt: Date.now() }
       : undefined;
   }
-  console.debug("[FARM] Unreadable field summary, keeping status", statusText);
+  logDiagnostic(
+    `field: summary text not understood: "${statusText.slice(0, 40)}"`
+  );
   return undefined;
 };
 
@@ -149,8 +151,6 @@ const setFarmStatus = async (
   await state.set(status);
 };
 
-const scheduledUpdates: Record<number, NodeJS.Timeout> = {};
-
 export const farmStatusState = new CachedState<FarmStatus>(
   StorageKey.FARM_STATUS,
   async () => {
@@ -208,6 +208,12 @@ export const farmStatusState = new CachedState<FarmStatus>(
             logDiagnostic("field: home page has no xfarm row");
             return;
           }
+          if (!linkStatus.textContent?.trim()) {
+            // the row is filled in by the game's readycount poll later; the
+            // poll's reply has its own interceptor above
+            logDiagnostic("field: home page row is blank");
+            return;
+          }
           await setFarmStatus(
             state,
             processFarmStatus(linkStatus),
@@ -263,7 +269,16 @@ export const farmStatusState = new CachedState<FarmStatus>(
       {
         match: [Page.WORKER, new URLSearchParams({ go: WorkerGo.HARVEST_ALL })],
         callback: async (state, previous, response) => {
-          await state.set({ ...previous, status: CropStatus.EMPTY });
+          await setFarmStatus(
+            state,
+            {
+              ...previous,
+              count: previous?.count ?? 0,
+              status: CropStatus.EMPTY,
+              readyAt: Number.POSITIVE_INFINITY,
+            },
+            "harvest all"
+          );
           const { drops } = (await response.json()) as {
             result: "success";
             drops: Record<
@@ -310,7 +325,18 @@ export const farmStatusState = new CachedState<FarmStatus>(
       {
         match: [Page.WORKER, new URLSearchParams({ go: WorkerGo.PLANT_ALL })],
         callback: async (state, previous) => {
-          await state.set({ ...previous, status: CropStatus.GROWING });
+          // How long the new crop takes is not in this reply; read the farm
+          // page for it in a minute rather than keeping the old readyAt.
+          await setFarmStatus(
+            state,
+            {
+              ...previous,
+              count: previous?.count ?? 0,
+              status: CropStatus.GROWING,
+              readyAt: Date.now() + 60 * 1000,
+            },
+            "plant all"
+          );
         },
       },
     ],
@@ -322,24 +348,38 @@ const updateStatus = async (): Promise<void> => {
   if (!state) {
     return;
   }
-  if (state.status !== CropStatus.READY && state.readyAt < Date.now()) {
+  if (state.status !== CropStatus.READY && state.readyAt <= Date.now()) {
     // time's up — verify against the real farm page instead of assuming ready
     logDiagnostic("field: timer up, re-reading the farm page");
     await farmStatusState.get({ ignoreCache: true });
   }
 };
 
-// automatically update crops when finished
+// One pending re-check, moved to wherever the latest status says it belongs.
+// This was a map keyed by readyAt, meant to stop the same moment being
+// scheduled twice -- but nothing ever removed a key once its timer had fired,
+// so a later status that carried the same readyAt scheduled NOTHING. That is
+// every harvest and plant: both spread `...previous`, so the GROWING set after
+// a replant kept the harvest's readyAt (already in the past, already in the
+// map) and the farm page was never re-read. On the web the game's own
+// readycount poll papered over it, since Reed sits on the home page where
+// that poll runs; a phone that has navigated away from home never gets one,
+// and the crop status stuck at "growing" for the session -- no harvest banner.
+let pendingUpdate: NodeJS.Timeout | undefined;
+
 farmStatusState.onUpdate((state) => {
-  if (!state) {
+  clearTimeout(pendingUpdate);
+  pendingUpdate = undefined;
+  if (
+    !state ||
+    state.status === CropStatus.READY ||
+    state.readyAt === Number.POSITIVE_INFINITY
+  ) {
     return;
   }
-  if (scheduledUpdates[state.readyAt]) {
-    return;
-  }
-  scheduledUpdates[state.readyAt] = setTimeout(
+  pendingUpdate = setTimeout(
     updateStatus,
-    state.readyAt - Date.now()
+    Math.max(0, state.readyAt - Date.now())
   );
 });
 
