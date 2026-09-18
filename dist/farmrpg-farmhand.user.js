@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.69
+// @version 1.1.70
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -1341,8 +1341,10 @@ const processKitchenStatus = (root) => {
     return { status, checkAt, allReady };
 };
 const processKitchenPage = (root) => {
+    var _a, _b;
     const ovens = root.querySelectorAll("a[href^='oven.php']");
     const count = ovens.length;
+    const readyOvens = [];
     let status = OvenStatus.EMPTY;
     let checkAt = Number.POSITIVE_INFINITY;
     let allReady = true;
@@ -1355,8 +1357,12 @@ const processKitchenPage = (root) => {
         const now = new Date();
         if (doneDate < now) {
             status = OvenStatus.READY;
-            checkAt = Math.min(checkAt, Number.POSITIVE_INFINITY);
-            break;
+            // oven.php?num=N
+            const number = Number(new URLSearchParams((_b = (_a = oven.getAttribute("href")) === null || _a === void 0 ? void 0 : _a.split("?")[1]) !== null && _b !== void 0 ? _b : "").get("num"));
+            if (number) {
+                readyOvens.push(number);
+            }
+            continue;
         }
         const tasks = oven.querySelectorAll("img:not(.itemimg)");
         if (tasks.length > 0 &&
@@ -1375,6 +1381,7 @@ const processKitchenPage = (root) => {
         allReady,
         checkAt,
         count,
+        readyOvens,
         status,
     };
 };
@@ -1537,8 +1544,43 @@ exports.kitchenStatusState.onUpdate((state) => {
     }
     pendingUpdate = setTimeout(updateStatus, Math.max(0, state.checkAt - Date.now()));
 });
+// Collects every finished meal, one oven at a time. This sent `cookreadyall`,
+// the kitchen's Collect All -- a button the game only draws for accounts that
+// own the Farm Supply perk for it, and an action the server quietly ignores
+// for everyone else: the request came back in 50 ms, the kitchen re-read
+// still showed the meal, and the banner it had just cleared came straight
+// back. The per-oven `cookready&oven=N` is what the oven page's own Collect
+// Meal button sends, for every account.
+//
+// Which ovens are ready is only on the kitchen page, so read it first (fresh:
+// the cached status may have come from the home page, which knows no oven
+// numbers). Each reply is watched by mealActionInterceptor, which re-reads
+// the kitchen once the burst is over and so clears the banner.
 const collectAll = () => __awaiter(void 0, void 0, void 0, function* () {
-    yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COLLECT_ALL_MEALS }));
+    var _a, _b, _c;
+    const status = yield exports.kitchenStatusState.get({ ignoreCache: true });
+    const readyOvens = (_a = status === null || status === void 0 ? void 0 : status.readyOvens) !== null && _a !== void 0 ? _a : [];
+    if (readyOvens.length === 0) {
+        (0, diagnostics_1.logDiagnostic)("ovens: nothing to collect");
+        return;
+    }
+    let collected = 0;
+    for (const oven of readyOvens) {
+        const reply = yield (0, requests_2.getHTML)(page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.COLLECT_MEAL, oven: String(oven) }));
+        if ((_b = reply.body.textContent) === null || _b === void 0 ? void 0 : _b.includes("success")) {
+            collected += 1;
+        }
+        else {
+            (0, diagnostics_1.logDiagnostic)(`ovens: collect oven ${oven} replied "${(_c = reply.body.textContent) === null || _c === void 0 ? void 0 : _c.trim().slice(0, 40)}"`);
+        }
+    }
+    (0, diagnostics_1.logDiagnostic)(`ovens: collected ${collected} of ${readyOvens.length}`);
+    if (collected > 0) {
+        (0, popup_1.showPopup)({
+            title: "Success!",
+            contentHTML: `${collected} meal${collected === 1 ? "" : "s"} collected`,
+        });
+    }
 });
 exports.collectAll = collectAll;
 
@@ -7010,7 +7052,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.69" !== void 0 ? "1.1.69" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.70" !== void 0 ? "1.1.70" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13269,7 +13311,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.69" !== void 0 ? "1.1.69" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.70" !== void 0 ? "1.1.70" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
@@ -15951,6 +15993,9 @@ var WorkerGo;
     WorkerGo["COLLECT_ALL_PET_ITEMS"] = "collectallpetitems";
     WorkerGo["COLLECT_ALL_MAIL_ITEMS"] = "collectallmailitems";
     WorkerGo["COLLECT_ALL_MEALS"] = "cookreadyall";
+    // one oven's finished meal (`oven=N`); the "all" form above is only served
+    // to accounts that own the Farm Supply perk for it
+    WorkerGo["COLLECT_MEAL"] = "cookready";
     WorkerGo["COOK_ALL"] = "cookitemall";
     WorkerGo["DEPOSIT_SILVER"] = "depositsilver";
     WorkerGo["FARM_STATUS"] = "farmstatus";
