@@ -506,6 +506,12 @@ const renderInventoryCapWarnings = (): void => {
 
 export const inventoryCapWarnings: Feature = {
   settings: [SETTING_INVENTORY_CAP_WARNINGS, SETTING_INVENTORY_CAP_TRACKER],
+  // The flag the Cap tab reads was set only by onPageLoad, so until the first
+  // page dispatch had run -- or if it never ran -- the tab reported the
+  // tracker as "off" over a setting that was on. Read the setting up front.
+  onInitialize: (settings) => {
+    isTrackerEnabled = Boolean(settings[SettingId.INVENTORY_CAP_TRACKER]);
+  },
   onPageLoad: (settings) => {
     const isInventory = isInventoryPage();
     if (settings[SettingId.INVENTORY_CAP_WARNINGS] && isInventory) {

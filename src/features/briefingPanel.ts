@@ -57,6 +57,7 @@ import {
   makeLinkedLine,
   makeMutedText,
   makeQuestLink,
+  SETTINGS_HREF,
 } from "~/utils/gameLinks";
 import { makeSearchBox } from "./briefing/search";
 import { masteryState } from "~/api/farmrpg/apis/mastery";
@@ -65,6 +66,7 @@ import {
   matchLocationName,
   parseStamina,
 } from "~/utils/locationAdvice";
+import { onPageTransition } from "~/utils/pageTransitions";
 import { orUndefined } from "~/utils/promise";
 import { parseUnlimitedItems } from "~/utils/unlimited";
 import { renderCapTab } from "./briefing/cap";
@@ -1244,9 +1246,16 @@ const ensurePanel = (): void => {
   const refresh = document.createElement("span");
   refresh.className = "fh-briefing-refresh";
   refresh.textContent = "refresh";
+  const settingsLink = document.createElement("a");
+  settingsLink.className = "fh-briefing-settings";
+  settingsLink.href = SETTINGS_HREF;
+  settingsLink.dataset.view = ".view-main";
+  settingsLink.textContent = "⚙";
+  settingsLink.title = "Farmhand settings";
+  settingsLink.setAttribute("aria-label", "Farmhand settings");
   const controls = document.createElement("div");
   controls.className = "fh-briefing-controls";
-  controls.append(age, refresh);
+  controls.append(age, refresh, settingsLink);
   head.append(heading, controls);
 
   const chip = document.createElement("div");
@@ -1569,11 +1578,34 @@ const ensurePanel = (): void => {
     const here = await getHere();
     // a full reload may have replaced the context while this was in flight;
     // its `here` is already current, so leave it alone
-    if (context === previous) {
-      context = { ...previous, here };
-      draw();
+    if (context !== previous) {
+      return;
     }
+    // Nothing moved, nothing to redraw: this also runs on every page
+    // transition now, most of which are between pages that are not
+    // locations, and a redraw would throw away a lookup you were reading.
+    if (
+      here?.location.name === previous.here?.location.name &&
+      here?.stamina === previous.here?.stamina
+    ) {
+      return;
+    }
+    context = { ...previous, here };
+    draw();
   };
+
+  // On a desktop the panel sits open beside the game, so walking from town to
+  // the Misty Forest never re-opened it and "here" stayed wherever it was
+  // first read. A phone closes and re-opens the panel around every move, which
+  // is why the Now tab followed you there and not on a PC. Only while open and
+  // loaded: nothing is fetched for a closed panel, as before.
+  onPageTransition(() => {
+    if (panel.dataset.open === "true" && hasLoaded) {
+      refreshHere().catch((error) => {
+        console.error("Failed to refresh the panel's location", error);
+      });
+    }
+  });
 
   button.addEventListener("click", (event) => {
     event.stopPropagation();

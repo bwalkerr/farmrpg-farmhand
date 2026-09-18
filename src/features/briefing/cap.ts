@@ -16,6 +16,7 @@ import {
   toIconUrl,
 } from "./shared";
 import { itemDataState } from "~/api/buddyfarm/api";
+import { makeLink, SETTINGS_HREF } from "~/utils/gameLinks";
 import { orUndefined } from "~/utils/promise";
 import { TEXT_WHITE } from "~/utils/theme";
 
@@ -126,11 +127,16 @@ export const renderCapTab = (
 ): void => {
   const view = getCapTrackerView();
   if (!view.isEnabled) {
-    body.append(
-      makeEmpty(
-        "The cap tracker is off — turn on “Inventory: Cap tracker” in settings."
-      )
+    // The settings page is a link, not a direction: on a phone the menu route
+    // to it is the very thing that has been hard to find.
+    const empty = makeEmpty(
+      "The cap tracker is off — turn on “Inventory: Cap tracker” in "
     );
+    empty.append(
+      makeLink(SETTINGS_HREF, "Farmhand settings", "var(--fh-accent)"),
+      "."
+    );
+    body.append(empty);
     return;
   }
   if (view.updatedAt === 0) {

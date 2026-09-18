@@ -1,6 +1,6 @@
 import { FARMHAND_PREFIX, FARMHAND_SUFFIX } from "~/api/farmrpg/apis/notes";
 import { Feature, FeatureSetting } from "../utils/feature";
-import { getCurrentPage, Page } from "~/utils/page";
+import { getCurrentPage, getHashPage, Page } from "~/utils/page";
 import {
   getData,
   getSettings,
@@ -206,8 +206,14 @@ export const farmhandSettings: Feature = {
     );
   },
   onPageLoad: (settingValues, page) => {
-    // make sure we are on the settings page
-    if (page !== Page.SETTINGS_OPTIONS) {
+    // make sure we are on the settings page -- by what the page says it is OR
+    // by the route, the way the banners and the perk code already match:
+    // `data-page` alone has been wrong often enough elsewhere in this fork,
+    // and when it is wrong here the Farmhand section never appears at all.
+    if (
+      page !== Page.SETTINGS_OPTIONS &&
+      getHashPage() !== Page.SETTINGS_OPTIONS
+    ) {
       return;
     }
 

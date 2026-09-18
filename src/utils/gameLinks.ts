@@ -7,6 +7,9 @@ import { TEXT_GRAY } from "~/utils/theme";
 // quick-craft linkifier sets.
 const VIEW = ".view-main";
 
+// The game's options page, where the Farmhand section lives.
+export const SETTINGS_HREF = "settings_options.php";
+
 export const applyLinkStyle = (
   link: HTMLAnchorElement,
   color: string

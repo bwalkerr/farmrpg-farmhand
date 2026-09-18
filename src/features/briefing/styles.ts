@@ -218,6 +218,16 @@ export const injectPanelStyles = (): void => {
         font-size: 11px;
       }
       #${PANEL_ID} .fh-briefing-refresh:hover { color: ${TEXT_WHITE}; }
+      /* The way to the Farmhand settings from anywhere. On a desktop the
+         menu gets you there; on a phone it is the one route that keeps
+         going missing, and the panel is always on screen. */
+      #${PANEL_ID} .fh-briefing-settings {
+        color: ${TEXT_GRAY};
+        font-size: 13px;
+        line-height: 1;
+        text-decoration: none;
+      }
+      #${PANEL_ID} .fh-briefing-settings:hover { color: ${TEXT_WHITE}; }
       /* How old the numbers are. The panel outlives navigation, so without
          this there is no telling whether it is showing this minute or whatever
          was true when it was opened. Muted: it is a caveat, not a reading. */
@@ -418,6 +428,10 @@ export const injectPanelStyles = (): void => {
         #${PANEL_ID} .fh-briefing-refresh {
           font-size: 12px;
           padding: 6px 2px 6px 10px;
+        }
+        #${PANEL_ID} .fh-briefing-settings {
+          font-size: 16px;
+          padding: 6px 4px;
         }
         /* The perk chip is the note's only way open on a phone, which is the
            one place the note matters, so it gets a thumb-sized box. */
