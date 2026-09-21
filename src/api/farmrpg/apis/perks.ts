@@ -370,23 +370,25 @@ const readPerksPage = async (): Promise<PerksPageReading | undefined> => {
   }
   const { currentPerkSetId } = processPerks(page);
   const sets = getListByTitle("My Perk Sets", page.body);
-  const checks = [...page.body.querySelectorAll(".fa-check")].filter(
+  const checks = [...page.body.querySelectorAll(EQUIPPED_ICON)].filter(
     (icon) => !sets?.contains(icon)
   ).length;
-  const clocks = page.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
-  if (checks + clocks === 0) {
-    describePerksPage(page, sets);
-  }
+  const clocks = page.body.querySelectorAll(UNEQUIPPED_ICON).length;
+  describePerksPage(page, sets);
   return {
     activeId: currentPerkSetId,
     equipped: checks + clocks > 0 ? checks : undefined,
   };
 };
 
-// The icon classes above are a guess at markup nobody here has seen, and on
-// Reed's page they match nothing. Rather than ask for the HTML, say what the
-// page is made of -- once a session, into the log he already pastes: the
-// distinct icon classes, and the first row outside the set list, trimmed.
+// Markup nobody here has seen directly. The first guess (fa-check / fa-clock)
+// matched nothing; the page's own icon roster (logged 2026-09-21) has
+// fa-check-double and fa-timer sitting just ahead of the perk icons, which
+// fits the checkmark and clock of Reed's 1.0.58 screenshot. Still inferred,
+// so once a session the log shows the row each was first found in.
+const EQUIPPED_ICON = ".fa-check-double, .fa-check";
+const UNEQUIPPED_ICON = ".fa-timer, .fa-clock, .fa-clock-o";
+
 let hasDescribedPerksPage = false;
 const describePerksPage = (
   page: Document,
@@ -396,29 +398,17 @@ const describePerksPage = (
     return;
   }
   hasDescribedPerksPage = true;
-  const iconClasses = new Set<string>();
-  for (const icon of page.body.querySelectorAll("i, .icon, img[src*='icon']")) {
-    const description =
-      icon.tagName === "IMG"
-        ? `img:${icon.getAttribute("src") ?? ""}`
-        : `${icon.tagName.toLowerCase()}.${[...icon.classList].join(".")}${
-            icon.textContent?.trim() ? `:${icon.textContent.trim()}` : ""
-          }`;
-    if (!sets?.contains(icon)) {
-      iconClasses.add(description);
-    }
-  }
-  const row = [...page.body.querySelectorAll("li")].find(
-    (item) => !sets?.contains(item)
-  );
-  logPerk(
-    `perks page icons: ${[...iconClasses].slice(0, 12).join(" | ") || "none"}`
-  );
-  logPerk(
-    `perks page first row: ${(row?.outerHTML ?? "no <li> found")
+  const rowOf = (selector: string): string => {
+    const icon = [...page.body.querySelectorAll(selector)].find(
+      (candidate) => !sets?.contains(candidate)
+    );
+    const row = icon?.closest("li") ?? icon?.parentElement;
+    return (row?.outerHTML ?? "not found")
       .replaceAll(/\s+/g, " ")
-      .slice(0, 600)}`
-  );
+      .slice(0, 400);
+  };
+  logPerk(`perks page: equipped row = ${rowOf(EQUIPPED_ICON)}`);
+  logPerk(`perks page: unequipped row = ${rowOf(UNEQUIPPED_ICON)}`);
 };
 
 const loadSetSizes = async (): Promise<Record<string, number>> => {
