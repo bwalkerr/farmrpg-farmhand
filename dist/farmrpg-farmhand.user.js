@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.78
+// @version 1.1.79
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2376,11 +2376,19 @@ const rememberSetSize = (set, size, known) => {
     logPerk(`${set.name} equips ${size} perks${known === undefined ? "" : ` (was ${known})`}`);
 };
 // After reset + activate: hold the task until the page shows the set on.
+// Resolves to the set that ended up on (a fresh id if the page showed another
+// set active and a re-read found this set under a new one). Throws if the
+// page still shows NOTHING equipped at the end of the window: by then the
+// slate has been cleared for seconds, and Reed's town→banner harvest of
+// 2026-09-21 -- reset and activate both "success", a full second waited, 36
+// crops from 36 plots -- is what going on anyway looks like.
 const waitUntilEquipped = (set) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     const sizes = yield loadSetSizes();
     const known = sizes[set.name];
     const startedAt = Date.now();
     const counts = [];
+    let hasReactivated = false;
     for (;;) {
         const reading = yield readPerksPage();
         const elapsed = Date.now() - startedAt;
@@ -2391,26 +2399,48 @@ const waitUntilEquipped = (set) => __awaiter(void 0, void 0, void 0, function* (
                 logPerk(`${set.name}: perks page shows no perk icons — trusting the settle`);
             }
             yield delay(Math.max(0, PERK_SETTLE_MS - elapsed));
-            return;
+            return set;
+        }
+        // The page shows some other set as active: the activate did not take,
+        // whatever it replied. A set deleted and re-made keeps its name and
+        // changes its id, so look the name up again and activate that once.
+        if (!hasReactivated &&
+            reading.activeId !== undefined &&
+            reading.activeId !== set.id) {
+            hasReactivated = true;
+            logPerk(`${set.name} (${set.id}) not active after activate — page shows set ${reading.activeId}; re-reading ids`);
+            const fresh = (_a = (yield refreshSet(set))) !== null && _a !== void 0 ? _a : set;
+            pendingPerkSet = fresh;
+            yield sendActivate(fresh);
+            set = fresh;
+            yield delay(VERIFY_POLL_MS);
+            continue;
         }
         const count = reading.equipped;
         counts.push(count);
         const isStable = elapsed >= PERK_SETTLE_MS &&
             counts.length >= 3 &&
+            count > 0 &&
             counts.at(-2) === count &&
             counts.at(-3) === count;
-        if ((known !== undefined && count >= known) || isStable) {
+        if ((known !== undefined && count > 0 && count >= known) || isStable) {
             if (count !== known) {
                 rememberSetSize(set, count, known);
             }
             if (counts.length > 1) {
                 logPerk(`${set.name}: ${counts[0]} of ${count} on at first read, ${count} after ${(elapsed / 1000).toFixed(1)}s`);
             }
-            return;
+            return set;
         }
         if (elapsed > VERIFY_WINDOW_MS) {
-            logPerk(`${set.name}: still ${count} of ${known} perks on after ${VERIFY_WINDOW_MS / 1000}s — going on anyway`);
-            return;
+            // only once the count has been seen to work for this set: a zero from
+            // an icon class that is wrong for "equipped" must not fail every
+            // switch for the session
+            if (count === 0 && known !== undefined && known > 0) {
+                throw new Error(`${set.name} never came on — perks page still shows nothing equipped after ${VERIFY_WINDOW_MS / 1000}s`);
+            }
+            logPerk(`${set.name}: still ${count} of ${known !== null && known !== void 0 ? known : "?"} perks on after ${VERIFY_WINDOW_MS / 1000}s — going on anyway`);
+            return set;
         }
         yield delay(VERIFY_POLL_MS);
     }
@@ -2530,7 +2560,7 @@ const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], voi
         if (!wasActivated) {
             throw new Error(`the game did not activate the ${set.name} set — perks are currently empty`);
         }
-        yield waitUntilEquipped(set);
+        set = yield waitUntilEquipped(set);
         if (wasCleared) {
             // eslint-disable-next-line require-atomic-updates
             pendingPerkSet = undefined;
@@ -7503,7 +7533,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.78" !== void 0 ? "1.1.78" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.79" !== void 0 ? "1.1.79" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13871,7 +13901,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.78" !== void 0 ? "1.1.78" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.79" !== void 0 ? "1.1.79" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
