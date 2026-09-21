@@ -433,11 +433,18 @@ const rememberSetSize = (set: PerkSet, size: number, known?: number): void => {
 };
 
 // After reset + activate: hold the task until the page shows the set on.
-const waitUntilEquipped = async (set: PerkSet): Promise<void> => {
+// Resolves to the set that ended up on (a fresh id if the page showed another
+// set active and a re-read found this set under a new one). Throws if the
+// page still shows NOTHING equipped at the end of the window: by then the
+// slate has been cleared for seconds, and Reed's town→banner harvest of
+// 2026-09-21 -- reset and activate both "success", a full second waited, 36
+// crops from 36 plots -- is what going on anyway looks like.
+const waitUntilEquipped = async (set: PerkSet): Promise<PerkSet> => {
   const sizes = await loadSetSizes();
   const known = sizes[set.name];
   const startedAt = Date.now();
   const counts: number[] = [];
+  let hasReactivated = false;
   for (;;) {
     const reading = await readPerksPage();
     const elapsed = Date.now() - startedAt;
@@ -450,16 +457,36 @@ const waitUntilEquipped = async (set: PerkSet): Promise<void> => {
         );
       }
       await delay(Math.max(0, PERK_SETTLE_MS - elapsed));
-      return;
+      return set;
+    }
+    // The page shows some other set as active: the activate did not take,
+    // whatever it replied. A set deleted and re-made keeps its name and
+    // changes its id, so look the name up again and activate that once.
+    if (
+      !hasReactivated &&
+      reading.activeId !== undefined &&
+      reading.activeId !== set.id
+    ) {
+      hasReactivated = true;
+      logPerk(
+        `${set.name} (${set.id}) not active after activate — page shows set ${reading.activeId}; re-reading ids`
+      );
+      const fresh = (await refreshSet(set)) ?? set;
+      pendingPerkSet = fresh;
+      await sendActivate(fresh);
+      set = fresh;
+      await delay(VERIFY_POLL_MS);
+      continue;
     }
     const count = reading.equipped;
     counts.push(count);
     const isStable =
       elapsed >= PERK_SETTLE_MS &&
       counts.length >= 3 &&
+      count > 0 &&
       counts.at(-2) === count &&
       counts.at(-3) === count;
-    if ((known !== undefined && count >= known) || isStable) {
+    if ((known !== undefined && count > 0 && count >= known) || isStable) {
       if (count !== known) {
         rememberSetSize(set, count, known);
       }
@@ -472,15 +499,27 @@ const waitUntilEquipped = async (set: PerkSet): Promise<void> => {
           ).toFixed(1)}s`
         );
       }
-      return;
+      return set;
     }
     if (elapsed > VERIFY_WINDOW_MS) {
+      // only once the count has been seen to work for this set: a zero from
+      // an icon class that is wrong for "equipped" must not fail every
+      // switch for the session
+      if (count === 0 && known !== undefined && known > 0) {
+        throw new Error(
+          `${
+            set.name
+          } never came on — perks page still shows nothing equipped after ${
+            VERIFY_WINDOW_MS / 1000
+          }s`
+        );
+      }
       logPerk(
-        `${set.name}: still ${count} of ${known} perks on after ${
+        `${set.name}: still ${count} of ${known ?? "?"} perks on after ${
           VERIFY_WINDOW_MS / 1000
         }s — going on anyway`
       );
-      return;
+      return set;
     }
     await delay(VERIFY_POLL_MS);
   }
@@ -625,7 +664,7 @@ const applySet = async (
         `the game did not activate the ${set.name} set — perks are currently empty`
       );
     }
-    await waitUntilEquipped(set);
+    set = await waitUntilEquipped(set);
     if (wasCleared) {
       // eslint-disable-next-line require-atomic-updates
       pendingPerkSet = undefined;
