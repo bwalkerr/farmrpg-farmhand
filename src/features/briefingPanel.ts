@@ -22,10 +22,12 @@ import { gatherRecipeGraph } from "~/api/buddyfarm/recipes";
 import {
   getBasicItems,
   getLocationEntries,
+  itemDataState,
   locationDataState,
 } from "~/api/buddyfarm/api";
 import {
   getCapTrackerView,
+  getLearnedMineDrops,
   onCapTrackerChange,
   refreshCapTrackerNow,
 } from "./inventoryCapWarnings";
@@ -49,6 +51,12 @@ import {
 } from "~/api/farmrpg/apis/perks";
 import { getQuestGoals, parseActiveQuests } from "~/api/farmrpg/apis/quests";
 import { getSettingValues, SettingId } from "~/utils/settings";
+import {
+  imageBasename,
+  matchLocationByImage,
+  matchLocationName,
+  parseStamina,
+} from "~/utils/locationAdvice";
 import { injectPanelStyles } from "./briefing/styles";
 import { inventoryState } from "~/api/farmrpg/apis/inventory";
 import { Lookup, renderLookup, toLookup } from "./briefing/lookup";
@@ -62,11 +70,6 @@ import {
 } from "~/utils/gameLinks";
 import { makeSearchBox } from "./briefing/search";
 import { masteryState } from "~/api/farmrpg/apis/mastery";
-import {
-  matchLocationByImage,
-  matchLocationName,
-  parseStamina,
-} from "~/utils/locationAdvice";
 import { onPageTransition } from "~/utils/pageTransitions";
 
 declare const __VERSION__: string | undefined;
@@ -134,8 +137,9 @@ const getTabCounts = (context: Context): Partial<Record<TabId, number>> => {
   }
   // what drops where you are that you are short of; the tab is the place to
   // answer "is it worth staying"
-  if (context.here) {
-    const wanted = context.here.location.drops.filter((drop) =>
+  const dropsHere = context.here?.location.drops ?? context.mine?.drops;
+  if (dropsHere) {
+    const wanted = dropsHere.filter((drop) =>
       context.resolved.scopes.some((scope) =>
         scope.missing.some((entry) => entry.name === drop.name)
       )
@@ -295,13 +299,7 @@ const getHere = async (): Promise<Context["here"]> => {
     return undefined;
   }
   const locations = await getLocationEntries();
-  const centre = document.querySelector(".navbar-on-center .center");
-  const title =
-    [...(centre?.childNodes ?? [])]
-      .find((node) => node.nodeType === Node.TEXT_NODE)
-      ?.textContent?.trim() ??
-    centre?.textContent?.trim() ??
-    "";
+  const title = getNavbarTitle();
   const header = page.querySelector<HTMLImageElement>(
     "img[src*='/img/items/']"
   );
@@ -343,6 +341,70 @@ const getHere = async (): Promise<Context["here"]> => {
   };
 };
 
+// The title the game prints in the navbar for the page in view -- its own
+// text node, not the buttons that share the bar.
+const getNavbarTitle = (): string => {
+  const centre = document.querySelector(".navbar-on-center .center");
+  return (
+    [...(centre?.childNodes ?? [])]
+      .find((node) => node.nodeType === Node.TEXT_NODE)
+      ?.textContent?.trim() ??
+    centre?.textContent?.trim() ??
+    ""
+  );
+};
+
+// Identify the mine in view, if the panel was opened on a dig board.
+//
+// Kept apart from getHere because no site has a mine's drop table -- buddy.farm
+// lists Mossrock Mine with an empty one -- so there is nothing to look up. The
+// cap tracker learns a mine's drops off the board as they are found, and that
+// list is what the Here tab draws a mine from: names and icons from the item
+// index, ids (for links) from the per-item pages, both cached for a week.
+const getMine = async (): Promise<Context["mine"]> => {
+  const learned = getLearnedMineDrops();
+  if (!learned) {
+    return undefined;
+  }
+  const page = getCurrentPage();
+  const [items, locations] = await Promise.all([
+    orUndefined(getBasicItems()),
+    orUndefined(getLocationEntries()),
+  ]);
+  const byBasename = new Map(
+    (items ?? []).map((item) => [imageBasename(item.image), item])
+  );
+  const drops = await Promise.all(
+    learned.basenames.map(async (basename) => {
+      const item = byBasename.get(basename.toLowerCase());
+      if (!item) {
+        // an icon the index does not know: show it by its file name rather
+        // than drop it, so a new item is not silently missing from the board
+        return { image: `/img/items/${basename}`, name: basename };
+      }
+      const detail = await orUndefined(itemDataState.get({ query: item.name }));
+      return { id: detail?.id, image: item.image, name: item.name };
+    })
+  );
+  const title = getNavbarTitle();
+  const name =
+    matchLocationName(
+      title,
+      (locations ?? []).map((entry) => entry.name)
+    ) ??
+    (title || "Mine");
+  const staminaText = page?.querySelector("#stamina")?.textContent ?? "";
+  return {
+    drops,
+    image: (locations ?? []).find((entry) => entry.name === name)?.image,
+    key: learned.key,
+    name,
+    stamina:
+      Number(staminaText.replaceAll(",", "").trim()) ||
+      parseStamina(page?.textContent ?? ""),
+  };
+};
+
 // Everything the three tabs need, gathered once. Switching tabs re-renders from
 // this rather than re-fetching, so only the refresh control costs requests.
 const loadContext = async (force: boolean): Promise<Context> => {
@@ -377,6 +439,7 @@ const loadContext = async (force: boolean): Promise<Context> => {
     cap,
     craftworks,
     here: await getHere(),
+    mine: await getMine(),
     goalProgress: goals.map((goal) =>
       getGoalProgress(graph, goal, inventory, unlimited, mastery?.entries ?? [])
     ),
@@ -1484,8 +1547,17 @@ const ensurePanel = (): void => {
   // button's count follow it rather than the panel's own read.
   onCapTrackerChange(() => {
     setCapBadge();
-    if (panel.dataset.open === "true" && active === "cap" && context) {
+    if (panel.dataset.open !== "true" || !context) {
+      return;
+    }
+    if (active === "cap") {
       draw();
+    } else if (active === "here" && context.mine) {
+      // the tracker just learned a drop off the dig board (or read the
+      // inventory again): the mine view is drawn from both
+      refreshHere().catch((error) => {
+        console.error("Failed to refresh the mine in view", error);
+      });
     }
   });
   setCapBadge();
@@ -1596,7 +1668,7 @@ const ensurePanel = (): void => {
     if (!previous) {
       return;
     }
-    const here = await getHere();
+    const [here, mine] = await Promise.all([getHere(), getMine()]);
     // a full reload may have replaced the context while this was in flight;
     // its `here` is already current, so leave it alone
     if (context !== previous) {
@@ -1605,13 +1677,17 @@ const ensurePanel = (): void => {
     // Nothing moved, nothing to redraw: this also runs on every page
     // transition now, most of which are between pages that are not
     // locations, and a redraw would throw away a lookup you were reading.
+    // A mine also redraws as the board teaches it a new drop.
     if (
       here?.location.name === previous.here?.location.name &&
-      here?.stamina === previous.here?.stamina
+      here?.stamina === previous.here?.stamina &&
+      mine?.key === previous.mine?.key &&
+      mine?.drops.length === previous.mine?.drops.length &&
+      mine?.stamina === previous.mine?.stamina
     ) {
       return;
     }
-    context = { ...previous, here };
+    context = { ...previous, here, mine };
     draw();
   };
 

@@ -240,6 +240,22 @@ export interface CapTrackerView {
   error?: string;
 }
 
+// What the dig board has shown dropping at the mine you are standing in, as
+// icon basenames (`foo.png`). No site publishes a mine's drop table -- buddy.farm
+// lists Mossrock Mine with an empty one -- so this learned list is all there is,
+// and the Here tab draws a mine from it. Undefined off a mine; empty when the
+// board has not shown anything yet.
+export const getLearnedMineDrops = ():
+  | { key: string; basenames: readonly string[] }
+  | undefined => {
+  loadLocationDrops();
+  const key = getLocationKey();
+  if (!key?.startsWith("mining:")) {
+    return undefined;
+  }
+  return { basenames: locationDrops[key] ?? [], key };
+};
+
 export const getCapTrackerView = (): CapTrackerView => {
   const key = getLocationKey();
   const learned = key ? locationDrops[key] : undefined;

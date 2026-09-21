@@ -422,6 +422,9 @@ const applySet = async (
     let wasActivated = await sendActivate(set);
     if (!wasActivated) {
       const fresh = (await refreshSet(set)) ?? set;
+      // ours, so the activate interceptor does not read the new id as the
+      // game's own button being pressed
+      pendingPerkSet = fresh;
       wasActivated = await sendActivate(fresh);
       if (wasActivated) {
         set = fresh;
@@ -583,7 +586,19 @@ export const runGatedAction = ({
       // stopped
       setPerkStatusNote(`${label} → ${target.name}`);
       const startedAt = Date.now();
-      const switched = await perks.apply(target, { force });
+      let switched: boolean;
+      try {
+        switched = await perks.apply(target, { force });
+      } catch (error) {
+        // the chip log is the one place Reed reads; say the action was
+        // dropped, not just that an activate went unacknowledged
+        setPerkStatusNote(
+          `${label} → ${target.name} FAILED — ${label} not run: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        throw error;
+      }
       setPerkStatusNote(
         `${label} → ${target.name}${
           switched

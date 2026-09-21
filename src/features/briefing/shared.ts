@@ -32,6 +32,9 @@ export interface Context {
   inventory: Record<string, number>;
   // the explore or fishing spot in view, when there is one
   here?: { image?: string; location: LocationRef; stamina?: number };
+  // the mine in view, when there is one -- kept apart from `here` because a
+  // mine has no drop table anywhere, only what its dig board has shown so far
+  mine?: MineHere;
   itemNames: string[];
   mastery: MasteryEntry[];
   questGoals?: Awaited<ReturnType<typeof getQuestGoals>>;
@@ -40,6 +43,22 @@ export interface Context {
   resolved: ResolvedNeeds;
   statuses: ReturnType<typeof getGoalStatuses>;
   unlimited: UnlimitedItems;
+}
+
+export interface MineDrop {
+  id?: number;
+  image?: string;
+  name: string;
+}
+
+export interface MineHere {
+  // what the board has turned up so far, learned by the cap tracker
+  drops: MineDrop[];
+  image?: string;
+  // the cap tracker's key for this mine (`mining:<id>`)
+  key: string;
+  name: string;
+  stamina?: number;
 }
 
 export interface MissingItem {

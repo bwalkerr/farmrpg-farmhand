@@ -8,6 +8,7 @@ import {
   makeRow,
   makeTag,
   MAX_LISTED,
+  MineHere,
   MissingItem,
   plural,
   toIconUrl,
@@ -311,21 +312,177 @@ export const renderLocationView = (
   body.append(card);
 };
 
+// A mine, drawn from what its dig board has shown so far. No site publishes a
+// mine's drop table, so there are no rates and no "tries to finish" here --
+// only which of the things you have seen come out of the ground you still
+// want, which you are throwing away, and your count against the cap for each.
+const renderMineView = (
+  body: HTMLElement,
+  context: Context,
+  mine: MineHere,
+  focused: ReadonlySet<string>
+): void => {
+  const { cap, inventory, resolved } = context;
+  const missing = getMissingDemand(context, focused);
+  const neededByName = new Map(missing.map((entry) => [entry.name, entry]));
+  const reasons = getReasonsByItem(resolved, focused);
+  const isAtCap = (name: string): boolean =>
+    cap !== undefined && cap > 0 && (inventory[name] ?? 0) >= cap;
+
+  // header
+  const place = document.createElement("div");
+  place.className = "fh-place";
+  const icon = toIconUrl(mine.image);
+  if (icon) {
+    const img = document.createElement("img");
+    img.src = icon;
+    img.alt = "";
+    place.append(img);
+  }
+  const text = document.createElement("div");
+  const name = document.createElement("div");
+  name.className = "fh-place-name";
+  name.textContent = mine.name;
+  const sub = document.createElement("div");
+  sub.className = "fh-place-sub";
+  sub.textContent = `Mine · ${plural(mine.drops.length, "drop")} seen so far`;
+  text.append(name, sub);
+  place.append(text);
+  body.append(place);
+
+  if (mine.stamina !== undefined) {
+    const stats = document.createElement("div");
+    stats.className = "fh-stats";
+    stats.append(makeStat("stamina", mine.stamina.toLocaleString()));
+    body.append(stats);
+  }
+
+  if (mine.drops.length === 0) {
+    body.append(
+      makeEmpty(
+        "Nothing learned about this mine yet. Its drops are read off the dig board as you find them, so dig a little and they will appear here."
+      )
+    );
+    return;
+  }
+
+  const wanted = mine.drops.filter(
+    (drop) => neededByName.has(drop.name) && !isAtCap(drop.name)
+  );
+  const wasted = mine.drops.filter((drop) => isAtCap(drop.name));
+
+  // wanted here: what you are short of that this mine has turned up
+  if (wanted.length > 0) {
+    const { card, body: cardBody } = makeCard("Wanted here", {
+      aside: String(wanted.length),
+      tone: "ok",
+    });
+    for (const drop of wanted.slice(0, MAX_LISTED * 2)) {
+      const needed = neededByName.get(drop.name)?.quantity ?? 0;
+      cardBody.append(
+        makeRow(makeItemLink(drop.name, drop.id, TEXT_WHITE), {
+          aside: [
+            `${(inventory[drop.name] ?? 0).toLocaleString()}${
+              cap !== undefined && cap > 0 ? ` / ${cap.toLocaleString()}` : ""
+            }`,
+          ],
+          icon: toIconUrl(drop.image),
+          sub: [`${needed.toLocaleString()} needed`],
+          tags: (reasons.get(drop.name) ?? [])
+            .slice(0, 3)
+            .map((reason) => makeTag(reason, "ok")),
+          tone: "ok",
+        })
+      );
+    }
+    body.append(card);
+  }
+
+  // wasted here: at cap, so every one the board turns up is discarded
+  if (wasted.length > 0) {
+    const { card, body: cardBody } = makeCard("Thrown away here", {
+      aside: String(wasted.length),
+      tone: "err",
+    });
+    for (const drop of wasted.slice(0, MAX_LISTED * 2)) {
+      cardBody.append(
+        makeRow(makeItemLink(drop.name, drop.id, TEXT_WHITE), {
+          aside: ["at cap"],
+          icon: toIconUrl(drop.image),
+          sub: ["every one you find is discarded"],
+          tone: "err",
+        })
+      );
+    }
+    body.append(card);
+  }
+
+  // everything the board has shown, with your count against the cap
+  const { card, body: cardBody } = makeCard("Seen dropping here", {
+    aside: "no rates known",
+  });
+  for (const drop of mine.drops) {
+    const have = inventory[drop.name] ?? 0;
+    const atCap = isAtCap(drop.name);
+    const nearCap =
+      !atCap && cap !== undefined && cap > 0 && have >= cap * NEAR_CAP_RATIO;
+    const wantedFor = reasons.get(drop.name) ?? [];
+    const tags: Node[] = [];
+    if (atCap) {
+      tags.push(makeTag("at cap — wasted", "err"));
+    } else if (nearCap) {
+      tags.push(makeTag("near cap", "warn"));
+    }
+    for (const reason of wantedFor.slice(0, 2)) {
+      tags.push(makeTag(reason, "ok"));
+    }
+    if (wantedFor.length > 2) {
+      tags.push(makeTag(`+${wantedFor.length - 2}`, "ok"));
+    }
+    const needed = neededByName.get(drop.name)?.quantity;
+    let tone: "ok" | "err" | undefined;
+    if (atCap) {
+      tone = "err";
+    } else if (needed !== undefined) {
+      tone = "ok";
+    }
+    cardBody.append(
+      makeRow(makeItemLink(drop.name, drop.id, TEXT_WHITE), {
+        aside: [
+          cap !== undefined && cap > 0
+            ? `${have.toLocaleString()} / ${cap.toLocaleString()}`
+            : have.toLocaleString(),
+        ],
+        icon: toIconUrl(drop.image),
+        sub: needed === undefined ? [] : [`${needed.toLocaleString()} needed`],
+        tags,
+        tone,
+      })
+    );
+  }
+  body.append(card);
+};
+
 export const renderHereTab = async (
   body: HTMLElement,
   context: Context,
   focused: ReadonlySet<string>
 ): Promise<void> => {
   const missing = getMissingDemand(context, focused);
-  if (!context.here) {
-    body.append(
-      makeEmpty(
-        "Not at an explore area or fishing spot. Open the panel on one for its drop table against your needs."
-      )
-    );
-    await renderWhereToGo(body, context, missing, "Where to go");
+  if (context.here) {
+    renderLocationView(body, context, context.here, focused);
+    await renderWhereToGo(body, context, missing, "Elsewhere");
     return;
   }
-  renderLocationView(body, context, context.here, focused);
-  await renderWhereToGo(body, context, missing, "Elsewhere");
+  if (context.mine) {
+    renderMineView(body, context, context.mine, focused);
+    await renderWhereToGo(body, context, missing, "Elsewhere");
+    return;
+  }
+  body.append(
+    makeEmpty(
+      "Not at an explore area, fishing spot or mine. Open the panel on one for its drop table against your needs."
+    )
+  );
+  await renderWhereToGo(body, context, missing, "Where to go");
 };
