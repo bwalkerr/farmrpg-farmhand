@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.76
+// @version 1.1.77
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2330,11 +2330,40 @@ const readPerksPage = () => __awaiter(void 0, void 0, void 0, function* () {
     const sets = (0, page_1.getListByTitle)("My Perk Sets", page.body);
     const checks = [...page.body.querySelectorAll(".fa-check")].filter((icon) => !(sets === null || sets === void 0 ? void 0 : sets.contains(icon))).length;
     const clocks = page.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
+    if (checks + clocks === 0) {
+        describePerksPage(page, sets);
+    }
     return {
         activeId: currentPerkSetId,
         equipped: checks + clocks > 0 ? checks : undefined,
     };
 });
+// The icon classes above are a guess at markup nobody here has seen, and on
+// Reed's page they match nothing. Rather than ask for the HTML, say what the
+// page is made of -- once a session, into the log he already pastes: the
+// distinct icon classes, and the first row outside the set list, trimmed.
+let hasDescribedPerksPage = false;
+const describePerksPage = (page, sets) => {
+    var _a, _b, _c;
+    if (hasDescribedPerksPage) {
+        return;
+    }
+    hasDescribedPerksPage = true;
+    const iconClasses = new Set();
+    for (const icon of page.body.querySelectorAll("i, .icon, img[src*='icon']")) {
+        const description = icon.tagName === "IMG"
+            ? `img:${(_a = icon.getAttribute("src")) !== null && _a !== void 0 ? _a : ""}`
+            : `${icon.tagName.toLowerCase()}.${[...icon.classList].join(".")}${((_b = icon.textContent) === null || _b === void 0 ? void 0 : _b.trim()) ? `:${icon.textContent.trim()}` : ""}`;
+        if (!(sets === null || sets === void 0 ? void 0 : sets.contains(icon))) {
+            iconClasses.add(description);
+        }
+    }
+    const row = [...page.body.querySelectorAll("li")].find((item) => !(sets === null || sets === void 0 ? void 0 : sets.contains(item)));
+    logPerk(`perks page icons: ${[...iconClasses].slice(0, 12).join(" | ") || "none"}`);
+    logPerk(`perks page first row: ${((_c = row === null || row === void 0 ? void 0 : row.outerHTML) !== null && _c !== void 0 ? _c : "no <li> found")
+        .replaceAll(/\s+/g, " ")
+        .slice(0, 600)}`);
+};
 const loadSetSizes = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!setSizes) {
         const stored = yield GM.getValue(SET_SIZES_KEY, {});
@@ -7478,7 +7507,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.76" !== void 0 ? "1.1.76" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.77" !== void 0 ? "1.1.77" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13846,7 +13875,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.76" !== void 0 ? "1.1.76" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.77" !== void 0 ? "1.1.77" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
