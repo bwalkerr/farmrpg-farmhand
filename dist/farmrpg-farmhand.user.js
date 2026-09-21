@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.74
+// @version 1.1.75
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -690,7 +690,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.replantAll = exports.harvestAll = exports.farmIdState = exports.farmStatusState = exports.CropStatus = void 0;
+exports.replantAll = exports.harvestAllFromFarmPage = exports.harvestAll = exports.farmIdState = exports.farmStatusState = exports.CropStatus = void 0;
 const state_1 = __webpack_require__(4782);
 const perks_1 = __webpack_require__(5543);
 const requests_1 = __webpack_require__(3813);
@@ -1073,6 +1073,22 @@ const harvestAll = () => (0, perks_1.runGatedAction)({
     }),
 });
 exports.harvestAll = harvestAll;
+// The farm page's own Harvest All button, gated. It is the GAME's button, so
+// until now it was the one harvest nothing stood in front of: arriving at the
+// farm starts a reconcile whose first request is resetperks, and a click in
+// the ~1.5 s before Default is back on harvested an EMPTY slate -- Reed:
+// "harvested on the farm page as soon as I landed and only got 36, I guess I
+// beat the swap". The click is fire-and-forget (the game runs its own request
+// and repaints), so the queue is held afterwards like Plant All's.
+const harvestAllFromFarmPage = (nativeClick) => (0, perks_1.runGatedAction)({
+    label: "harvest",
+    set: getFarmingPerks,
+    restore: false,
+    force: true,
+    holdMs: PLANT_CLICK_HOLD_MS,
+    action: () => Promise.resolve(nativeClick()),
+});
+exports.harvestAllFromFarmPage = harvestAllFromFarmPage;
 // `fromFarmPage`: on the farm we click the game's own Plant All button so its
 // UI updates, and a click is fire-and-forget -- the game runs its own request
 // and we never see it finish. `holdMs` keeps the perk queue held for that
@@ -7417,7 +7433,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.74" !== void 0 ? "1.1.74" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.75" !== void 0 ? "1.1.75" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -12623,6 +12639,7 @@ exports.perkManagment = void 0;
 const perks_1 = __webpack_require__(5543);
 const page_1 = __webpack_require__(7952);
 const settings_1 = __webpack_require__(126);
+const farm_1 = __webpack_require__(6228);
 const quickSellSafely_1 = __webpack_require__(8760);
 const perkIndicator_1 = __webpack_require__(3008);
 const SETTING_PERK_MANAGER = {
@@ -12756,6 +12773,72 @@ const installQuickActionProxy = (nativeSelector, label) => {
 // Quick-sell and quick-give, registered once at module scope. One gate, set
 // rather than appended to, so it cannot accumulate across page loads.
 (0, quickSellSafely_1.setQuicksellGate)(runQuickAction);
+// The farm page's Harvest All. Not a proxy button like CRAFT: the game shows
+// and hides this one as the crops come ready, so a stand-in mounted at page
+// load would be hidden or stale half the time. Instead the click itself is
+// caught in the capture phase at the document -- before the game's own
+// delegated handler, which listens on the document in the bubble phase --
+// and replayed from inside the gate. Works on a retained page too, since it
+// is not tied to any mount. Matched by the game's class, or failing that by
+// what the button says, so a renamed class degrades to the text.
+let isReplayingHarvestClick = false;
+const findHarvestAllButton = (target) => {
+    var _a, _b;
+    if (!(target instanceof Element)) {
+        return undefined;
+    }
+    const button = target.closest("a, button");
+    if (!button) {
+        return undefined;
+    }
+    const isHarvestAll = button.classList.contains("harvestallbtn") ||
+        /^harvest all$/i.test((_b = (_a = button.textContent) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "");
+    return isHarvestAll ? button : undefined;
+};
+document.addEventListener("click", (event) => {
+    if (isReplayingHarvestClick) {
+        return;
+    }
+    const [page] = (0, page_1.getPage)();
+    if ((page !== null && page !== void 0 ? page : (0, page_1.getHashPage)()) !== page_1.Page.FARM) {
+        return;
+    }
+    const button = findHarvestAllButton(event.target);
+    if (!button) {
+        return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    (0, settings_1.getSetting)(SETTING_PERK_MANAGER)
+        .then((_a) => __awaiter(void 0, [_a], void 0, function* ({ value: isEnabled }) {
+        const replay = () => {
+            isReplayingHarvestClick = true;
+            try {
+                button.click();
+            }
+            finally {
+                isReplayingHarvestClick = false;
+            }
+        };
+        if (!isEnabled) {
+            replay();
+            return;
+        }
+        const label = [...button.childNodes];
+        button.textContent = "Loading...";
+        try {
+            yield (0, farm_1.harvestAllFromFarmPage)(replay);
+        }
+        finally {
+            // the button is the game's; it repaints the page after the click
+            // anyway, this only covers a switch that failed
+            button.replaceChildren(...label);
+        }
+    }))
+        .catch((error) => {
+        console.error("Failed to gate the farm page harvest", error);
+    });
+}, true);
 // Resolves the one activity set the given (live) page calls for, or undefined
 // when the page isn't an activity page (→ revert to Default). A page matches at
 // most one activity, so the first hit wins; a matched page whose set isn't
@@ -13707,7 +13790,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.74" !== void 0 ? "1.1.74" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.75" !== void 0 ? "1.1.75" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
