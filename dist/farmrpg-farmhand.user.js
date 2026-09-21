@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.72
+// @version 1.1.73
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2357,6 +2357,9 @@ const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], voi
         let wasActivated = yield sendActivate(set);
         if (!wasActivated) {
             const fresh = (_a = (yield refreshSet(set))) !== null && _a !== void 0 ? _a : set;
+            // ours, so the activate interceptor does not read the new id as the
+            // game's own button being pressed
+            pendingPerkSet = fresh;
             wasActivated = yield sendActivate(fresh);
             if (wasActivated) {
                 set = fresh;
@@ -2466,7 +2469,16 @@ const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, force 
         // stopped
         (0, exports.setPerkStatusNote)(`${label} → ${target.name}`);
         const startedAt = Date.now();
-        const switched = yield perks.apply(target, { force });
+        let switched;
+        try {
+            switched = yield perks.apply(target, { force });
+        }
+        catch (error) {
+            // the chip log is the one place Reed reads; say the action was
+            // dropped, not just that an activate went unacknowledged
+            (0, exports.setPerkStatusNote)(`${label} → ${target.name} FAILED — ${label} not run: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+        }
         (0, exports.setPerkStatusNote)(`${label} → ${target.name}${switched
             ? ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
             : " (already on)"}`);
@@ -4042,15 +4054,145 @@ const renderLocationView = (body, context, here, focused) => {
     body.append(card);
 };
 exports.renderLocationView = renderLocationView;
-const renderHereTab = (body, context, focused) => __awaiter(void 0, void 0, void 0, function* () {
+// A mine, drawn from what its dig board has shown so far. No site publishes a
+// mine's drop table, so there are no rates and no "tries to finish" here --
+// only which of the things you have seen come out of the ground you still
+// want, which you are throwing away, and your count against the cap for each.
+const renderMineView = (body, context, mine, focused) => {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const { cap, inventory, resolved } = context;
     const missing = (0, shared_1.getMissingDemand)(context, focused);
-    if (!context.here) {
-        body.append((0, shared_1.makeEmpty)("Not at an explore area or fishing spot. Open the panel on one for its drop table against your needs."));
-        yield renderWhereToGo(body, context, missing, "Where to go");
+    const neededByName = new Map(missing.map((entry) => [entry.name, entry]));
+    const reasons = (0, shared_1.getReasonsByItem)(resolved, focused);
+    const isAtCap = (name) => { var _a; return cap !== undefined && cap > 0 && ((_a = inventory[name]) !== null && _a !== void 0 ? _a : 0) >= cap; };
+    // header
+    const place = document.createElement("div");
+    place.className = "fh-place";
+    const icon = (0, shared_1.toIconUrl)(mine.image);
+    if (icon) {
+        const img = document.createElement("img");
+        img.src = icon;
+        img.alt = "";
+        place.append(img);
+    }
+    const text = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "fh-place-name";
+    name.textContent = mine.name;
+    const sub = document.createElement("div");
+    sub.className = "fh-place-sub";
+    sub.textContent = `Mine · ${(0, shared_1.plural)(mine.drops.length, "drop")} seen so far`;
+    text.append(name, sub);
+    place.append(text);
+    body.append(place);
+    if (mine.stamina !== undefined) {
+        const stats = document.createElement("div");
+        stats.className = "fh-stats";
+        stats.append(makeStat("stamina", mine.stamina.toLocaleString()));
+        body.append(stats);
+    }
+    if (mine.drops.length === 0) {
+        body.append((0, shared_1.makeEmpty)("Nothing learned about this mine yet. Its drops are read off the dig board as you find them, so dig a little and they will appear here."));
         return;
     }
-    (0, exports.renderLocationView)(body, context, context.here, focused);
-    yield renderWhereToGo(body, context, missing, "Elsewhere");
+    const wanted = mine.drops.filter((drop) => neededByName.has(drop.name) && !isAtCap(drop.name));
+    const wasted = mine.drops.filter((drop) => isAtCap(drop.name));
+    // wanted here: what you are short of that this mine has turned up
+    if (wanted.length > 0) {
+        const { card, body: cardBody } = (0, shared_1.makeCard)("Wanted here", {
+            aside: String(wanted.length),
+            tone: "ok",
+        });
+        for (const drop of wanted.slice(0, shared_1.MAX_LISTED * 2)) {
+            const needed = (_b = (_a = neededByName.get(drop.name)) === null || _a === void 0 ? void 0 : _a.quantity) !== null && _b !== void 0 ? _b : 0;
+            cardBody.append((0, shared_1.makeRow)((0, gameLinks_1.makeItemLink)(drop.name, drop.id, theme_1.TEXT_WHITE), {
+                aside: [
+                    `${((_c = inventory[drop.name]) !== null && _c !== void 0 ? _c : 0).toLocaleString()}${cap !== undefined && cap > 0 ? ` / ${cap.toLocaleString()}` : ""}`,
+                ],
+                icon: (0, shared_1.toIconUrl)(drop.image),
+                sub: [`${needed.toLocaleString()} needed`],
+                tags: ((_d = reasons.get(drop.name)) !== null && _d !== void 0 ? _d : [])
+                    .slice(0, 3)
+                    .map((reason) => (0, shared_1.makeTag)(reason, "ok")),
+                tone: "ok",
+            }));
+        }
+        body.append(card);
+    }
+    // wasted here: at cap, so every one the board turns up is discarded
+    if (wasted.length > 0) {
+        const { card, body: cardBody } = (0, shared_1.makeCard)("Thrown away here", {
+            aside: String(wasted.length),
+            tone: "err",
+        });
+        for (const drop of wasted.slice(0, shared_1.MAX_LISTED * 2)) {
+            cardBody.append((0, shared_1.makeRow)((0, gameLinks_1.makeItemLink)(drop.name, drop.id, theme_1.TEXT_WHITE), {
+                aside: ["at cap"],
+                icon: (0, shared_1.toIconUrl)(drop.image),
+                sub: ["every one you find is discarded"],
+                tone: "err",
+            }));
+        }
+        body.append(card);
+    }
+    // everything the board has shown, with your count against the cap
+    const { card, body: cardBody } = (0, shared_1.makeCard)("Seen dropping here", {
+        aside: "no rates known",
+    });
+    for (const drop of mine.drops) {
+        const have = (_e = inventory[drop.name]) !== null && _e !== void 0 ? _e : 0;
+        const atCap = isAtCap(drop.name);
+        const nearCap = !atCap && cap !== undefined && cap > 0 && have >= cap * NEAR_CAP_RATIO;
+        const wantedFor = (_f = reasons.get(drop.name)) !== null && _f !== void 0 ? _f : [];
+        const tags = [];
+        if (atCap) {
+            tags.push((0, shared_1.makeTag)("at cap — wasted", "err"));
+        }
+        else if (nearCap) {
+            tags.push((0, shared_1.makeTag)("near cap", "warn"));
+        }
+        for (const reason of wantedFor.slice(0, 2)) {
+            tags.push((0, shared_1.makeTag)(reason, "ok"));
+        }
+        if (wantedFor.length > 2) {
+            tags.push((0, shared_1.makeTag)(`+${wantedFor.length - 2}`, "ok"));
+        }
+        const needed = (_g = neededByName.get(drop.name)) === null || _g === void 0 ? void 0 : _g.quantity;
+        let tone;
+        if (atCap) {
+            tone = "err";
+        }
+        else if (needed !== undefined) {
+            tone = "ok";
+        }
+        cardBody.append((0, shared_1.makeRow)((0, gameLinks_1.makeItemLink)(drop.name, drop.id, theme_1.TEXT_WHITE), {
+            aside: [
+                cap !== undefined && cap > 0
+                    ? `${have.toLocaleString()} / ${cap.toLocaleString()}`
+                    : have.toLocaleString(),
+            ],
+            icon: (0, shared_1.toIconUrl)(drop.image),
+            sub: needed === undefined ? [] : [`${needed.toLocaleString()} needed`],
+            tags,
+            tone,
+        }));
+    }
+    body.append(card);
+};
+const renderHereTab = (body, context, focused) => __awaiter(void 0, void 0, void 0, function* () {
+    const missing = (0, shared_1.getMissingDemand)(context, focused);
+    if (context.here) {
+        (0, exports.renderLocationView)(body, context, context.here, focused);
+        yield renderWhereToGo(body, context, missing, "Elsewhere");
+        return;
+    }
+    if (context.mine) {
+        renderMineView(body, context, context.mine, focused);
+        yield renderWhereToGo(body, context, missing, "Elsewhere");
+        return;
+    }
+    body.append((0, shared_1.makeEmpty)("Not at an explore area, fishing spot or mine. Open the panel on one for its drop table against your needs."));
+    yield renderWhereToGo(body, context, missing, "Where to go");
 });
 exports.renderHereTab = renderHereTab;
 
@@ -6265,13 +6407,13 @@ const requests_1 = __webpack_require__(3300);
 const perks_1 = __webpack_require__(5543);
 const quests_1 = __webpack_require__(303);
 const settings_1 = __webpack_require__(126);
+const locationAdvice_1 = __webpack_require__(4764);
 const styles_1 = __webpack_require__(6306);
 const inventory_1 = __webpack_require__(4514);
 const lookup_1 = __webpack_require__(2294);
 const gameLinks_1 = __webpack_require__(1616);
 const search_1 = __webpack_require__(5164);
 const mastery_1 = __webpack_require__(283);
-const locationAdvice_1 = __webpack_require__(4764);
 const pageTransitions_1 = __webpack_require__(7694);
 const promise_1 = __webpack_require__(6762);
 const unlimited_1 = __webpack_require__(4808);
@@ -6316,7 +6458,7 @@ const ICON = `
 // outstanding shows no number at all rather than a zero -- a row of zeroes
 // reads as noise and hides the one number that matters.
 const getTabCounts = (context) => {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     const counts = {};
     const attention = summarizeAttention(context.advice, context.statuses.filter((status) => status.isReady).length);
     if (attention.count > 0) {
@@ -6324,8 +6466,9 @@ const getTabCounts = (context) => {
     }
     // what drops where you are that you are short of; the tab is the place to
     // answer "is it worth staying"
-    if (context.here) {
-        const wanted = context.here.location.drops.filter((drop) => context.resolved.scopes.some((scope) => scope.missing.some((entry) => entry.name === drop.name))).length;
+    const dropsHere = (_b = (_a = context.here) === null || _a === void 0 ? void 0 : _a.location.drops) !== null && _b !== void 0 ? _b : (_c = context.mine) === null || _c === void 0 ? void 0 : _c.drops;
+    if (dropsHere) {
+        const wanted = dropsHere.filter((drop) => context.resolved.scopes.some((scope) => scope.missing.some((entry) => entry.name === drop.name))).length;
         if (wanted > 0) {
             counts.here = wanted;
         }
@@ -6338,17 +6481,17 @@ const getTabCounts = (context) => {
     // or, failing those, a saved set that matches something you want and is not
     // the one loaded (getRecommendedSet skips the active set, so anything it
     // returns is by definition a change)
-    const roots = (_b = (_a = context.advice) === null || _a === void 0 ? void 0 : _a.roots.length) !== null && _b !== void 0 ? _b : 0;
+    const roots = (_e = (_d = context.advice) === null || _d === void 0 ? void 0 : _d.roots.length) !== null && _e !== void 0 ? _e : 0;
     if (roots > 0) {
         counts.craftworks = roots;
     }
-    else if ((0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_d = (_c = context.craftworks) === null || _c === void 0 ? void 0 : _c.sets) !== null && _d !== void 0 ? _d : [], context.itemNames)) {
+    else if ((0, suggestions_1.getRecommendedSet)(getWantedNames(context), (_g = (_f = context.craftworks) === null || _f === void 0 ? void 0 : _f.sets) !== null && _g !== void 0 ? _g : [], context.itemNames)) {
         counts.craftworks = 1;
     }
     // items at cap where you are (or anywhere, before this spot is learned);
     // live tracker state rather than the context, same as the button's badge
     const capView = (0, inventoryCapWarnings_1.getCapTrackerView)();
-    const atCapHere = ((_e = capView.here) !== null && _e !== void 0 ? _e : capView.items).filter((item) => item.isAtCap).length;
+    const atCapHere = ((_h = capView.here) !== null && _h !== void 0 ? _h : capView.items).filter((item) => item.isAtCap).length;
     if (capView.isEnabled && atCapHere > 0) {
         counts.cap = atCapHere;
     }
@@ -6440,7 +6583,7 @@ const fetchActiveQuests = () => __awaiter(void 0, void 0, void 0, function* () {
 // the surface that reliably renders: injecting a card into the explore page
 // meant guessing at its structure, and a wrong guess fails silently.
 const getHere = () => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+    var _a, _b, _c, _d, _e, _f, _g;
     const page = (0, page_1.getCurrentPage)();
     if (!page) {
         return undefined;
@@ -6459,12 +6602,10 @@ const getHere = () => __awaiter(void 0, void 0, void 0, function* () {
         return undefined;
     }
     const locations = yield (0, api_1.getLocationEntries)();
-    const centre = document.querySelector(".navbar-on-center .center");
-    const title = (_f = (_d = (_c = (_b = [...((_a = centre === null || centre === void 0 ? void 0 : centre.childNodes) !== null && _a !== void 0 ? _a : [])]
-        .find((node) => node.nodeType === Node.TEXT_NODE)) === null || _b === void 0 ? void 0 : _b.textContent) === null || _c === void 0 ? void 0 : _c.trim()) !== null && _d !== void 0 ? _d : (_e = centre === null || centre === void 0 ? void 0 : centre.textContent) === null || _e === void 0 ? void 0 : _e.trim()) !== null && _f !== void 0 ? _f : "";
+    const title = getNavbarTitle();
     const header = page.querySelector("img[src*='/img/items/']");
-    const name = (_g = (0, locationAdvice_1.matchLocationName)(title, locations.map((entry) => entry.name))) !== null && _g !== void 0 ? _g : (header
-        ? (0, locationAdvice_1.matchLocationByImage)((_h = header.getAttribute("src")) !== null && _h !== void 0 ? _h : "", locations)
+    const name = (_a = (0, locationAdvice_1.matchLocationName)(title, locations.map((entry) => entry.name))) !== null && _a !== void 0 ? _a : (header
+        ? (0, locationAdvice_1.matchLocationByImage)((_b = header.getAttribute("src")) !== null && _b !== void 0 ? _b : "", locations)
         : undefined);
     if (!name) {
         console.debug("[Farmhand] could not identify this location", {
@@ -6480,16 +6621,65 @@ const getHere = () => __awaiter(void 0, void 0, void 0, function* () {
     if (location && (!location.drops || location.silverPerHit === undefined)) {
         location = yield (0, promise_1.orUndefined)(api_1.locationDataState.get({ query: name, ignoreCache: true }));
     }
-    if (!((_j = location === null || location === void 0 ? void 0 : location.drops) === null || _j === void 0 ? void 0 : _j.length)) {
+    if (!((_c = location === null || location === void 0 ? void 0 : location.drops) === null || _c === void 0 ? void 0 : _c.length)) {
         console.debug("[Farmhand] no drop table for", name, location);
         return undefined;
     }
-    const staminaText = (_l = (_k = page.querySelector("#stamina")) === null || _k === void 0 ? void 0 : _k.textContent) !== null && _l !== void 0 ? _l : "";
+    const staminaText = (_e = (_d = page.querySelector("#stamina")) === null || _d === void 0 ? void 0 : _d.textContent) !== null && _e !== void 0 ? _e : "";
     return {
-        image: (_m = locations.find((entry) => entry.name === name)) === null || _m === void 0 ? void 0 : _m.image,
+        image: (_f = locations.find((entry) => entry.name === name)) === null || _f === void 0 ? void 0 : _f.image,
         location,
         stamina: Number(staminaText.replaceAll(",", "").trim()) ||
-            (0, locationAdvice_1.parseStamina)((_o = page.textContent) !== null && _o !== void 0 ? _o : ""),
+            (0, locationAdvice_1.parseStamina)((_g = page.textContent) !== null && _g !== void 0 ? _g : ""),
+    };
+});
+// The title the game prints in the navbar for the page in view -- its own
+// text node, not the buttons that share the bar.
+const getNavbarTitle = () => {
+    var _a, _b, _c, _d, _e, _f;
+    const centre = document.querySelector(".navbar-on-center .center");
+    return ((_f = (_d = (_c = (_b = [...((_a = centre === null || centre === void 0 ? void 0 : centre.childNodes) !== null && _a !== void 0 ? _a : [])]
+        .find((node) => node.nodeType === Node.TEXT_NODE)) === null || _b === void 0 ? void 0 : _b.textContent) === null || _c === void 0 ? void 0 : _c.trim()) !== null && _d !== void 0 ? _d : (_e = centre === null || centre === void 0 ? void 0 : centre.textContent) === null || _e === void 0 ? void 0 : _e.trim()) !== null && _f !== void 0 ? _f : "");
+};
+// Identify the mine in view, if the panel was opened on a dig board.
+//
+// Kept apart from getHere because no site has a mine's drop table -- buddy.farm
+// lists Mossrock Mine with an empty one -- so there is nothing to look up. The
+// cap tracker learns a mine's drops off the board as they are found, and that
+// list is what the Here tab draws a mine from: names and icons from the item
+// index, ids (for links) from the per-item pages, both cached for a week.
+const getMine = () => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e;
+    const learned = (0, inventoryCapWarnings_1.getLearnedMineDrops)();
+    if (!learned) {
+        return undefined;
+    }
+    const page = (0, page_1.getCurrentPage)();
+    const [items, locations] = yield Promise.all([
+        (0, promise_1.orUndefined)((0, api_1.getBasicItems)()),
+        (0, promise_1.orUndefined)((0, api_1.getLocationEntries)()),
+    ]);
+    const byBasename = new Map((items !== null && items !== void 0 ? items : []).map((item) => [(0, locationAdvice_1.imageBasename)(item.image), item]));
+    const drops = yield Promise.all(learned.basenames.map((basename) => __awaiter(void 0, void 0, void 0, function* () {
+        const item = byBasename.get(basename.toLowerCase());
+        if (!item) {
+            // an icon the index does not know: show it by its file name rather
+            // than drop it, so a new item is not silently missing from the board
+            return { image: `/img/items/${basename}`, name: basename };
+        }
+        const detail = yield (0, promise_1.orUndefined)(api_1.itemDataState.get({ query: item.name }));
+        return { id: detail === null || detail === void 0 ? void 0 : detail.id, image: item.image, name: item.name };
+    })));
+    const title = getNavbarTitle();
+    const name = (_a = (0, locationAdvice_1.matchLocationName)(title, (locations !== null && locations !== void 0 ? locations : []).map((entry) => entry.name))) !== null && _a !== void 0 ? _a : (title || "Mine");
+    const staminaText = (_c = (_b = page === null || page === void 0 ? void 0 : page.querySelector("#stamina")) === null || _b === void 0 ? void 0 : _b.textContent) !== null && _c !== void 0 ? _c : "";
+    return {
+        drops,
+        image: (_d = (locations !== null && locations !== void 0 ? locations : []).find((entry) => entry.name === name)) === null || _d === void 0 ? void 0 : _d.image,
+        key: learned.key,
+        name,
+        stamina: Number(staminaText.replaceAll(",", "").trim()) ||
+            (0, locationAdvice_1.parseStamina)((_e = page === null || page === void 0 ? void 0 : page.textContent) !== null && _e !== void 0 ? _e : ""),
     };
 });
 // Everything the three tabs need, gathered once. Switching tabs re-renders from
@@ -6522,6 +6712,7 @@ const loadContext = (force) => __awaiter(void 0, void 0, void 0, function* () {
         cap,
         craftworks,
         here: yield getHere(),
+        mine: yield getMine(),
         goalProgress: goals.map((goal) => { var _a; return (0, goals_1.getGoalProgress)(graph, goal, inventory, unlimited, (_a = mastery === null || mastery === void 0 ? void 0 : mastery.entries) !== null && _a !== void 0 ? _a : []); }),
         goals,
         graph,
@@ -7145,7 +7336,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.72" !== void 0 ? "1.1.72" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.73" !== void 0 ? "1.1.73" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -7409,8 +7600,18 @@ const ensurePanel = () => {
     // button's count follow it rather than the panel's own read.
     (0, inventoryCapWarnings_1.onCapTrackerChange)(() => {
         setCapBadge();
-        if (panel.dataset.open === "true" && active === "cap" && context) {
+        if (panel.dataset.open !== "true" || !context) {
+            return;
+        }
+        if (active === "cap") {
             draw();
+        }
+        else if (active === "here" && context.mine) {
+            // the tracker just learned a drop off the dig board (or read the
+            // inventory again): the mine view is drawn from both
+            refreshHere().catch((error) => {
+                console.error("Failed to refresh the mine in view", error);
+            });
         }
     });
     setCapBadge();
@@ -7507,12 +7708,12 @@ const ensurePanel = () => {
         refreshHere();
     };
     const refreshHere = () => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+        var _a, _b, _c, _d, _e;
         const previous = context;
         if (!previous) {
             return;
         }
-        const here = yield getHere();
+        const [here, mine] = yield Promise.all([getHere(), getMine()]);
         // a full reload may have replaced the context while this was in flight;
         // its `here` is already current, so leave it alone
         if (context !== previous) {
@@ -7521,11 +7722,15 @@ const ensurePanel = () => {
         // Nothing moved, nothing to redraw: this also runs on every page
         // transition now, most of which are between pages that are not
         // locations, and a redraw would throw away a lookup you were reading.
+        // A mine also redraws as the board teaches it a new drop.
         if ((here === null || here === void 0 ? void 0 : here.location.name) === ((_a = previous.here) === null || _a === void 0 ? void 0 : _a.location.name) &&
-            (here === null || here === void 0 ? void 0 : here.stamina) === ((_b = previous.here) === null || _b === void 0 ? void 0 : _b.stamina)) {
+            (here === null || here === void 0 ? void 0 : here.stamina) === ((_b = previous.here) === null || _b === void 0 ? void 0 : _b.stamina) &&
+            (mine === null || mine === void 0 ? void 0 : mine.key) === ((_c = previous.mine) === null || _c === void 0 ? void 0 : _c.key) &&
+            (mine === null || mine === void 0 ? void 0 : mine.drops.length) === ((_d = previous.mine) === null || _d === void 0 ? void 0 : _d.drops.length) &&
+            (mine === null || mine === void 0 ? void 0 : mine.stamina) === ((_e = previous.mine) === null || _e === void 0 ? void 0 : _e.stamina)) {
             return;
         }
-        context = Object.assign(Object.assign({}, previous), { here });
+        context = Object.assign(Object.assign({}, previous), { here, mine });
         draw();
     });
     // On a desktop the panel sits open beside the game, so walking from town to
@@ -10305,7 +10510,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.inventoryCapWarnings = exports.refreshCapTrackerNow = exports.onCapTrackerChange = exports.getCapTrackerView = void 0;
+exports.inventoryCapWarnings = exports.refreshCapTrackerNow = exports.onCapTrackerChange = exports.getCapTrackerView = exports.getLearnedMineDrops = void 0;
 const diagnostics_1 = __webpack_require__(3747);
 const page_1 = __webpack_require__(7952);
 const requests_1 = __webpack_require__(3300);
@@ -10479,6 +10684,21 @@ const learnCurrentLocation = () => {
         learnFromMiningPage(key);
     }
 };
+// What the dig board has shown dropping at the mine you are standing in, as
+// icon basenames (`foo.png`). No site publishes a mine's drop table -- buddy.farm
+// lists Mossrock Mine with an empty one -- so this learned list is all there is,
+// and the Here tab draws a mine from it. Undefined off a mine; empty when the
+// board has not shown anything yet.
+const getLearnedMineDrops = () => {
+    var _a;
+    loadLocationDrops();
+    const key = getLocationKey();
+    if (!(key === null || key === void 0 ? void 0 : key.startsWith("mining:"))) {
+        return undefined;
+    }
+    return { basenames: (_a = locationDrops[key]) !== null && _a !== void 0 ? _a : [], key };
+};
+exports.getLearnedMineDrops = getLearnedMineDrops;
 const getCapTrackerView = () => {
     const key = getLocationKey();
     const learned = key ? locationDrops[key] : undefined;
@@ -13406,7 +13626,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.72" !== void 0 ? "1.1.72" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.73" !== void 0 ? "1.1.73" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
