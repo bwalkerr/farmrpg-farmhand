@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.73
+// @version 1.1.74
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2276,6 +2276,86 @@ exports.getPerkStatus = getPerkStatus;
 // when a switch actually happened -- the confirmed fast path below skips it.
 const PERK_SETTLE_MS = 1000;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// ---------------------------------------------------------------------------
+// Is the set actually on yet?
+// ---------------------------------------------------------------------------
+// The settle is a guess at how long the game takes to finish equipping after it
+// says "success", and Reed's harvests say it is sometimes short: a field that
+// gives ~50 under Default and 36 under nothing came back with 41, from a
+// harvest that went out 1.1 s after the tap with reset and activate both
+// acknowledged -- PART of the set was on. So after the settle the perks page
+// is read until the number of equipped perks stops moving. On that page an
+// equipped perk carries a checkmark and one that is not a clock (Reed's
+// screenshot, 1.0.58); the "My Perk Sets" list uses the same checkmark for the
+// active set, so it is left out of the count.
+//
+// How many a set equips is learned, not known: the page never says what a set
+// contains. The count a set was last seen fully on with is remembered per set
+// name (ids change when a set is re-made), and a read that reaches it is
+// proof enough. Below it the page is read again until two more reads agree,
+// which is also how an edited set teaches the new size. A page with neither
+// icon cannot be read; then the settle is all there is, and the log says so.
+const VERIFY_POLL_MS = 400;
+const VERIFY_WINDOW_MS = 4000;
+const SET_SIZES_KEY = "fhPerkSetSizes";
+let setSizes;
+const countEquippedPerks = (root) => {
+    const sets = (0, page_1.getListByTitle)("My Perk Sets", root.body);
+    const checks = [...root.body.querySelectorAll(".fa-check")].filter((icon) => !(sets === null || sets === void 0 ? void 0 : sets.contains(icon))).length;
+    const clocks = root.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
+    return checks + clocks > 0 ? checks : undefined;
+};
+const rememberSetSize = (set, size) => {
+    setSizes = Object.assign(Object.assign({}, setSizes), { [set.name]: size });
+    GM.setValue(SET_SIZES_KEY, setSizes);
+};
+const waitUntilEquipped = (set) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!setSizes) {
+        const stored = yield GM.getValue(SET_SIZES_KEY, {});
+        // only ever runs inside the perk queue, so nothing else can have loaded
+        // it in the meantime
+        // eslint-disable-next-line require-atomic-updates
+        setSizes !== null && setSizes !== void 0 ? setSizes : (setSizes = stored !== null && stored !== void 0 ? stored : {});
+    }
+    const known = setSizes[set.name];
+    const startedAt = Date.now();
+    const counts = [];
+    for (;;) {
+        let page;
+        try {
+            page = yield (0, requests_2.getHTML)(page_1.Page.PERKS);
+        }
+        catch (error) {
+            // a guard on top of the settle, not a gate: an unreadable page must not
+            // strand the action behind it
+            logPerk(`${set.name}: could not read the perks page (${error instanceof Error ? error.message : String(error)}) — trusting the settle`);
+            return;
+        }
+        const count = countEquippedPerks(page);
+        if (count === undefined) {
+            logPerk(`${set.name}: perks page shows no perk icons — trusting the settle`);
+            return;
+        }
+        counts.push(count);
+        const isStable = counts.length >= 3 && counts.at(-2) === count && counts.at(-3) === count;
+        if ((known !== undefined && count >= known) || isStable) {
+            if (count !== known) {
+                rememberSetSize(set, count);
+                logPerk(`${set.name} equips ${count} perks${known === undefined ? "" : ` (was ${known})`}`);
+            }
+            if (counts.length > 1) {
+                logPerk(`${set.name}: ${counts[0]} of ${count} on after the settle, ${count} after ${((Date.now() - startedAt) /
+                    1000).toFixed(1)}s more`);
+            }
+            return;
+        }
+        if (Date.now() - startedAt > VERIFY_WINDOW_MS) {
+            logPerk(`${set.name}: still ${count} of ${known} perks on after ${VERIFY_WINDOW_MS / 1000}s — going on anyway`);
+            return;
+        }
+        yield delay(VERIFY_POLL_MS);
+    }
+});
 // worker.php answers these two with the bare word "success". Anything else --
 // an error page, a logged-out shell, a rate limit -- means we do NOT know what
 // the game did, and the one thing we must not do then is record it as
@@ -2369,6 +2449,7 @@ const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], voi
             throw new Error(`the game did not activate the ${set.name} set — perks are currently empty`);
         }
         yield delay(PERK_SETTLE_MS);
+        yield waitUntilEquipped(set);
         if (wasCleared) {
             // eslint-disable-next-line require-atomic-updates
             pendingPerkSet = undefined;
@@ -7336,7 +7417,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.73" !== void 0 ? "1.1.73" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.74" !== void 0 ? "1.1.74" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13626,7 +13707,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.73" !== void 0 ? "1.1.73" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.74" !== void 0 ? "1.1.74" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
