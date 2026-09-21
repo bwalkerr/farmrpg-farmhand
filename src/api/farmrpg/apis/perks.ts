@@ -328,13 +328,22 @@ const delay = (ms: number): Promise<void> =>
 // ---------------------------------------------------------------------------
 
 // The settle was a guess at how long the game takes to finish equipping after
-// it says "success", and Reed's harvests said it was sometimes short: a field
-// that gives ~50 under Default and 36 under nothing came back with 41, from a
-// harvest that went out 1.1 s after the tap with reset and activate both
-// acknowledged -- PART of the set was on. So the perks page is what decides
-// now. On that page an equipped perk carries a checkmark and one that is not
-// a clock (Reed's screenshot, 1.0.58); the "My Perk Sets" list uses the same
-// checkmark for the active set, so it is left out of the count.
+// it says "success", and Reed's harvests said it was sometimes short (41 crops
+// from a field that gives ~50 under Default and 36 under nothing: PART of the
+// set on) and once plain wrong (36: NOTHING on, reset and activate both
+// acknowledged, a full second waited). So the perks page is what decides now.
+//
+// What that page shows (Reed's paste, 2026-09-21): perks.php opens with a
+// menu (Farm Supply Perks → supply.php, ...) and the "My Perk Sets" card, then
+// one <li> per perk: an icon in .item-media that is the PERK's own (fa-timer
+// on Quicker Farming, fa-check-double on Double Prizes -- these were first
+// mistaken for state), the name and effect, and in .item-after a button. On a
+// perk that is on that button is `button.resetonebtn` (reset this one).
+// Counting those is the signal; the button a perk that is OFF carries has
+// not been seen yet, so the signal is checked rather than trusted: read once
+// right after the reset, when the slate is empty, and if the count did not
+// drop the signal does not move with the perks and the settle is all there
+// is for the session (logged).
 //
 // How many a set equips is learned, not known: the page never says what a set
 // contains. The count a set was last seen fully on with is remembered per set
@@ -342,17 +351,21 @@ const delay = (ms: number): Promise<void> =>
 // until the count reaches that -- from the first read, so a game that is done
 // in 300 ms costs 300 ms, not a flat second -- or, for a set of unknown size
 // or one that comes up short (edited smaller), until three reads agree after
-// at least the old settle. A page with neither icon cannot be read; then the
-// settle is all there is, and the log says so.
+// at least the old settle.
 const VERIFY_POLL_MS = 250;
 const VERIFY_WINDOW_MS = 4000;
-const SET_SIZES_KEY = "fhPerkSetSizes";
+// v2: the 1.1.78 count (thematic icons) left sizes of 2 behind under the old key
+const SET_SIZES_KEY = "fhPerkSetSizes2";
+const ACTIVE_PERK_BUTTON = "li .item-after button.resetonebtn";
+const ANY_PERK_BUTTON = "li .item-after button";
 let setSizes: Record<string, number> | undefined;
+// false once a read after a reset showed the count not moving
+let isCountUsable = true;
 
 interface PerksPageReading {
   // which set the page shows as active, if any
   activeId?: number;
-  // equipped perks, undefined when the page has nothing to count
+  // perks the page shows as on, undefined when it has no perk rows at all
   equipped?: number;
 }
 
@@ -369,46 +382,36 @@ const readPerksPage = async (): Promise<PerksPageReading | undefined> => {
     return undefined;
   }
   const { currentPerkSetId } = processPerks(page);
-  const sets = getListByTitle("My Perk Sets", page.body);
-  const checks = [...page.body.querySelectorAll(EQUIPPED_ICON)].filter(
-    (icon) => !sets?.contains(icon)
-  ).length;
-  const clocks = page.body.querySelectorAll(UNEQUIPPED_ICON).length;
-  describePerksPage(page, sets);
+  const buttons = page.body.querySelectorAll(ANY_PERK_BUTTON).length;
+  const active = page.body.querySelectorAll(ACTIVE_PERK_BUTTON).length;
+  describePerksPage(page);
   return {
     activeId: currentPerkSetId,
-    equipped: checks + clocks > 0 ? checks : undefined,
+    equipped: buttons > 0 ? active : undefined,
   };
 };
 
-// Markup nobody here has seen directly. The first guess (fa-check / fa-clock)
-// matched nothing; the page's own icon roster (logged 2026-09-21) has
-// fa-check-double and fa-timer sitting just ahead of the perk icons, which
-// fits the checkmark and clock of Reed's 1.0.58 screenshot. Still inferred,
-// so once a session the log shows the row each was first found in.
-const EQUIPPED_ICON = ".fa-check-double, .fa-check";
-const UNEQUIPPED_ICON = ".fa-timer, .fa-clock, .fa-clock-o";
-
+// Once a session: the kinds of button the perk rows carry, with counts, so
+// the button of a perk that is OFF shows up in the log Reed pastes.
 let hasDescribedPerksPage = false;
-const describePerksPage = (
-  page: Document,
-  sets: HTMLUListElement | null
-): void => {
+const describePerksPage = (page: Document): void => {
   if (hasDescribedPerksPage) {
     return;
   }
   hasDescribedPerksPage = true;
-  const rowOf = (selector: string): string => {
-    const icon = [...page.body.querySelectorAll(selector)].find(
-      (candidate) => !sets?.contains(candidate)
-    );
-    const row = icon?.closest("li") ?? icon?.parentElement;
-    return (row?.outerHTML ?? "not found")
-      .replaceAll(/\s+/g, " ")
-      .slice(0, 400);
-  };
-  logPerk(`perks page: equipped row = ${rowOf(EQUIPPED_ICON)}`);
-  logPerk(`perks page: unequipped row = ${rowOf(UNEQUIPPED_ICON)}`);
+  const kinds = new Map<string, number>();
+  for (const button of page.body.querySelectorAll(ANY_PERK_BUTTON)) {
+    const kind = `${[...button.classList]
+      .filter((name) => name !== "button")
+      .join(".")}:${button.textContent?.trim() ?? ""}`;
+    kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+  }
+  logPerk(
+    `perks page buttons: ${
+      [...kinds].map(([kind, count]) => `${kind} ×${count}`).join(" | ") ||
+      "none"
+    }`
+  );
 };
 
 const loadSetSizes = async (): Promise<Record<string, number>> => {
@@ -432,28 +435,58 @@ const rememberSetSize = (set: PerkSet, size: number, known?: number): void => {
   );
 };
 
+// Right after the reset: what the page shows with the slate empty. The
+// floor every later read has to climb above -- and the check on the signal
+// itself: a count that did not drop below what this set is known to equip
+// is not counting equipped perks.
+const readAfterReset = async (set: PerkSet): Promise<number | undefined> => {
+  if (!isCountUsable) {
+    return undefined;
+  }
+  const sizes = await loadSetSizes();
+  const known = sizes[set.name];
+  const reading = await readPerksPage();
+  if (reading?.equipped === undefined) {
+    return undefined;
+  }
+  if (known !== undefined && known > 0 && reading.equipped >= known) {
+    // only ever runs inside the perk queue
+    // eslint-disable-next-line require-atomic-updates
+    isCountUsable = false;
+    logPerk(
+      `perks page still shows ${reading.equipped} on right after the reset — its count does not follow the perks; verifying by settle only from here`
+    );
+    return undefined;
+  }
+  return reading.equipped;
+};
+
 // After reset + activate: hold the task until the page shows the set on.
 // Resolves to the set that ended up on (a fresh id if the page showed another
 // set active and a re-read found this set under a new one). Throws if the
-// page still shows NOTHING equipped at the end of the window: by then the
-// slate has been cleared for seconds, and Reed's town→banner harvest of
-// 2026-09-21 -- reset and activate both "success", a full second waited, 36
-// crops from 36 plots -- is what going on anyway looks like.
-const waitUntilEquipped = async (set: PerkSet): Promise<PerkSet> => {
+// page still shows nothing above the post-reset floor at the end of the
+// window: by then the slate has been cleared for seconds, and Reed's
+// town→banner harvest of 2026-09-21 -- reset and activate both "success", a
+// full second waited, 36 crops from 36 plots -- is what going on anyway
+// looks like.
+const waitUntilEquipped = async (
+  set: PerkSet,
+  floor: number | undefined
+): Promise<PerkSet> => {
   const sizes = await loadSetSizes();
   const known = sizes[set.name];
   const startedAt = Date.now();
   const counts: number[] = [];
   let hasReactivated = false;
   for (;;) {
-    const reading = await readPerksPage();
+    const reading = isCountUsable ? await readPerksPage() : undefined;
     const elapsed = Date.now() - startedAt;
-    if (reading?.equipped === undefined) {
-      // a guard on top of the settle, not a gate: an unreadable page must
-      // not strand the action behind it
-      if (reading) {
+    if (reading?.equipped === undefined || floor === undefined) {
+      // a guard on top of the settle, not a gate: a page that cannot answer
+      // must not strand the action behind it
+      if (reading && isCountUsable) {
         logPerk(
-          `${set.name}: perks page shows no perk icons — trusting the settle`
+          `${set.name}: perks page has no perk rows — trusting the settle`
         );
       }
       await delay(Math.max(0, PERK_SETTLE_MS - elapsed));
@@ -480,13 +513,14 @@ const waitUntilEquipped = async (set: PerkSet): Promise<PerkSet> => {
     }
     const count = reading.equipped;
     counts.push(count);
+    const isAboveFloor = count > floor;
     const isStable =
       elapsed >= PERK_SETTLE_MS &&
       counts.length >= 3 &&
-      count > 0 &&
+      isAboveFloor &&
       counts.at(-2) === count &&
       counts.at(-3) === count;
-    if ((known !== undefined && count > 0 && count >= known) || isStable) {
+    if ((known !== undefined && isAboveFloor && count >= known) || isStable) {
       if (count !== known) {
         rememberSetSize(set, count, known);
       }
@@ -494,7 +528,7 @@ const waitUntilEquipped = async (set: PerkSet): Promise<PerkSet> => {
         logPerk(
           `${set.name}: ${
             counts[0]
-          } of ${count} on at first read, ${count} after ${(
+          } of ${count} on at first read (${floor} after the reset), ${count} after ${(
             elapsed / 1000
           ).toFixed(1)}s`
         );
@@ -502,22 +536,21 @@ const waitUntilEquipped = async (set: PerkSet): Promise<PerkSet> => {
       return set;
     }
     if (elapsed > VERIFY_WINDOW_MS) {
-      // only once the count has been seen to work for this set: a zero from
-      // an icon class that is wrong for "equipped" must not fail every
-      // switch for the session
-      if (count === 0 && known !== undefined && known > 0) {
+      // only once the count has been seen to work for this set: a count that
+      // never moves must not fail every switch for the session
+      if (!isAboveFloor && known !== undefined && known > 0) {
         throw new Error(
           `${
             set.name
-          } never came on — perks page still shows nothing equipped after ${
+          } never came on — perks page shows ${count} on, same as right after the reset, after ${
             VERIFY_WINDOW_MS / 1000
           }s`
         );
       }
       logPerk(
-        `${set.name}: still ${count} of ${known ?? "?"} perks on after ${
+        `${set.name}: still ${count} of ${known ?? "?"} on after ${
           VERIFY_WINDOW_MS / 1000
-        }s — going on anyway`
+        }s (${floor} after the reset) — going on anyway`
       );
       return set;
     }
@@ -532,9 +565,12 @@ const waitUntilEquipped = async (set: PerkSet): Promise<PerkSet> => {
 // had learned, the learned size was a partial and goes up. ~100 ms against
 // the ~1.3 s of a round trip, which is most banner and farm-page harvests.
 const isVerifiedOn = async (set: PerkSet): Promise<boolean> => {
+  if (!isCountUsable) {
+    return false;
+  }
   const sizes = await loadSetSizes();
   const known = sizes[set.name];
-  if (known === undefined) {
+  if (known === undefined || known === 0) {
     return false;
   }
   const reading = await readPerksPage();
@@ -643,6 +679,7 @@ const applySet = async (
   notifyPerkStatus();
   try {
     const wasCleared = await clearPerks();
+    const floor = await readAfterReset(set);
     // Retried if the game doesn't say "success", because at this point the
     // slate is already EMPTY: an activate that goes missing here is not a switch
     // that didn't happen, it is every perk turned off until something switches
@@ -664,7 +701,7 @@ const applySet = async (
         `the game did not activate the ${set.name} set — perks are currently empty`
       );
     }
-    set = await waitUntilEquipped(set);
+    set = await waitUntilEquipped(set, floor);
     if (wasCleared) {
       // eslint-disable-next-line require-atomic-updates
       pendingPerkSet = undefined;
