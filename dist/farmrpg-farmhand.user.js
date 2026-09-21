@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.75
+// @version 1.1.76
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2286,46 +2286,56 @@ exports.getPerkStatus = getPerkStatus;
 // outside a task.
 // The game acks activateperkset ("success") BEFORE it has finished equipping
 // the set, so an action fired immediately after can run under the OLD perks: a
-// 50-silver item sold for 55 (+10% gold perk only) instead of 80 (+60%). We
-// wait this long after every real switch. It is empirically enough on Reed's
-// connection (verified: Sandstone quick-sells for 80), and it is now paid only
-// when a switch actually happened -- the confirmed fast path below skips it.
+// 50-silver item sold for 55 (+10% gold perk only) instead of 80 (+60%). This
+// used to be a flat wait after every real switch; now it is the floor for the
+// perks-page polling below when the page cannot answer (a set of unknown size,
+// or a page with nothing to count), and the polling exits as soon as the page
+// shows the whole set on.
 const PERK_SETTLE_MS = 1000;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ---------------------------------------------------------------------------
 // Is the set actually on yet?
 // ---------------------------------------------------------------------------
-// The settle is a guess at how long the game takes to finish equipping after it
-// says "success", and Reed's harvests say it is sometimes short: a field that
-// gives ~50 under Default and 36 under nothing came back with 41, from a
+// The settle was a guess at how long the game takes to finish equipping after
+// it says "success", and Reed's harvests said it was sometimes short: a field
+// that gives ~50 under Default and 36 under nothing came back with 41, from a
 // harvest that went out 1.1 s after the tap with reset and activate both
-// acknowledged -- PART of the set was on. So after the settle the perks page
-// is read until the number of equipped perks stops moving. On that page an
-// equipped perk carries a checkmark and one that is not a clock (Reed's
-// screenshot, 1.0.58); the "My Perk Sets" list uses the same checkmark for the
-// active set, so it is left out of the count.
+// acknowledged -- PART of the set was on. So the perks page is what decides
+// now. On that page an equipped perk carries a checkmark and one that is not
+// a clock (Reed's screenshot, 1.0.58); the "My Perk Sets" list uses the same
+// checkmark for the active set, so it is left out of the count.
 //
 // How many a set equips is learned, not known: the page never says what a set
 // contains. The count a set was last seen fully on with is remembered per set
-// name (ids change when a set is re-made), and a read that reaches it is
-// proof enough. Below it the page is read again until two more reads agree,
-// which is also how an edited set teaches the new size. A page with neither
-// icon cannot be read; then the settle is all there is, and the log says so.
-const VERIFY_POLL_MS = 400;
+// name (ids change when a set is re-made). After a switch the page is polled
+// until the count reaches that -- from the first read, so a game that is done
+// in 300 ms costs 300 ms, not a flat second -- or, for a set of unknown size
+// or one that comes up short (edited smaller), until three reads agree after
+// at least the old settle. A page with neither icon cannot be read; then the
+// settle is all there is, and the log says so.
+const VERIFY_POLL_MS = 250;
 const VERIFY_WINDOW_MS = 4000;
 const SET_SIZES_KEY = "fhPerkSetSizes";
 let setSizes;
-const countEquippedPerks = (root) => {
-    const sets = (0, page_1.getListByTitle)("My Perk Sets", root.body);
-    const checks = [...root.body.querySelectorAll(".fa-check")].filter((icon) => !(sets === null || sets === void 0 ? void 0 : sets.contains(icon))).length;
-    const clocks = root.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
-    return checks + clocks > 0 ? checks : undefined;
-};
-const rememberSetSize = (set, size) => {
-    setSizes = Object.assign(Object.assign({}, setSizes), { [set.name]: size });
-    GM.setValue(SET_SIZES_KEY, setSizes);
-};
-const waitUntilEquipped = (set) => __awaiter(void 0, void 0, void 0, function* () {
+const readPerksPage = () => __awaiter(void 0, void 0, void 0, function* () {
+    let page;
+    try {
+        page = yield (0, requests_2.getHTML)(page_1.Page.PERKS);
+    }
+    catch (error) {
+        logPerk(`could not read the perks page (${error instanceof Error ? error.message : String(error)})`);
+        return undefined;
+    }
+    const { currentPerkSetId } = processPerks(page);
+    const sets = (0, page_1.getListByTitle)("My Perk Sets", page.body);
+    const checks = [...page.body.querySelectorAll(".fa-check")].filter((icon) => !(sets === null || sets === void 0 ? void 0 : sets.contains(icon))).length;
+    const clocks = page.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
+    return {
+        activeId: currentPerkSetId,
+        equipped: checks + clocks > 0 ? checks : undefined,
+    };
+});
+const loadSetSizes = () => __awaiter(void 0, void 0, void 0, function* () {
     if (!setSizes) {
         const stored = yield GM.getValue(SET_SIZES_KEY, {});
         // only ever runs inside the perk queue, so nothing else can have loaded
@@ -2333,44 +2343,74 @@ const waitUntilEquipped = (set) => __awaiter(void 0, void 0, void 0, function* (
         // eslint-disable-next-line require-atomic-updates
         setSizes !== null && setSizes !== void 0 ? setSizes : (setSizes = stored !== null && stored !== void 0 ? stored : {});
     }
-    const known = setSizes[set.name];
+    return setSizes;
+});
+const rememberSetSize = (set, size, known) => {
+    setSizes = Object.assign(Object.assign({}, setSizes), { [set.name]: size });
+    GM.setValue(SET_SIZES_KEY, setSizes);
+    logPerk(`${set.name} equips ${size} perks${known === undefined ? "" : ` (was ${known})`}`);
+};
+// After reset + activate: hold the task until the page shows the set on.
+const waitUntilEquipped = (set) => __awaiter(void 0, void 0, void 0, function* () {
+    const sizes = yield loadSetSizes();
+    const known = sizes[set.name];
     const startedAt = Date.now();
     const counts = [];
     for (;;) {
-        let page;
-        try {
-            page = yield (0, requests_2.getHTML)(page_1.Page.PERKS);
-        }
-        catch (error) {
-            // a guard on top of the settle, not a gate: an unreadable page must not
-            // strand the action behind it
-            logPerk(`${set.name}: could not read the perks page (${error instanceof Error ? error.message : String(error)}) — trusting the settle`);
+        const reading = yield readPerksPage();
+        const elapsed = Date.now() - startedAt;
+        if ((reading === null || reading === void 0 ? void 0 : reading.equipped) === undefined) {
+            // a guard on top of the settle, not a gate: an unreadable page must
+            // not strand the action behind it
+            if (reading) {
+                logPerk(`${set.name}: perks page shows no perk icons — trusting the settle`);
+            }
+            yield delay(Math.max(0, PERK_SETTLE_MS - elapsed));
             return;
         }
-        const count = countEquippedPerks(page);
-        if (count === undefined) {
-            logPerk(`${set.name}: perks page shows no perk icons — trusting the settle`);
-            return;
-        }
+        const count = reading.equipped;
         counts.push(count);
-        const isStable = counts.length >= 3 && counts.at(-2) === count && counts.at(-3) === count;
+        const isStable = elapsed >= PERK_SETTLE_MS &&
+            counts.length >= 3 &&
+            counts.at(-2) === count &&
+            counts.at(-3) === count;
         if ((known !== undefined && count >= known) || isStable) {
             if (count !== known) {
-                rememberSetSize(set, count);
-                logPerk(`${set.name} equips ${count} perks${known === undefined ? "" : ` (was ${known})`}`);
+                rememberSetSize(set, count, known);
             }
             if (counts.length > 1) {
-                logPerk(`${set.name}: ${counts[0]} of ${count} on after the settle, ${count} after ${((Date.now() - startedAt) /
-                    1000).toFixed(1)}s more`);
+                logPerk(`${set.name}: ${counts[0]} of ${count} on at first read, ${count} after ${(elapsed / 1000).toFixed(1)}s`);
             }
             return;
         }
-        if (Date.now() - startedAt > VERIFY_WINDOW_MS) {
+        if (elapsed > VERIFY_WINDOW_MS) {
             logPerk(`${set.name}: still ${count} of ${known} perks on after ${VERIFY_WINDOW_MS / 1000}s — going on anyway`);
             return;
         }
         yield delay(VERIFY_POLL_MS);
     }
+});
+// Before a forced switch to a set we already drove the game to: one read of
+// the page, and if it shows this set active with everything it equips on,
+// the switch is not needed. That read is of a set that has been sitting on
+// for a while, so its count is a settled one -- if it is higher than what we
+// had learned, the learned size was a partial and goes up. ~100 ms against
+// the ~1.3 s of a round trip, which is most banner and farm-page harvests.
+const isVerifiedOn = (set) => __awaiter(void 0, void 0, void 0, function* () {
+    const sizes = yield loadSetSizes();
+    const known = sizes[set.name];
+    if (known === undefined) {
+        return false;
+    }
+    const reading = yield readPerksPage();
+    if ((reading === null || reading === void 0 ? void 0 : reading.equipped) === undefined || reading.activeId !== set.id) {
+        return false;
+    }
+    if (reading.equipped > known) {
+        rememberSetSize(set, reading.equipped, known);
+        return true;
+    }
+    return reading.equipped >= known;
 });
 // worker.php answers these two with the bare word "success". Anything else --
 // an error page, a logged-out shell, a rate limit -- means we do NOT know what
@@ -2438,7 +2478,8 @@ const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], voi
     // slate since -- so it is genuinely equipped and the whole round trip
     // (reset + activate + settle) can be skipped. This is what makes back-to-back
     // quick-sells instant after the first one.
-    if (!force && (confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id) {
+    if ((confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id &&
+        (!force || (yield isVerifiedOn(set)))) {
         return false;
     }
     pendingPerkSet = set;
@@ -2464,7 +2505,6 @@ const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], voi
         if (!wasActivated) {
             throw new Error(`the game did not activate the ${set.name} set — perks are currently empty`);
         }
-        yield delay(PERK_SETTLE_MS);
         yield waitUntilEquipped(set);
         if (wasCleared) {
             // eslint-disable-next-line require-atomic-updates
@@ -2576,9 +2616,14 @@ const runGatedAction = ({ label, set, action, holdMs = 0, restore = true, force 
             (0, exports.setPerkStatusNote)(`${label} → ${target.name} FAILED — ${label} not run: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
-        (0, exports.setPerkStatusNote)(`${label} → ${target.name}${switched
-            ? ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
-            : " (already on)"}`);
+        let outcome = " (already on)";
+        if (switched) {
+            outcome = ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`;
+        }
+        else if (force) {
+            outcome = " (verified on)";
+        }
+        (0, exports.setPerkStatusNote)(`${label} → ${target.name}${outcome}`);
     }
     else {
         (0, exports.setPerkStatusNote)(`${label}: no set to switch to`);
@@ -7433,7 +7478,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.75" !== void 0 ? "1.1.75" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.76" !== void 0 ? "1.1.76" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -12773,26 +12818,33 @@ const installQuickActionProxy = (nativeSelector, label) => {
 // Quick-sell and quick-give, registered once at module scope. One gate, set
 // rather than appended to, so it cannot accumulate across page loads.
 (0, quickSellSafely_1.setQuicksellGate)(runQuickAction);
-// The farm page's Harvest All. Not a proxy button like CRAFT: the game shows
-// and hides this one as the crops come ready, so a stand-in mounted at page
-// load would be hidden or stale half the time. Instead the click itself is
-// caught in the capture phase at the document -- before the game's own
-// delegated handler, which listens on the document in the bubble phase --
-// and replayed from inside the gate. Works on a retained page too, since it
-// is not tied to any mount. Matched by the game's class, or failing that by
-// what the button says, so a renamed class degrades to the text.
+// The farm page's own harvests: the Harvest All button
+// (`a.button.harvestallbtn`, "Harvest All<br>Crops") and the single-plot
+// harvest, a click on a ready crop (`img.cropitem.harvest`). Not a proxy
+// button like CRAFT: the game shows and hides these as the crops come ready,
+// so a stand-in mounted at page load would be hidden or stale half the time.
+// Instead the click itself is caught in the capture phase at the document --
+// before the game's own delegated handler, which listens on the document in
+// the bubble phase -- and replayed from inside the gate. Works on a retained
+// page too, since it is not tied to any mount. The button is matched by the
+// game's class, or failing that by what it says, so a renamed class degrades
+// to the text.
 let isReplayingHarvestClick = false;
-const findHarvestAllButton = (target) => {
+const findHarvestControl = (target) => {
     var _a, _b;
     if (!(target instanceof Element)) {
         return undefined;
+    }
+    const plot = target.closest("img.cropitem.harvest");
+    if (plot) {
+        return plot;
     }
     const button = target.closest("a, button");
     if (!button) {
         return undefined;
     }
     const isHarvestAll = button.classList.contains("harvestallbtn") ||
-        /^harvest all$/i.test((_b = (_a = button.textContent) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "");
+        /^harvest all\b/i.test((_b = (_a = button.textContent) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "");
     return isHarvestAll ? button : undefined;
 };
 document.addEventListener("click", (event) => {
@@ -12803,7 +12855,7 @@ document.addEventListener("click", (event) => {
     if ((page !== null && page !== void 0 ? page : (0, page_1.getHashPage)()) !== page_1.Page.FARM) {
         return;
     }
-    const button = findHarvestAllButton(event.target);
+    const button = findHarvestControl(event.target);
     if (!button) {
         return;
     }
@@ -12825,14 +12877,18 @@ document.addEventListener("click", (event) => {
             return;
         }
         const label = [...button.childNodes];
-        button.textContent = "Loading...";
+        if (label.length > 0) {
+            button.textContent = "Loading...";
+        }
         try {
             yield (0, farm_1.harvestAllFromFarmPage)(replay);
         }
         finally {
             // the button is the game's; it repaints the page after the click
             // anyway, this only covers a switch that failed
-            button.replaceChildren(...label);
+            if (label.length > 0) {
+                button.replaceChildren(...label);
+            }
         }
     }))
         .catch((error) => {
@@ -13790,7 +13846,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.75" !== void 0 ? "1.1.75" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.76" !== void 0 ? "1.1.76" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
