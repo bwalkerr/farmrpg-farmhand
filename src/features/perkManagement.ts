@@ -174,20 +174,27 @@ const installQuickActionProxy = (
 // rather than appended to, so it cannot accumulate across page loads.
 setQuicksellGate(runQuickAction);
 
-// The farm page's Harvest All. Not a proxy button like CRAFT: the game shows
-// and hides this one as the crops come ready, so a stand-in mounted at page
-// load would be hidden or stale half the time. Instead the click itself is
-// caught in the capture phase at the document -- before the game's own
-// delegated handler, which listens on the document in the bubble phase --
-// and replayed from inside the gate. Works on a retained page too, since it
-// is not tied to any mount. Matched by the game's class, or failing that by
-// what the button says, so a renamed class degrades to the text.
+// The farm page's own harvests: the Harvest All button
+// (`a.button.harvestallbtn`, "Harvest All<br>Crops") and the single-plot
+// harvest, a click on a ready crop (`img.cropitem.harvest`). Not a proxy
+// button like CRAFT: the game shows and hides these as the crops come ready,
+// so a stand-in mounted at page load would be hidden or stale half the time.
+// Instead the click itself is caught in the capture phase at the document --
+// before the game's own delegated handler, which listens on the document in
+// the bubble phase -- and replayed from inside the gate. Works on a retained
+// page too, since it is not tied to any mount. The button is matched by the
+// game's class, or failing that by what it says, so a renamed class degrades
+// to the text.
 let isReplayingHarvestClick = false;
-const findHarvestAllButton = (
+const findHarvestControl = (
   target: EventTarget | null
 ): HTMLElement | undefined => {
   if (!(target instanceof Element)) {
     return undefined;
+  }
+  const plot = target.closest<HTMLElement>("img.cropitem.harvest");
+  if (plot) {
+    return plot;
   }
   const button = target.closest<HTMLElement>("a, button");
   if (!button) {
@@ -195,7 +202,7 @@ const findHarvestAllButton = (
   }
   const isHarvestAll =
     button.classList.contains("harvestallbtn") ||
-    /^harvest all$/i.test(button.textContent?.trim() ?? "");
+    /^harvest all\b/i.test(button.textContent?.trim() ?? "");
   return isHarvestAll ? button : undefined;
 };
 
@@ -209,7 +216,7 @@ document.addEventListener(
     if ((page ?? getHashPage()) !== Page.FARM) {
       return;
     }
-    const button = findHarvestAllButton(event.target);
+    const button = findHarvestControl(event.target);
     if (!button) {
       return;
     }
@@ -230,13 +237,17 @@ document.addEventListener(
           return;
         }
         const label = [...button.childNodes];
-        button.textContent = "Loading...";
+        if (label.length > 0) {
+          button.textContent = "Loading...";
+        }
         try {
           await harvestAllFromFarmPage(replay);
         } finally {
           // the button is the game's; it repaints the page after the click
           // anyway, this only covers a switch that failed
-          button.replaceChildren(...label);
+          if (label.length > 0) {
+            button.replaceChildren(...label);
+          }
         }
       })
       .catch((error) => {

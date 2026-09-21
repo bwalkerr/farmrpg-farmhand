@@ -313,10 +313,11 @@ export const getPerkStatus = (): PerkStatus => {
 
 // The game acks activateperkset ("success") BEFORE it has finished equipping
 // the set, so an action fired immediately after can run under the OLD perks: a
-// 50-silver item sold for 55 (+10% gold perk only) instead of 80 (+60%). We
-// wait this long after every real switch. It is empirically enough on Reed's
-// connection (verified: Sandstone quick-sells for 80), and it is now paid only
-// when a switch actually happened -- the confirmed fast path below skips it.
+// 50-silver item sold for 55 (+10% gold perk only) instead of 80 (+60%). This
+// used to be a flat wait after every real switch; now it is the floor for the
+// perks-page polling below when the page cannot answer (a set of unknown size,
+// or a page with nothing to count), and the polling exits as soon as the page
+// shows the whole set on.
 const PERK_SETTLE_MS = 1000;
 
 const delay = (ms: number): Promise<void> =>
@@ -326,42 +327,60 @@ const delay = (ms: number): Promise<void> =>
 // Is the set actually on yet?
 // ---------------------------------------------------------------------------
 
-// The settle is a guess at how long the game takes to finish equipping after it
-// says "success", and Reed's harvests say it is sometimes short: a field that
-// gives ~50 under Default and 36 under nothing came back with 41, from a
+// The settle was a guess at how long the game takes to finish equipping after
+// it says "success", and Reed's harvests said it was sometimes short: a field
+// that gives ~50 under Default and 36 under nothing came back with 41, from a
 // harvest that went out 1.1 s after the tap with reset and activate both
-// acknowledged -- PART of the set was on. So after the settle the perks page
-// is read until the number of equipped perks stops moving. On that page an
-// equipped perk carries a checkmark and one that is not a clock (Reed's
-// screenshot, 1.0.58); the "My Perk Sets" list uses the same checkmark for the
-// active set, so it is left out of the count.
+// acknowledged -- PART of the set was on. So the perks page is what decides
+// now. On that page an equipped perk carries a checkmark and one that is not
+// a clock (Reed's screenshot, 1.0.58); the "My Perk Sets" list uses the same
+// checkmark for the active set, so it is left out of the count.
 //
 // How many a set equips is learned, not known: the page never says what a set
 // contains. The count a set was last seen fully on with is remembered per set
-// name (ids change when a set is re-made), and a read that reaches it is
-// proof enough. Below it the page is read again until two more reads agree,
-// which is also how an edited set teaches the new size. A page with neither
-// icon cannot be read; then the settle is all there is, and the log says so.
-const VERIFY_POLL_MS = 400;
+// name (ids change when a set is re-made). After a switch the page is polled
+// until the count reaches that -- from the first read, so a game that is done
+// in 300 ms costs 300 ms, not a flat second -- or, for a set of unknown size
+// or one that comes up short (edited smaller), until three reads agree after
+// at least the old settle. A page with neither icon cannot be read; then the
+// settle is all there is, and the log says so.
+const VERIFY_POLL_MS = 250;
 const VERIFY_WINDOW_MS = 4000;
 const SET_SIZES_KEY = "fhPerkSetSizes";
 let setSizes: Record<string, number> | undefined;
 
-const countEquippedPerks = (root: Document): number | undefined => {
-  const sets = getListByTitle("My Perk Sets", root.body);
-  const checks = [...root.body.querySelectorAll(".fa-check")].filter(
+interface PerksPageReading {
+  // which set the page shows as active, if any
+  activeId?: number;
+  // equipped perks, undefined when the page has nothing to count
+  equipped?: number;
+}
+
+const readPerksPage = async (): Promise<PerksPageReading | undefined> => {
+  let page: Document;
+  try {
+    page = await getHTML(Page.PERKS);
+  } catch (error) {
+    logPerk(
+      `could not read the perks page (${
+        error instanceof Error ? error.message : String(error)
+      })`
+    );
+    return undefined;
+  }
+  const { currentPerkSetId } = processPerks(page);
+  const sets = getListByTitle("My Perk Sets", page.body);
+  const checks = [...page.body.querySelectorAll(".fa-check")].filter(
     (icon) => !sets?.contains(icon)
   ).length;
-  const clocks = root.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
-  return checks + clocks > 0 ? checks : undefined;
+  const clocks = page.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
+  return {
+    activeId: currentPerkSetId,
+    equipped: checks + clocks > 0 ? checks : undefined,
+  };
 };
 
-const rememberSetSize = (set: PerkSet, size: number): void => {
-  setSizes = { ...setSizes, [set.name]: size };
-  GM.setValue(SET_SIZES_KEY, setSizes as any);
-};
-
-const waitUntilEquipped = async (set: PerkSet): Promise<void> => {
+const loadSetSizes = async (): Promise<Record<string, number>> => {
   if (!setSizes) {
     const stored = await GM.getValue<Record<string, number>>(SET_SIZES_KEY, {});
     // only ever runs inside the perk queue, so nothing else can have loaded
@@ -369,55 +388,62 @@ const waitUntilEquipped = async (set: PerkSet): Promise<void> => {
     // eslint-disable-next-line require-atomic-updates
     setSizes ??= stored ?? {};
   }
-  const known = setSizes[set.name];
+  return setSizes;
+};
+
+const rememberSetSize = (set: PerkSet, size: number, known?: number): void => {
+  setSizes = { ...setSizes, [set.name]: size };
+  GM.setValue(SET_SIZES_KEY, setSizes as any);
+  logPerk(
+    `${set.name} equips ${size} perks${
+      known === undefined ? "" : ` (was ${known})`
+    }`
+  );
+};
+
+// After reset + activate: hold the task until the page shows the set on.
+const waitUntilEquipped = async (set: PerkSet): Promise<void> => {
+  const sizes = await loadSetSizes();
+  const known = sizes[set.name];
   const startedAt = Date.now();
   const counts: number[] = [];
   for (;;) {
-    let page: Document;
-    try {
-      page = await getHTML(Page.PERKS);
-    } catch (error) {
-      // a guard on top of the settle, not a gate: an unreadable page must not
-      // strand the action behind it
-      logPerk(
-        `${set.name}: could not read the perks page (${
-          error instanceof Error ? error.message : String(error)
-        }) — trusting the settle`
-      );
+    const reading = await readPerksPage();
+    const elapsed = Date.now() - startedAt;
+    if (reading?.equipped === undefined) {
+      // a guard on top of the settle, not a gate: an unreadable page must
+      // not strand the action behind it
+      if (reading) {
+        logPerk(
+          `${set.name}: perks page shows no perk icons — trusting the settle`
+        );
+      }
+      await delay(Math.max(0, PERK_SETTLE_MS - elapsed));
       return;
     }
-    const count = countEquippedPerks(page);
-    if (count === undefined) {
-      logPerk(
-        `${set.name}: perks page shows no perk icons — trusting the settle`
-      );
-      return;
-    }
+    const count = reading.equipped;
     counts.push(count);
     const isStable =
-      counts.length >= 3 && counts.at(-2) === count && counts.at(-3) === count;
+      elapsed >= PERK_SETTLE_MS &&
+      counts.length >= 3 &&
+      counts.at(-2) === count &&
+      counts.at(-3) === count;
     if ((known !== undefined && count >= known) || isStable) {
       if (count !== known) {
-        rememberSetSize(set, count);
-        logPerk(
-          `${set.name} equips ${count} perks${
-            known === undefined ? "" : ` (was ${known})`
-          }`
-        );
+        rememberSetSize(set, count, known);
       }
       if (counts.length > 1) {
         logPerk(
           `${set.name}: ${
             counts[0]
-          } of ${count} on after the settle, ${count} after ${(
-            (Date.now() - startedAt) /
-            1000
-          ).toFixed(1)}s more`
+          } of ${count} on at first read, ${count} after ${(
+            elapsed / 1000
+          ).toFixed(1)}s`
         );
       }
       return;
     }
-    if (Date.now() - startedAt > VERIFY_WINDOW_MS) {
+    if (elapsed > VERIFY_WINDOW_MS) {
       logPerk(
         `${set.name}: still ${count} of ${known} perks on after ${
           VERIFY_WINDOW_MS / 1000
@@ -427,6 +453,29 @@ const waitUntilEquipped = async (set: PerkSet): Promise<void> => {
     }
     await delay(VERIFY_POLL_MS);
   }
+};
+
+// Before a forced switch to a set we already drove the game to: one read of
+// the page, and if it shows this set active with everything it equips on,
+// the switch is not needed. That read is of a set that has been sitting on
+// for a while, so its count is a settled one -- if it is higher than what we
+// had learned, the learned size was a partial and goes up. ~100 ms against
+// the ~1.3 s of a round trip, which is most banner and farm-page harvests.
+const isVerifiedOn = async (set: PerkSet): Promise<boolean> => {
+  const sizes = await loadSetSizes();
+  const known = sizes[set.name];
+  if (known === undefined) {
+    return false;
+  }
+  const reading = await readPerksPage();
+  if (reading?.equipped === undefined || reading.activeId !== set.id) {
+    return false;
+  }
+  if (reading.equipped > known) {
+    rememberSetSize(set, reading.equipped, known);
+    return true;
+  }
+  return reading.equipped >= known;
 };
 
 // worker.php answers these two with the bare word "success". Anything else --
@@ -476,10 +525,10 @@ const sendActivate = async (set: PerkSet): Promise<boolean> => {
 };
 
 export interface ApplyOptions {
-  // Do the full round trip even if the set is already confirmed on. For an
-  // action whose whole yield rides on the perks -- a harvest -- the ~1.3 s is
-  // worth more than trusting a confirmation, which is only ever what WE last
-  // saw, never what the game has now.
+  // Don't take the confirmed fast path on memory alone. For an action whose
+  // whole yield rides on the perks -- a harvest -- a confirmation, which is
+  // only ever what WE last saw, is not enough: the perks page has to agree
+  // (one read), or the full round trip is paid.
   force?: boolean;
 }
 
@@ -514,7 +563,10 @@ const applySet = async (
   // slate since -- so it is genuinely equipped and the whole round trip
   // (reset + activate + settle) can be skipped. This is what makes back-to-back
   // quick-sells instant after the first one.
-  if (!force && confirmedEquippedSet?.id === set.id) {
+  if (
+    confirmedEquippedSet?.id === set.id &&
+    (!force || (await isVerifiedOn(set)))
+  ) {
     return false;
   }
   pendingPerkSet = set;
@@ -542,7 +594,6 @@ const applySet = async (
         `the game did not activate the ${set.name} set — perks are currently empty`
       );
     }
-    await delay(PERK_SETTLE_MS);
     await waitUntilEquipped(set);
     if (wasCleared) {
       // eslint-disable-next-line require-atomic-updates
@@ -707,13 +758,15 @@ export const runGatedAction = ({
         );
         throw error;
       }
-      setPerkStatusNote(
-        `${label} → ${target.name}${
-          switched
-            ? ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
-            : " (already on)"
-        }`
-      );
+      let outcome = " (already on)";
+      if (switched) {
+        outcome = ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(
+          1
+        )}s)`;
+      } else if (force) {
+        outcome = " (verified on)";
+      }
+      setPerkStatusNote(`${label} → ${target.name}${outcome}`);
     } else {
       setPerkStatusNote(`${label}: no set to switch to`);
     }
