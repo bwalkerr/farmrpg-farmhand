@@ -374,10 +374,51 @@ const readPerksPage = async (): Promise<PerksPageReading | undefined> => {
     (icon) => !sets?.contains(icon)
   ).length;
   const clocks = page.body.querySelectorAll(".fa-clock, .fa-clock-o").length;
+  if (checks + clocks === 0) {
+    describePerksPage(page, sets);
+  }
   return {
     activeId: currentPerkSetId,
     equipped: checks + clocks > 0 ? checks : undefined,
   };
+};
+
+// The icon classes above are a guess at markup nobody here has seen, and on
+// Reed's page they match nothing. Rather than ask for the HTML, say what the
+// page is made of -- once a session, into the log he already pastes: the
+// distinct icon classes, and the first row outside the set list, trimmed.
+let hasDescribedPerksPage = false;
+const describePerksPage = (
+  page: Document,
+  sets: HTMLUListElement | null
+): void => {
+  if (hasDescribedPerksPage) {
+    return;
+  }
+  hasDescribedPerksPage = true;
+  const iconClasses = new Set<string>();
+  for (const icon of page.body.querySelectorAll("i, .icon, img[src*='icon']")) {
+    const description =
+      icon.tagName === "IMG"
+        ? `img:${icon.getAttribute("src") ?? ""}`
+        : `${icon.tagName.toLowerCase()}.${[...icon.classList].join(".")}${
+            icon.textContent?.trim() ? `:${icon.textContent.trim()}` : ""
+          }`;
+    if (!sets?.contains(icon)) {
+      iconClasses.add(description);
+    }
+  }
+  const row = [...page.body.querySelectorAll("li")].find(
+    (item) => !sets?.contains(item)
+  );
+  logPerk(
+    `perks page icons: ${[...iconClasses].slice(0, 12).join(" | ") || "none"}`
+  );
+  logPerk(
+    `perks page first row: ${(row?.outerHTML ?? "no <li> found")
+      .replaceAll(/\s+/g, " ")
+      .slice(0, 600)}`
+  );
 };
 
 const loadSetSizes = async (): Promise<Record<string, number>> => {
