@@ -499,6 +499,25 @@ export const harvestAll = (): Promise<void> =>
     },
   });
 
+// The farm page's own Harvest All button, gated. It is the GAME's button, so
+// until now it was the one harvest nothing stood in front of: arriving at the
+// farm starts a reconcile whose first request is resetperks, and a click in
+// the ~1.5 s before Default is back on harvested an EMPTY slate -- Reed:
+// "harvested on the farm page as soon as I landed and only got 36, I guess I
+// beat the swap". The click is fire-and-forget (the game runs its own request
+// and repaints), so the queue is held afterwards like Plant All's.
+export const harvestAllFromFarmPage = (
+  nativeClick: () => void
+): Promise<void> =>
+  runGatedAction({
+    label: "harvest",
+    set: getFarmingPerks,
+    restore: false,
+    force: true,
+    holdMs: PLANT_CLICK_HOLD_MS,
+    action: () => Promise.resolve(nativeClick()),
+  });
+
 // `fromFarmPage`: on the farm we click the game's own Plant All button so its
 // UI updates, and a click is fire-and-forget -- the game runs its own request
 // and we never see it finish. `holdMs` keeps the perk queue held for that

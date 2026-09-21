@@ -12,6 +12,7 @@ import {
 } from "~/api/farmrpg/apis/perks";
 import { getCurrentPage, getHashPage, getPage, Page } from "~/utils/page";
 import { getSetting, SettingId } from "~/utils/settings";
+import { harvestAllFromFarmPage } from "~/api/farmrpg/apis/farm";
 import { QuickAction, setQuicksellGate } from "./quickSellSafely";
 import { renderPerkIndicator } from "./perkIndicator";
 
@@ -172,6 +173,78 @@ const installQuickActionProxy = (
 // Quick-sell and quick-give, registered once at module scope. One gate, set
 // rather than appended to, so it cannot accumulate across page loads.
 setQuicksellGate(runQuickAction);
+
+// The farm page's Harvest All. Not a proxy button like CRAFT: the game shows
+// and hides this one as the crops come ready, so a stand-in mounted at page
+// load would be hidden or stale half the time. Instead the click itself is
+// caught in the capture phase at the document -- before the game's own
+// delegated handler, which listens on the document in the bubble phase --
+// and replayed from inside the gate. Works on a retained page too, since it
+// is not tied to any mount. Matched by the game's class, or failing that by
+// what the button says, so a renamed class degrades to the text.
+let isReplayingHarvestClick = false;
+const findHarvestAllButton = (
+  target: EventTarget | null
+): HTMLElement | undefined => {
+  if (!(target instanceof Element)) {
+    return undefined;
+  }
+  const button = target.closest<HTMLElement>("a, button");
+  if (!button) {
+    return undefined;
+  }
+  const isHarvestAll =
+    button.classList.contains("harvestallbtn") ||
+    /^harvest all$/i.test(button.textContent?.trim() ?? "");
+  return isHarvestAll ? button : undefined;
+};
+
+document.addEventListener(
+  "click",
+  (event) => {
+    if (isReplayingHarvestClick) {
+      return;
+    }
+    const [page] = getPage();
+    if ((page ?? getHashPage()) !== Page.FARM) {
+      return;
+    }
+    const button = findHarvestAllButton(event.target);
+    if (!button) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    getSetting(SETTING_PERK_MANAGER)
+      .then(async ({ value: isEnabled }) => {
+        const replay = (): void => {
+          isReplayingHarvestClick = true;
+          try {
+            button.click();
+          } finally {
+            isReplayingHarvestClick = false;
+          }
+        };
+        if (!isEnabled) {
+          replay();
+          return;
+        }
+        const label = [...button.childNodes];
+        button.textContent = "Loading...";
+        try {
+          await harvestAllFromFarmPage(replay);
+        } finally {
+          // the button is the game's; it repaints the page after the click
+          // anyway, this only covers a switch that failed
+          button.replaceChildren(...label);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to gate the farm page harvest", error);
+      });
+  },
+  true
+);
 
 // Resolves the one activity set the given (live) page calls for, or undefined
 // when the page isn't an activity page (→ revert to Default). A page matches at
