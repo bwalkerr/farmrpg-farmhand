@@ -294,9 +294,19 @@ export const farmStatusState = new CachedState<FarmStatus>(
               );
             }
           }
+          // The count comes from the feed itself, which is the only source
+          // that has one entry per plot. It used to carry `previous.count`
+          // forward, so a session that met this feed before any source that
+          // parses a number -- a reload straight onto the farm -- pinned the
+          // count at 0 and then re-asserted it on every poll, because the
+          // thing it carried forward was its own last answer. Reed's
+          // 2026-09-22 log: `growing x0` every six seconds from 11:13:37 to
+          // 11:14:42, then a readycount landed with `growing x36` and every
+          // feed after it said 36. Nothing was wrong with the field, and
+          // nothing here ever looked at a plot to say otherwise.
           await setFarmStatus(
             state,
-            { ...previous, count: previous?.count ?? 0, status, readyAt },
+            { ...previous, count: rawPlots.length, status, readyAt },
             "farmstatus feed"
           );
         },

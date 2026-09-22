@@ -442,10 +442,24 @@ const applyDecision = async (perks: PerkSession): Promise<void> => {
   }
   const { set, note } = decision;
   setPerkStatusNote(`${note} → ${set.name}`);
+  const startedAt = Date.now();
   try {
     const switched = await perks.apply(set);
+    // The switched case has to SAY something, not just leave the note as it
+    // was. setPerkStatusNote drops a note identical to the one standing, so a
+    // reconcile that really switched wrote its before-note and then silently
+    // deduped its after-note -- one plain line -- while a reconcile that did
+    // nothing wrote two. Reading that log backwards, a real switch is
+    // indistinguishable from the tail of the no-op above it, and on
+    // 2026-09-22 it cost a day: the 10:07 home reconcile DID reset and
+    // activate Default seconds before the bare harvest, and the log was read
+    // as though it had no-opped on a stale belief.
     setPerkStatusNote(
-      `${note} → ${set.name}${switched ? "" : " (already on)"}`
+      `${note} → ${set.name}${
+        switched
+          ? ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
+          : " (already on)"
+      }`
     );
   } catch (error) {
     // A failed switch was invisible before: the queue swallows failures to

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.82
+// @version 1.1.83
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -879,7 +879,6 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.FARM_STATUS })],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
-                var _a;
                 const raw = yield response.text();
                 const rawPlots = raw.split(";").filter((plot) => plot.trim());
                 if (rawPlots.length === 0) {
@@ -912,7 +911,17 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
                         readyAt = Math.min(readyAt, Date.now() + (remaining > 0 ? remaining : 60) * 1000);
                     }
                 }
-                yield setFarmStatus(state, Object.assign(Object.assign({}, previous), { count: (_a = previous === null || previous === void 0 ? void 0 : previous.count) !== null && _a !== void 0 ? _a : 0, status, readyAt }), "farmstatus feed");
+                // The count comes from the feed itself, which is the only source
+                // that has one entry per plot. It used to carry `previous.count`
+                // forward, so a session that met this feed before any source that
+                // parses a number -- a reload straight onto the farm -- pinned the
+                // count at 0 and then re-asserted it on every poll, because the
+                // thing it carried forward was its own last answer. Reed's
+                // 2026-09-22 log: `growing x0` every six seconds from 11:13:37 to
+                // 11:14:42, then a readycount landed with `growing x36` and every
+                // feed after it said 36. Nothing was wrong with the field, and
+                // nothing here ever looked at a plot to say otherwise.
+                yield setFarmStatus(state, Object.assign(Object.assign({}, previous), { count: rawPlots.length, status, readyAt }), "farmstatus feed");
             }),
         },
         {
@@ -7658,7 +7667,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.82" !== void 0 ? "1.1.82" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.83" !== void 0 ? "1.1.83" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13230,9 +13239,21 @@ const applyDecision = (perks) => __awaiter(void 0, void 0, void 0, function* () 
     }
     const { set, note } = decision;
     (0, perks_1.setPerkStatusNote)(`${note} → ${set.name}`);
+    const startedAt = Date.now();
     try {
         const switched = yield perks.apply(set);
-        (0, perks_1.setPerkStatusNote)(`${note} → ${set.name}${switched ? "" : " (already on)"}`);
+        // The switched case has to SAY something, not just leave the note as it
+        // was. setPerkStatusNote drops a note identical to the one standing, so a
+        // reconcile that really switched wrote its before-note and then silently
+        // deduped its after-note -- one plain line -- while a reconcile that did
+        // nothing wrote two. Reading that log backwards, a real switch is
+        // indistinguishable from the tail of the no-op above it, and on
+        // 2026-09-22 it cost a day: the 10:07 home reconcile DID reset and
+        // activate Default seconds before the bare harvest, and the log was read
+        // as though it had no-opped on a stale belief.
+        (0, perks_1.setPerkStatusNote)(`${note} → ${set.name}${switched
+            ? ` (switched, ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
+            : " (already on)"}`);
     }
     catch (error) {
         // A failed switch was invisible before: the queue swallows failures to
@@ -14026,7 +14047,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.82" !== void 0 ? "1.1.82" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.83" !== void 0 ? "1.1.83" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
