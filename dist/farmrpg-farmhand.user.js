@@ -2725,7 +2725,18 @@ const runPerkTask = (task, label = "a perk task") => {
 };
 exports.runPerkTask = runPerkTask;
 // One-shot switch with no action behind it: the panel's manual "equip".
-const equipPerkSet = (set) => (0, exports.runPerkTask)((perks) => perks.apply(set), `equip ${set.name}`);
+//
+// It says so in the log. This is the only way the confirmation moves with no
+// page decision behind it, and saying nothing made the log read as though the
+// belief had teleported: Town confirmed at 09:52, Default "(already on)" at
+// 10:07, nothing in between. A silent write to the one piece of state every
+// later switch consults is not something the log should have to infer.
+const equipPerkSet = (set) => (0, exports.runPerkTask)((perks) => __awaiter(void 0, void 0, void 0, function* () {
+    (0, exports.setPerkStatusNote)(`panel: equip ${set.name}`);
+    const switched = yield perks.apply(set);
+    (0, exports.setPerkStatusNote)(`panel: equip ${set.name}${switched ? "" : " (already on)"}`);
+    return switched;
+}), `equip ${set.name}`);
 exports.equipPerkSet = equipPerkSet;
 let restorePerks;
 const onPerkRestore = (restore) => {

@@ -836,8 +836,21 @@ export const runPerkTask = <T>(
 };
 
 // One-shot switch with no action behind it: the panel's manual "equip".
+//
+// It says so in the log. This is the only way the confirmation moves with no
+// page decision behind it, and saying nothing made the log read as though the
+// belief had teleported: Town confirmed at 09:52, Default "(already on)" at
+// 10:07, nothing in between. A silent write to the one piece of state every
+// later switch consults is not something the log should have to infer.
 export const equipPerkSet = (set: PerkSet): Promise<boolean> =>
-  runPerkTask((perks) => perks.apply(set), `equip ${set.name}`);
+  runPerkTask(async (perks) => {
+    setPerkStatusNote(`panel: equip ${set.name}`);
+    const switched = await perks.apply(set);
+    setPerkStatusNote(
+      `panel: equip ${set.name}${switched ? "" : " (already on)"}`
+    );
+    return switched;
+  }, `equip ${set.name}`);
 
 // How the perks get put back after a gated action. Registered by
 // features/perkManagement.ts, which owns the page-to-set policy; this module
