@@ -77,6 +77,13 @@ const processPerks = (root: Document): PerksState => {
 // that flag was its own bug twice (1.1.54). It is display-only now.
 let confirmedEquippedSet: PerkSet | undefined;
 
+// When that confirmation was EARNED -- the moment a real reset + activate was
+// watched onto the game. Not refreshed by a reconcile that decided it had
+// nothing to do, and not by a verify read: a belief re-stated is not a belief
+// re-proved, and if the perks-page read is the thing lying, only a switch
+// repairs it. See CONFIRMATION_TTL_MS.
+let confirmedAt = 0;
+
 // The set a switch is currently in flight to, if any -- drives the indicator's
 // "switching…" state so a switch is visible while it happens (including the
 // settle wait) rather than only after it lands.
@@ -145,6 +152,7 @@ const notifyPerkStatus = (): void => {
 
 const setConfirmedEquipped = (set: PerkSet | undefined): void => {
   confirmedEquippedSet = set;
+  confirmedAt = set ? Date.now() : 0;
   notifyPerkStatus();
 };
 
@@ -685,6 +693,30 @@ const refreshSet = async (set: PerkSet): Promise<PerkSet | undefined> => {
   return fresh;
 };
 
+// How long a confirmation may stand in for a look at the game.
+//
+// The fast path exists so the banner harvest is instant when Default is
+// already on, and that is worth keeping: inside a farming loop -- harvest,
+// replant, wait a minute, harvest again -- every one of those is seconds after
+// a switch we watched land, and paying 1.3 s per lap for nothing is what the
+// fast path was added to stop.
+//
+// What it must not do is stand in for a look at the game indefinitely. Reed's
+// 2026-09-22 harvest took the fast path on a confirmation earned FIFTEEN
+// MINUTES earlier, across an idle tab, with no page transition in between --
+// and came back at one crop a plot. Nothing in those fifteen minutes proved
+// anything; the belief simply went unchallenged.
+//
+// So the clock starts at the last real reset + activate. A reconcile that
+// decides it has nothing to do does not restart it (that would let landing on
+// home re-stamp a belief nobody re-proved, which is the whole failure), and
+// neither does a verify read. Past this, the next switch to that set is a real
+// one, whoever asks for it -- so the cost lands on the page transition that
+// comes back from idle, not on the harvest you tap three seconds later.
+const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
+
+const confirmationAge = (): number => Date.now() - confirmedAt;
+
 // Drive the game to `set`. Only callable from inside a task, which is what
 // guarantees nothing else is touching the perks while the slate is empty.
 // Resolves to whether a real switch happened (false = already confirmed on it),
@@ -703,10 +735,16 @@ const applySet = async (
   // slate since -- so it is genuinely equipped and the whole round trip
   // (reset + activate + settle) can be skipped. This is what makes back-to-back
   // quick-sells instant after the first one.
-  if (
-    confirmedEquippedSet?.id === set.id &&
-    (!force || (await isVerifiedOn(set)))
-  ) {
+  const isOnRecord = confirmedEquippedSet?.id === set.id;
+  const hasGoneStale = isOnRecord && confirmationAge() > CONFIRMATION_TTL_MS;
+  if (hasGoneStale) {
+    logPerk(
+      `${set.name} was last proven on ${Math.round(
+        confirmationAge() / 60_000
+      )} min ago — switching for real rather than trusting that`
+    );
+  }
+  if (isOnRecord && !hasGoneStale && (!force || (await isVerifiedOn(set)))) {
     return false;
   }
   pendingPerkSet = set;

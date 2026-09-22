@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.81
+// @version 1.1.82
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -2125,6 +2125,12 @@ const processPerks = (root) => {
 // and every caller had to remember to pass `force` to get past it. Forgetting
 // that flag was its own bug twice (1.1.54). It is display-only now.
 let confirmedEquippedSet;
+// When that confirmation was EARNED -- the moment a real reset + activate was
+// watched onto the game. Not refreshed by a reconcile that decided it had
+// nothing to do, and not by a verify read: a belief re-stated is not a belief
+// re-proved, and if the perks-page read is the thing lying, only a switch
+// repairs it. See CONFIRMATION_TTL_MS.
+let confirmedAt = 0;
 // The set a switch is currently in flight to, if any -- drives the indicator's
 // "switching…" state so a switch is visible while it happens (including the
 // settle wait) rather than only after it lands.
@@ -2162,6 +2168,7 @@ const notifyPerkStatus = () => {
 };
 const setConfirmedEquipped = (set) => {
     confirmedEquippedSet = set;
+    confirmedAt = set ? Date.now() : 0;
     notifyPerkStatus();
 };
 // A perk change that did not come from this module (the game's own buttons,
@@ -2597,6 +2604,28 @@ const refreshSet = (set) => __awaiter(void 0, void 0, void 0, function* () {
     }
     return fresh;
 });
+// How long a confirmation may stand in for a look at the game.
+//
+// The fast path exists so the banner harvest is instant when Default is
+// already on, and that is worth keeping: inside a farming loop -- harvest,
+// replant, wait a minute, harvest again -- every one of those is seconds after
+// a switch we watched land, and paying 1.3 s per lap for nothing is what the
+// fast path was added to stop.
+//
+// What it must not do is stand in for a look at the game indefinitely. Reed's
+// 2026-09-22 harvest took the fast path on a confirmation earned FIFTEEN
+// MINUTES earlier, across an idle tab, with no page transition in between --
+// and came back at one crop a plot. Nothing in those fifteen minutes proved
+// anything; the belief simply went unchallenged.
+//
+// So the clock starts at the last real reset + activate. A reconcile that
+// decides it has nothing to do does not restart it (that would let landing on
+// home re-stamp a belief nobody re-proved, which is the whole failure), and
+// neither does a verify read. Past this, the next switch to that set is a real
+// one, whoever asks for it -- so the cost lands on the page transition that
+// comes back from idle, not on the harvest you tap three seconds later.
+const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
+const confirmationAge = () => Date.now() - confirmedAt;
 // Drive the game to `set`. Only callable from inside a task, which is what
 // guarantees nothing else is touching the perks while the slate is empty.
 // Resolves to whether a real switch happened (false = already confirmed on it),
@@ -2613,8 +2642,12 @@ const applySet = (set_1, ...args_1) => __awaiter(void 0, [set_1, ...args_1], voi
     // slate since -- so it is genuinely equipped and the whole round trip
     // (reset + activate + settle) can be skipped. This is what makes back-to-back
     // quick-sells instant after the first one.
-    if ((confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id &&
-        (!force || (yield isVerifiedOn(set)))) {
+    const isOnRecord = (confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id) === set.id;
+    const hasGoneStale = isOnRecord && confirmationAge() > CONFIRMATION_TTL_MS;
+    if (hasGoneStale) {
+        logPerk(`${set.name} was last proven on ${Math.round(confirmationAge() / 60000)} min ago — switching for real rather than trusting that`);
+    }
+    if (isOnRecord && !hasGoneStale && (!force || (yield isVerifiedOn(set)))) {
         return false;
     }
     pendingPerkSet = set;
@@ -7625,7 +7658,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.81" !== void 0 ? "1.1.81" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.82" !== void 0 ? "1.1.82" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13993,7 +14026,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.81" !== void 0 ? "1.1.81" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.82" !== void 0 ? "1.1.82" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);
