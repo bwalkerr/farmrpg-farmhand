@@ -4,7 +4,9 @@ import {
   StorageKey,
 } from "../../../utils/state";
 import {
+  distrustPerkState,
   getActivityPerksSet,
+  getPerkStatus,
   PerkActivity,
   PerkSet,
   runGatedAction,
@@ -140,6 +142,35 @@ const describeStatus = (status: FarmStatus): string => {
           Math.round((status.readyAt - Date.now()) / 60_000)
         )}m`;
   return `${status.status} x${status.count}${due}`;
+};
+
+// The one number that says whether the perks were really on: what the game
+// handed back. Every "the harvest came in bare" report so far has been Reed
+// counting crops by eye against a log that only ever said which set we
+// BELIEVED was on -- so the yield goes in the log next to that belief.
+//
+// One crop a plot is the no-perks floor. A field under the farm set does not
+// land on it by chance, so a harvest that does is taken as proof the perks
+// were not applied, whatever the switch reported: the perk state we were
+// trusting is dropped there and then, and the next harvest pays for a real
+// reset + activate rather than verifying its way past the same wrong belief.
+const reportHarvestYield = (
+  drops: Record<Item["id"], { name: Item["name"]; img: string; qty: number }>,
+  plots: number
+): void => {
+  const yielded = Object.values(drops).reduce((sum, { qty }) => sum + qty, 0);
+  const { name, isConfirmed } = getPerkStatus();
+  logDiagnostic(
+    `field: harvested ${yielded} from ${plots} plots under ${
+      name ?? "an unknown set"
+    }${isConfirmed ? "" : " (unconfirmed)"}`
+  );
+  if (yielded > 0 && plots > 0 && yielded <= plots) {
+    logDiagnostic(
+      "field: that is one a plot — the farm perks did NOT apply to this harvest"
+    );
+    distrustPerkState("a harvest came back at one crop a plot");
+  }
 };
 
 const setFarmStatus = async (
@@ -294,6 +325,7 @@ export const farmStatusState = new CachedState<FarmStatus>(
               }
             >;
           };
+          reportHarvestYield(drops, previous?.count ?? 0);
           const [page] = getPage();
           const settings = await getSettingValues();
           if (page !== Page.FARM || settings[SettingId.HARVEST_NOTIFICATIONS]) {

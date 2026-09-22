@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Farm RPG Farmhand
 // @description Farmhand for Farm RPG (fork of anstosa/farmrpg-farmhand) — inventory cap tracker, dependable perk automation with an on-screen indicator, mining support, and notification fixes
-// @version 1.1.80
+// @version 1.1.81
 // @author Ansel Santosa <568242+anstosa@users.noreply.github.com>
 // @match https://farmrpg.com/*
 // @match https://www.farmrpg.com/*
@@ -793,6 +793,25 @@ const describeStatus = (status) => {
         : `, ready in ${Math.max(0, Math.round((status.readyAt - Date.now()) / 60000))}m`;
     return `${status.status} x${status.count}${due}`;
 };
+// The one number that says whether the perks were really on: what the game
+// handed back. Every "the harvest came in bare" report so far has been Reed
+// counting crops by eye against a log that only ever said which set we
+// BELIEVED was on -- so the yield goes in the log next to that belief.
+//
+// One crop a plot is the no-perks floor. A field under the farm set does not
+// land on it by chance, so a harvest that does is taken as proof the perks
+// were not applied, whatever the switch reported: the perk state we were
+// trusting is dropped there and then, and the next harvest pays for a real
+// reset + activate rather than verifying its way past the same wrong belief.
+const reportHarvestYield = (drops, plots) => {
+    const yielded = Object.values(drops).reduce((sum, { qty }) => sum + qty, 0);
+    const { name, isConfirmed } = (0, perks_1.getPerkStatus)();
+    (0, diagnostics_1.logDiagnostic)(`field: harvested ${yielded} from ${plots} plots under ${name !== null && name !== void 0 ? name : "an unknown set"}${isConfirmed ? "" : " (unconfirmed)"}`);
+    if (yielded > 0 && plots > 0 && yielded <= plots) {
+        (0, diagnostics_1.logDiagnostic)("field: that is one a plot — the farm perks did NOT apply to this harvest");
+        (0, perks_1.distrustPerkState)("a harvest came back at one crop a plot");
+    }
+};
 const setFarmStatus = (state, status, source) => __awaiter(void 0, void 0, void 0, function* () {
     if (!status) {
         (0, diagnostics_1.logDiagnostic)(`field: ${source} unreadable, keeping status`);
@@ -899,9 +918,10 @@ exports.farmStatusState = new state_1.CachedState(state_1.StorageKey.FARM_STATUS
         {
             match: [page_1.Page.WORKER, new URLSearchParams({ go: page_1.WorkerGo.HARVEST_ALL })],
             callback: (state, previous, response) => __awaiter(void 0, void 0, void 0, function* () {
-                var _a;
+                var _a, _b;
                 yield setFarmStatus(state, Object.assign(Object.assign({}, previous), { count: (_a = previous === null || previous === void 0 ? void 0 : previous.count) !== null && _a !== void 0 ? _a : 0, status: CropStatus.EMPTY, readyAt: Number.POSITIVE_INFINITY }), "harvest all");
                 const { drops } = (yield response.json());
+                reportHarvestYield(drops, (_b = previous === null || previous === void 0 ? void 0 : previous.count) !== null && _b !== void 0 ? _b : 0);
                 const [page] = (0, page_1.getPage)();
                 const settings = yield (0, settings_1.getSettingValues)();
                 if (page !== page_1.Page.FARM || settings[settings_1.SettingId.HARVEST_NOTIFICATIONS]) {
@@ -2048,7 +2068,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.runGatedAction = exports.onPerkRestore = exports.equipPerkSet = exports.runPerkTask = exports.getPerkStatus = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.setPerkStatusNote = exports.getPerkLog = exports.PerkActivity = void 0;
+exports.runGatedAction = exports.onPerkRestore = exports.equipPerkSet = exports.runPerkTask = exports.getPerkStatus = exports.distrustPerkState = exports.getConfirmedEquippedSetId = exports.getCurrentPerkSet = exports.getActivityPerksSet = exports.perksState = exports.onPerkStatusChange = exports.setPerkStatusNote = exports.getPerkLog = exports.PerkActivity = void 0;
 const state_1 = __webpack_require__(4782);
 const requests_1 = __webpack_require__(3813);
 const page_1 = __webpack_require__(7952);
@@ -2230,6 +2250,24 @@ exports.getCurrentPerkSet = getCurrentPerkSet;
 // undefined when unknown.
 const getConfirmedEquippedSetId = () => confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.id;
 exports.getConfirmedEquippedSetId = getConfirmedEquippedSetId;
+// Something that spends perks came back as if none were on. Whatever we
+// believed is wrong: drop the confirmation so the next switch pays the full
+// reset + activate instead of the one-read fast path, and forget the learned
+// size of the set we thought was on -- if that number was learned from a
+// partial application, every verify since has been passing on it.
+const distrustPerkState = (why) => {
+    const name = confirmedEquippedSet === null || confirmedEquippedSet === void 0 ? void 0 : confirmedEquippedSet.name;
+    const known = name === undefined ? undefined : setSizes === null || setSizes === void 0 ? void 0 : setSizes[name];
+    if (name !== undefined && known !== undefined) {
+        const next = Object.assign({}, setSizes);
+        delete next[name];
+        setSizes = next;
+        GM.setValue(SET_SIZES_KEY, setSizes);
+    }
+    logPerk(`${why} — dropping the confirmation${name === undefined ? "" : ` on ${name}`}${known === undefined ? "" : ` and its learned size (${known})`}; the next switch pays the full round trip`);
+    setConfirmedEquipped(undefined);
+};
+exports.distrustPerkState = distrustPerkState;
 const getPerkStatus = () => {
     if (pendingPerkSet) {
         return {
@@ -2499,7 +2537,15 @@ const isVerifiedOn = (set) => __awaiter(void 0, void 0, void 0, function* () {
         rememberSetSize(set, reading.equipped, known);
         return true;
     }
-    return reading.equipped >= known;
+    if (reading.equipped < known) {
+        return false;
+    }
+    // What the fast path actually saw, because "(verified on)" on its own is
+    // unfalsifiable: a harvest that comes back at one crop a plot after it needs
+    // this line to say whether the page claimed the right set, and how many
+    // perks it counted against the size we learned.
+    logPerk(`${set.name} verified on without a switch: perks page shows set ${reading.activeId} active, ${reading.equipped} perks on (learned ${known})`);
+    return true;
 });
 // worker.php answers these two with the bare word "success". Anything else --
 // an error page, a logged-out shell, a rate limit -- means we do NOT know what
@@ -7568,7 +7614,7 @@ const ensurePanel = () => {
     // give of what the script did (see utils/diagnostics.ts).
     const diagnosticsHeading = document.createElement("div");
     diagnosticsHeading.className = "fh-perk-log-heading";
-    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.80" !== void 0 ? "1.1.80" : "?"} log`;
+    diagnosticsHeading.textContent = `Farmhand ${ true && "1.1.81" !== void 0 ? "1.1.81" : "?"} log`;
     const diagnosticsElement = document.createElement("div");
     diagnosticsElement.className = "fh-perk-log";
     perkNote.append(perkLogElement, diagnosticsHeading, diagnosticsElement);
@@ -13936,7 +13982,7 @@ const isVersionHigher = (test, current) => {
     }
     return false;
 };
-const currentVersion = normalizeVersion( true && "1.1.80" !== void 0 ? "1.1.80" : "1.0.0");
+const currentVersion = normalizeVersion( true && "1.1.81" !== void 0 ? "1.1.81" : "1.0.0");
 (0, notifications_1.registerNotificationHandler)(notifications_1.Handler.CHANGES, () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const response = yield (0, requests_1.corsFetch)(api_1.CHANGELOG_URL);

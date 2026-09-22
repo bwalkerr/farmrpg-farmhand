@@ -254,6 +254,30 @@ export const getCurrentPerkSet = async (
 export const getConfirmedEquippedSetId = (): number | undefined =>
   confirmedEquippedSet?.id;
 
+// Something that spends perks came back as if none were on. Whatever we
+// believed is wrong: drop the confirmation so the next switch pays the full
+// reset + activate instead of the one-read fast path, and forget the learned
+// size of the set we thought was on -- if that number was learned from a
+// partial application, every verify since has been passing on it.
+export const distrustPerkState = (why: string): void => {
+  const name = confirmedEquippedSet?.name;
+  const known = name === undefined ? undefined : setSizes?.[name];
+  if (name !== undefined && known !== undefined) {
+    const next = { ...setSizes };
+    delete next[name];
+    setSizes = next;
+    GM.setValue(SET_SIZES_KEY, setSizes as any);
+  }
+  logPerk(
+    `${why} — dropping the confirmation${
+      name === undefined ? "" : ` on ${name}`
+    }${
+      known === undefined ? "" : ` and its learned size (${known})`
+    }; the next switch pays the full round trip`
+  );
+  setConfirmedEquipped(undefined);
+};
+
 export const getPerkStatus = (): PerkStatus => {
   if (pendingPerkSet) {
     return {
@@ -581,7 +605,17 @@ const isVerifiedOn = async (set: PerkSet): Promise<boolean> => {
     rememberSetSize(set, reading.equipped, known);
     return true;
   }
-  return reading.equipped >= known;
+  if (reading.equipped < known) {
+    return false;
+  }
+  // What the fast path actually saw, because "(verified on)" on its own is
+  // unfalsifiable: a harvest that comes back at one crop a plot after it needs
+  // this line to say whether the page claimed the right set, and how many
+  // perks it counted against the size we learned.
+  logPerk(
+    `${set.name} verified on without a switch: perks page shows set ${reading.activeId} active, ${reading.equipped} perks on (learned ${known})`
+  );
+  return true;
 };
 
 // worker.php answers these two with the bare word "success". Anything else --
